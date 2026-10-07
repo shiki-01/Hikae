@@ -25,20 +25,36 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export type ErrorParams = Record<string, string | number>;
 
+/** バックエンド（Rust）が返す 3 要素のエラー文言 */
+export interface BackendMessage {
+	whatHappened: string;
+	dataIsSafe: string;
+	nextAction: string;
+}
+
+export type AppErrorCode = ErrorCode | 'backend';
+
 export class AppError extends Error {
-	readonly code: ErrorCode;
+	readonly code: AppErrorCode;
 	readonly params: ErrorParams;
 	readonly technical: string;
+	readonly backend?: BackendMessage;
 
-	constructor(code: ErrorCode, technical: string, params: ErrorParams = {}) {
+	constructor(
+		code: AppErrorCode,
+		technical: string,
+		params: ErrorParams = {},
+		backend?: BackendMessage
+	) {
 		super(`${code}: ${technical}`);
 		this.name = 'AppError';
 		this.code = code;
 		this.params = params;
 		this.technical = technical;
+		this.backend = backend;
 	}
 }
 
-export function isAutoRecovering(code: ErrorCode): boolean {
+export function isAutoRecovering(code: AppErrorCode): boolean {
 	return code === 'E03' || code === 'E04';
 }

@@ -1,10 +1,10 @@
 import { t, type MessageKey } from '#lib/i18n/index.js';
-import { AppError, isAutoRecovering, type ErrorCode } from '#lib/api/errors.js';
+import { AppError, isAutoRecovering, type AppErrorCode, type ErrorCode } from '#lib/api/errors.js';
 
 export type PrimaryKind = 'retry' | 'copy' | 'close';
 
 export interface ErrorView {
-	code: ErrorCode | 'generic';
+	code: AppErrorCode | 'generic';
 	title: string;
 	message: string;
 	primaryLabel: string;
@@ -21,7 +21,19 @@ const COPY_CODES: ErrorCode[] = ['E02'];
 const SECONDARY_CODES: ErrorCode[] = ['E05', 'E11', 'E15'];
 
 export function describeError(error: unknown): ErrorView {
-	if (error instanceof AppError) {
+	if (error instanceof AppError && error.code === 'backend' && error.backend) {
+		const { whatHappened, dataIsSafe, nextAction } = error.backend;
+		return {
+			code: 'backend',
+			title: whatHappened,
+			message: [dataIsSafe, nextAction].filter((line) => line.length > 0).join('\n'),
+			primaryLabel: t('error.close'),
+			primaryKind: 'close',
+			technical: error.technical,
+			autoRecovering: false
+		};
+	}
+	if (error instanceof AppError && error.code !== 'backend') {
 		const code = error.code;
 		const primaryKind: PrimaryKind = RETRY_CODES.includes(code)
 			? 'retry'

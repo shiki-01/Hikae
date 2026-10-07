@@ -54,7 +54,7 @@
 	{#if current}
 		{@const view = current.view}
 		<div class="flex flex-direction:column gap:4">
-			<p class="m:0 type-body">{view.message}</p>
+			<p class="m:0 type-body white-space:pre-line">{view.message}</p>
 
 			<div class="flex flex-direction:column gap:2">
 				<button
@@ -74,7 +74,7 @@
 				{#if showDetails}
 					<div class="flex flex-direction:column gap:2 p:3 r:md bg:bg-subtle b:1px|solid|border">
 						<pre class="m:0 type-mono white-space:pre-wrap overflow-wrap:anywhere">{view.code ===
-							'generic'
+								'generic' || view.code === 'backend'
 								? ''
 								: `${view.code}\n`}{view.technical}</pre>
 						<div class="flex align-items:center gap:2 justify-content:end">
@@ -84,7 +84,12 @@
 							<Button
 								size="sm"
 								variant="secondary"
-								onclick={() => copy(`${view.code}\n${view.technical}`)}
+								onclick={() =>
+									copy(
+										view.code === 'generic' || view.code === 'backend'
+											? view.technical
+											: `${view.code}\n${view.technical}`
+									)}
 							>
 								<Copy size={14} aria-hidden="true" />
 								{t('error.copy_details')}
