@@ -6,6 +6,7 @@ import type {
 	ConflictItem,
 	ConflictKind as BackendConflictKind,
 	DiffLine,
+	FileEntry as BackendFileEntry,
 	HistoryItem,
 	ProjectInfo,
 	PullResult,
@@ -23,6 +24,7 @@ import type {
 	DiffRow,
 	FetchResult,
 	FileDiff,
+	FileEntry,
 	ImpactItem,
 	Project,
 	SavePoint
@@ -166,4 +168,11 @@ export function mapImpact(preview: RestorePreviewData): ImpactItem[] {
 export function mapPull(result: PullResult): FetchResult {
 	const merged = result.outcome === 'merged' || result.outcome === 'fast-forwarded';
 	return { mergedCount: merged ? 1 : 0, conflictCount: result.conflicts.length };
+}
+
+/** 保存時点のファイル一覧。パスの区切りは `/` に統一し、パス順に並べる */
+export function mapFileEntries(items: BackendFileEntry[]): FileEntry[] {
+	return items
+		.map((item) => ({ path: item.path.replaceAll('\\', '/'), size: item.size }))
+		.sort((a, b) => a.path.localeCompare(b.path));
 }

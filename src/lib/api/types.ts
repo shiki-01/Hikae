@@ -37,6 +37,13 @@ export interface PointFile {
 	type: Exclude<ChangeType, 'renamed'>;
 }
 
+/** ある保存時点に存在するファイル（全ファイル表示用） */
+export interface FileEntry {
+	path: string;
+	/** バイト数。取得できない場合は null */
+	size: number | null;
+}
+
 export type DiffRowKind = 'context' | 'add' | 'del';
 
 export interface DiffRow {
@@ -140,7 +147,15 @@ export interface Session {
 	onboarded: boolean;
 }
 
+/** バックエンドが対応している操作。未対応の操作は画面に出さない */
+export interface ApiCapabilities {
+	/** 1 ファイルだけを過去の版に戻す */
+	restoreFile: boolean;
+}
+
 export interface ProjectApi {
+	readonly capabilities: ApiCapabilities;
+
 	getSession(): Promise<Session>;
 	startLogin(): Promise<DeviceFlow>;
 	waitLogin(): Promise<void>;
@@ -159,6 +174,10 @@ export interface ProjectApi {
 	listChanges(projectId: string): Promise<Change[]>;
 	listSavePoints(projectId: string): Promise<SavePoint[]>;
 	listPointFiles(projectId: string, savePointId: string): Promise<PointFile[]>;
+	/** その時点に存在するすべてのファイル */
+	listFilesAt(projectId: string, savePointId: string): Promise<FileEntry[]>;
+	/** 未保存の変更から作る保存メモの案（ルールベース） */
+	suggestMemo(projectId: string): Promise<string>;
 	compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff>;
 
 	save(projectId: string, memo: string): Promise<void>;

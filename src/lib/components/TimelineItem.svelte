@@ -33,7 +33,7 @@
 		<span class="w:24px flex justify-content:center flex-shrink:0">
 			<Cloud size={16} class="fg:state-sync" aria-hidden="true" />
 		</span>
-		<span class="type-small fg:state-sync font-weight:500">{t('timeline.cloud_line')}</span>
+		<span class="type-small fg:fg-muted font-weight:500">{t('timeline.cloud_line')}</span>
 		<span class="flex:1 h:1px bg:state-sync"></span>
 	</li>
 {:else}

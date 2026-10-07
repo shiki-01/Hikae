@@ -1,6 +1,7 @@
 import { t } from '#lib/i18n/index.js';
 import { formatDateTime } from '#lib/i18n/format.js';
 import { AppError } from './errors';
+import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
 import type {
 	AddProjectInput,
@@ -12,6 +13,7 @@ import type {
 	DroppedFile,
 	FetchResult,
 	FileDiff,
+	FileEntry,
 	ImpactItem,
 	Owner,
 	PointFile,
@@ -336,6 +338,8 @@ function impactFor(state: ProjectState, targetId: string, scope: RestoreScope): 
 }
 
 export const mockApi: ProjectApi = {
+	capabilities: { restoreFile: true },
+
 	async getSession(): Promise<Session> {
 		await sleep(80);
 		return readStorage<Session>('hikae.session', { loggedIn: false, onboarded: false });
@@ -463,6 +467,26 @@ export const mockApi: ProjectApi = {
 		return paths
 			.filter((path) => lines(path, tier) !== null)
 			.map((path) => ({ path, type: 'modified' as const }));
+	},
+
+	async listFilesAt(projectId: string, savePointId: string): Promise<FileEntry[]> {
+		await sleep(200);
+		const tier = tierOf(stateOf(projectId), savePointId);
+		const files: FileEntry[] = [
+			t('mock.file.chapter3'),
+			t('mock.file.old_draft'),
+			t('mock.file.memo'),
+			t('mock.file.refs')
+		]
+			.filter((path) => lines(path, tier) !== null)
+			.map((path) => ({ path, size: 24_576 }));
+		if (tier >= 1) files.push({ path: t('mock.file.fig4'), size: 184_320 });
+		return files;
+	},
+
+	async suggestMemo(projectId: string): Promise<string> {
+		await sleep(120);
+		return suggestMemo(stateOf(projectId).changes);
 	},
 
 	async compare(projectId, path, fromId, toId): Promise<FileDiff> {

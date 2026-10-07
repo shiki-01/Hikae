@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Change } from '#lib/api/types.js';
 import { classifyDropped, MAX_FILE_BYTES } from './files';
-import { suggestMemo } from './memo';
+import { nextMemo, suggestMemo } from './memo';
 
 function change(path: string, type: Change['type']): Change {
 	return { id: path, path, type, isConflict: false };
@@ -47,5 +47,23 @@ describe('追加するファイルの大きさの判定', () => {
 		]);
 		expect(result.accepted.map((f) => f.name)).toEqual(['ok.txt', 'edge.bin']);
 		expect(result.rejected.map((f) => f.name)).toEqual(['big.mp4']);
+	});
+});
+
+describe('保存欄の初期入力', () => {
+	it('空欄には案を入れる', () => {
+		expect(nextMemo('', '', 'A を更新')).toBe('A を更新');
+	});
+
+	it('自動で入れた案のままなら新しい案に差し替える', () => {
+		expect(nextMemo('A を更新', 'A を更新', 'A ほか 1 件')).toBe('A ほか 1 件');
+	});
+
+	it('ユーザーが編集した内容は上書きしない', () => {
+		expect(nextMemo('自分のメモ', 'A を更新', 'A ほか 1 件')).toBe('自分のメモ');
+	});
+
+	it('変更が無くなったら自動入力分は消える', () => {
+		expect(nextMemo('A を更新', 'A を更新', '')).toBe('');
 	});
 });

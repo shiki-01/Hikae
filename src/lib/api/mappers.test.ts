@@ -6,6 +6,7 @@ import {
 	mapConflict,
 	mapConflictKind,
 	mapDiff,
+	mapFileEntries,
 	mapError,
 	mapImpact,
 	mapPull,
@@ -179,5 +180,18 @@ describe('競合の日時', () => {
 		expect(fromUnixSeconds(0)).toBeNull();
 		expect(fromUnixSeconds(-1)).toBeNull();
 		expect(fromUnixSeconds(Number.NaN)).toBeNull();
+	});
+});
+
+describe('保存時点のファイル一覧の変換', () => {
+	it('区切りを / に統一し、パス順に並べる', () => {
+		const result = mapFileEntries([
+			{ path: 'b\\c.txt', size: 5 },
+			{ path: 'a.txt', size: null }
+		]);
+		expect(result).toEqual([
+			{ path: 'a.txt', size: null },
+			{ path: 'b/c.txt', size: 5 }
+		]);
 	});
 });

@@ -21,7 +21,9 @@
 	interface Props {
 		projectName: string;
 		hasConflict?: boolean;
-		syncing?: 'fetch' | 'push' | null;
+		syncing?: 'fetch' | 'push' | 'other' | null;
+		/** ユーザーの対応が必要な理由（ぶつかり以外） */
+		attention?: 'auth' | 'unsaved-changes' | null;
 		isOnline?: boolean;
 		unsavedCount?: number;
 		uploadPendingCount?: number;
@@ -40,6 +42,7 @@
 		projectName,
 		hasConflict = false,
 		syncing = null,
+		attention = null,
 		isOnline = true,
 		unsavedCount = 0,
 		uploadPendingCount = 0,
@@ -68,7 +71,8 @@
 			isOnline,
 			unsavedCount,
 			fetchPendingCount,
-			uploadPendingCount
+			uploadPendingCount,
+			attention !== null
 		)
 	);
 
@@ -82,7 +86,20 @@
 		syncing: {
 			icon: LoaderCircle,
 			color: 'fg:state-sync',
-			text: syncing === 'push' ? t('header.status_syncing_push') : t('header.status_syncing_fetch')
+			text:
+				syncing === 'push'
+					? t('header.status_syncing_push')
+					: syncing === 'other'
+						? t('header.status_syncing_other')
+						: t('header.status_syncing_fetch')
+		},
+		attention: {
+			icon: AlertTriangle,
+			color: 'fg:state-unsaved',
+			text:
+				attention === 'auth'
+					? t('header.status_attention_auth')
+					: t('header.status_attention_unsaved')
 		},
 		offline: {
 			icon: CloudOff,

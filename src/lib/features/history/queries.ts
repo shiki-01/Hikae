@@ -20,6 +20,19 @@ export function usePointFiles(getProjectId: () => string, getPointId: () => stri
 	}));
 }
 
+export function useFilesAt(
+	getProjectId: () => string,
+	getPointId: () => string | null,
+	getEnabled: () => boolean
+) {
+	return createQuery(() => ({
+		queryKey: keys.filesAt(getProjectId(), getPointId() ?? ''),
+		queryFn: () => api.listFilesAt(getProjectId(), getPointId() ?? ''),
+		enabled:
+			getEnabled() && getProjectId() !== '' && getPointId() !== null && getPointId() !== 'now'
+	}));
+}
+
 export function useImpact(
 	getProjectId: () => string,
 	getTargetId: () => string | null,

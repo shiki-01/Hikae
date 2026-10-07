@@ -40,6 +40,12 @@ export const commands = {
 	suggestMemo: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("suggest_memo", { id })),
 	/**  指定した保存時点の全ファイル一覧（読み取りのみ）。 */
 	listFilesAt: (id: string, commit: string) => typedError<FileEntry[], AppError>(__TAURI_INVOKE("list_files_at", { id, commit })),
+	/**
+	 *  プロジェクト内のファイルを既定のアプリで開く。
+	 *  相対パスはここで検証し、プロジェクト外（`..`・絶対パス・シンボリックリンク経由）は開かない。
+	 *  読み取りのみのため直列キューは通さない。
+	 */
+	openProjectFile: (id: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_project_file", { id, relativePath })),
 };
 
 /** Events */

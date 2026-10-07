@@ -40,6 +40,9 @@ const messages = {
 	'header.status_unsaved': '未保存の変更が {count} 件あります',
 	'header.status_syncing_fetch': '取り込んでいます…',
 	'header.status_syncing_push': 'アップロードしています…',
+	'header.status_syncing_other': '処理しています…',
+	'header.status_attention_auth': '再ログインが必要です。変更はこの PC に残っています',
+	'header.status_attention_unsaved': '未保存の変更があるため、取り込みを見送りました',
 	'header.status_offline': 'オフラインです。保存はこの PC で続けられます',
 	'header.status_offline_retry': '再試行',
 	'header.status_fetch_pending': '別の PC の変更が {count} 件あります',
@@ -97,6 +100,7 @@ const messages = {
 	'history.now_hint': 'いまの状態です。未保存の変更は「変更」タブで確認できます。',
 	'history.select_hint': '時点を選ぶと、その内容が表示されます',
 	'history.changed_files': '変更されたファイル（{count}）',
+	'history.tree_label': 'この時点のファイルの一覧',
 	'history.all_files': 'この時点の全ファイル（{count}）',
 	'history.show_changed': '変更されたファイルだけを見る',
 

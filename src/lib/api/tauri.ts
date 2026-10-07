@@ -1,12 +1,11 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { openPath } from '@tauri-apps/plugin-opener';
 import { commands } from '#lib/bindings.js';
 import { mockApi } from './mock';
-import { resolveInProject } from './paths';
 import {
 	mapChange,
 	mapConflict,
 	mapDiff,
+	mapFileEntries,
 	mapError,
 	mapImpact,
 	mapProject,
@@ -20,6 +19,7 @@ import type {
 	Change,
 	ConflictFile,
 	FileDiff,
+	FileEntry,
 	ImpactItem,
 	OpenTarget,
 	PointFile,
@@ -68,6 +68,9 @@ function requireAllScope(scope: RestoreScope): void {
 }
 
 export const tauriApi: ProjectApi = {
+	// 1 ファイルだけを戻すコマンドはバックエンドに無い
+	capabilities: { restoreFile: false },
+
 	// ログイン・初回設定・設定値はバックエンド未実装のため、モックに委ねる
 	getSession: () => mockApi.getSession(),
 	startLogin: () => mockApi.startLogin(),
@@ -123,6 +126,12 @@ export const tauriApi: ProjectApi = {
 		// その時点で変更されたファイルの一覧を返すコマンドが未提供
 		return [];
 	},
+
+	async listFilesAt(projectId: string, savePointId: string): Promise<FileEntry[]> {
+		return mapFileEntries(await unwrap(commands.listFilesAt(projectId, savePointId)));
+	},
+
+	suggestMemo: (projectId: string) => unwrap(commands.suggestMemo(projectId)),
 
 	async compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff> {
 		const lines = await unwrap(commands.diff(projectId, fromId, toId, path));
@@ -185,12 +194,7 @@ export const tauriApi: ProjectApi = {
 
 	async openFile(projectId: string, path: string, target: OpenTarget): Promise<void> {
 		if (target !== 'default') unsupported(`open file with target ${target}`);
-		const infos = await unwrap(commands.listProjects());
-		const project = infos.find((item) => item.id === projectId);
-		if (!project) throw new Error(`project not found: ${projectId}`);
-		// プロジェクト外へのパス（`..` や絶対パス）は開かない
-		const absolute = resolveInProject(project.path, path);
-		if (absolute === null) throw new Error(`path is outside the project: ${path}`);
-		await openPath(absolute);
+		// パスの検証（プロジェクト外の拒否）はバックエンド側で行う
+		await unwrap(commands.openProjectFile(projectId, path));
 	}
 };

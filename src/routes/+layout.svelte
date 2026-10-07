@@ -3,12 +3,15 @@
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import ErrorDialog from '#lib/features/notifications/ErrorDialog.svelte';
 	import ToastHost from '#lib/features/notifications/ToastHost.svelte';
+	import { useBackendEvents } from '#lib/features/projects/live.svelte.js';
 
 	let { children } = $props();
 
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { refetchOnWindowFocus: false, retry: false } }
 	});
+
+	useBackendEvents(queryClient);
 </script>
 
 <QueryClientProvider client={queryClient}>

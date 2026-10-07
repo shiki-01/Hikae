@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Upload } from '@lucide/svelte';
+	import { untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import { api } from '#lib/api/index.js';
@@ -14,9 +15,9 @@
 	import ChangeDetail from '#lib/features/changes/ChangeDetail.svelte';
 	import ChangesPane from '#lib/features/changes/ChangesPane.svelte';
 	import { classifyDropped } from '#lib/features/changes/files.js';
-	import { suggestMemo } from '#lib/features/changes/memo.js';
+	import { nextMemo } from '#lib/features/changes/memo.js';
 	import { useAddFiles, useSave } from '#lib/features/changes/mutations.js';
-	import { useChanges } from '#lib/features/changes/queries.js';
+	import { useChanges, useMemoSuggestion } from '#lib/features/changes/queries.js';
 	import CompareView from '#lib/features/compare/CompareView.svelte';
 	import { pointOptions } from '#lib/features/compare/navigation.js';
 	import ConflictModal from '#lib/features/conflict/ConflictModal.svelte';
@@ -27,6 +28,8 @@
 	import { useHistory } from '#lib/features/history/queries.js';
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
+	import { liveStateOf } from './live.svelte.js';
+	import { syncingKind } from './live-state';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
 
@@ -42,13 +45,18 @@
 	const project = useProject(() => projectId);
 	const changesQuery = useChanges(() => projectId);
 	const historyQuery = useHistory(() => projectId);
+	const memoQuery = useMemoSuggestion(
+		() => projectId,
+		() => (changesQuery.data?.length ?? 0) > 0
+	);
 
 	let tab = $state<'changes' | 'history'>('changes');
 	let selectedPath = $state<string | null>(null);
 	let selectedPointId = $state<string | null>('now');
 	let expanded = $state<string[]>([]);
 	let memo = $state('');
-	let memoTouched = $state(false);
+	// 最後に自動で入れた案。メモ欄がこれと同じ間だけ、新しい案に差し替える
+	let autoMemo = '';
 	let leftWidth = $state(320);
 	let body = $state<HTMLDivElement>();
 	let resizing = $state(false);
@@ -66,14 +74,15 @@
 	const entries = $derived(buildTimeline(history));
 	const selectedChange = $derived(changes.find((c) => c.path === selectedPath) ?? null);
 	const selectedPoint = $derived(history.find((p) => p.id === selectedPointId) ?? null);
-	const suggestion = $derived(suggestMemo(changes));
+	const suggestion = $derived(changes.length > 0 ? (memoQuery.data ?? '') : '');
+	const live = $derived(liveStateOf(projectId));
 	const baseId = $derived(latest?.id ?? 'current');
 
 	const save = useSave(
 		() => projectId,
 		() => {
 			memo = '';
-			memoTouched = false;
+			autoMemo = '';
 		}
 	);
 	const fetchMutation = useFetch(
@@ -87,10 +96,25 @@
 		() => (restoreRequest = null)
 	);
 
-	const syncing = $derived(fetchMutation.isPending ? 'fetch' : push.isPending ? 'push' : null);
+	const syncing = $derived(
+		fetchMutation.isPending ? 'fetch' : push.isPending ? 'push' : syncingKind(live.operation)
+	);
+	const attention = $derived(
+		live.attention === 'auth' || live.sync === 'auth-required'
+			? 'auth'
+			: live.attention === 'unsaved-changes'
+				? 'unsaved-changes'
+				: null
+	);
 
 	$effect(() => {
-		if (!memoTouched) memo = suggestion;
+		const next = nextMemo(
+			untrack(() => memo),
+			autoMemo,
+			suggestion
+		);
+		autoMemo = suggestion;
+		memo = next;
 	});
 
 	$effect(() => {
@@ -194,9 +218,12 @@
 <div class="h:100vh flex flex-direction:column bg:bg fg:fg min-w:960px">
 	<StatusHeader
 		projectName={project.data?.name ?? ''}
-		hasConflict={project.data?.hasConflict ?? false}
+		hasConflict={(project.data?.hasConflict ?? false) ||
+			live.attention === 'conflict' ||
+			live.sync === 'conflicted'}
 		{syncing}
-		isOnline={network.online}
+		{attention}
+		isOnline={network.online && live.sync !== 'offline'}
 		unsavedCount={changesQuery.data ? changes.length : (project.data?.unsavedCount ?? 0)}
 		uploadPendingCount={project.data?.uploadPendingCount ?? 0}
 		fetchPendingCount={project.data?.fetchPendingCount ?? 0}
