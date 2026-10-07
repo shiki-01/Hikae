@@ -721,3 +721,112 @@ fn test_13_labels_are_injected_and_pull_creates_a_single_restore_point(
     setup.cleanup()?;
     Ok(())
 }
+
+#[test]
+fn test_14_list_files_at_handles_nonascii_and_spaces() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-14")?;
+    let ops = Ops::new(new_runner());
+
+    common::write_test_file(&setup.pc_a, "資料/報告 書.txt", "12345")?;
+    common::write_test_file(&setup.pc_a, "dir/sub/a.png", "xy")?;
+    let first = match ops.save(&setup.pc_a, "add files")? {
+        core_ops::SaveOutcome::Saved { commit, .. } => commit,
+        other => panic!("expected Saved, got {other:?}"),
+    };
+    // 後から別の変更を加えても、指定した時点の一覧は変わらない
+    common::write_test_file(&setup.pc_a, "later.txt", "z")?;
+    ops.save(&setup.pc_a, "later")?;
+
+    let files = ops.list_files_at(&setup.pc_a, &first)?;
+    let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec!["dir/sub/a.png", "file.txt", "資料/報告 書.txt"],
+        "paths must be raw (no quoting) and limited to that commit"
+    );
+    let doc = files
+        .iter()
+        .find(|f| f.path == "資料/報告 書.txt")
+        .ok_or("missing file")?;
+    assert_eq!(doc.size, 5);
+    assert_eq!(doc.mode, "100644");
+
+    // オプションに見える値は拒否される
+    assert!(ops.list_files_at(&setup.pc_a, "--help").is_err());
+    assert!(ops.list_files_at(&setup.pc_a, "").is_err());
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_15_suggest_memo_from_real_worktree() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-15")?;
+    let ops = Ops::new(new_runner());
+    let labels = core_ops::MemoLabels::default();
+
+    // 変更なし
+    assert_eq!(ops.suggest_memo(&setup.pc_a, &labels)?, "");
+
+    // 1 ファイル更新
+    common::write_test_file(&setup.pc_a, "file.txt", "changed content")?;
+    assert_eq!(ops.suggest_memo(&setup.pc_a, &labels)?, "Updated file.txt");
+    ops.save(&setup.pc_a, "m")?;
+
+    // 未追跡フォルダ内の画像 3 件は、フォルダにまとめず 3 件と数える
+    for n in ["a.png", "b.jpg", "c.gif"] {
+        common::write_test_file(&setup.pc_a, &format!("pics/{n}"), "img")?;
+    }
+    assert_eq!(ops.suggest_memo(&setup.pc_a, &labels)?, "Added 3 images");
+    ops.save(&setup.pc_a, "pics")?;
+
+    // 削除 1 件
+    std::fs::remove_file(setup.pc_a.join("pics/a.png"))?;
+    assert_eq!(ops.suggest_memo(&setup.pc_a, &labels)?, "Deleted a.png");
+    ops.save(&setup.pc_a, "del")?;
+
+    // 混在: 最も大きいファイル名 + 残り件数
+    common::write_test_file(&setup.pc_a, "big.txt", &"x".repeat(5000))?;
+    common::write_test_file(&setup.pc_a, "pics/b.jpg", "changed-image")?;
+    assert_eq!(
+        ops.suggest_memo(&setup.pc_a, &labels)?,
+        "big.txt and 1 more"
+    );
+
+    // メモ生成は作業フォルダとインデックスを変えない（未追跡は未追跡のまま）
+    let (_, status, _) = run_git(&setup.pc_a, &["status", "--porcelain"]);
+    assert!(status.contains("?? big.txt"), "status: {status}");
+    assert!(status.contains(" M pics/b.jpg"), "status: {status}");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_16_new_restore_points_identifies_refs_made_by_the_operation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-16")?;
+    let ops = Ops::new(new_runner());
+
+    let before = ops.restore_point_refs(&setup.pc_a)?;
+    common::write_test_file(&setup.pc_a, "new.txt", "n")?;
+    let outcome = ops.save(&setup.pc_a, "save")?;
+    let after = ops.restore_point_refs(&setup.pc_a)?;
+
+    let created = core_ops::new_restore_points(&before, &after);
+    match outcome {
+        core_ops::SaveOutcome::Saved { restore_point, .. } => {
+            assert_eq!(created.backup_ref, restore_point.backup_ref);
+            assert_eq!(created.snapshot_ref, restore_point.snapshot_ref);
+            assert!(created.backup_ref.is_some() || created.snapshot_ref.is_some());
+        }
+        other => panic!("expected Saved, got {other:?}"),
+    }
+    // 何もしなければ新規の復元点は無い
+    let none = core_ops::new_restore_points(&after, &after);
+    assert!(none.backup_ref.is_none() && none.snapshot_ref.is_none());
+
+    setup.cleanup()?;
+    Ok(())
+}

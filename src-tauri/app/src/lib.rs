@@ -4,11 +4,23 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder};
 
 use core_git::GitRunner;
-use core_ops::{Labels, Ops, OpsError};
-use core_store::{ProjectLocks, Store};
+use core_ops::{Ops, OpsError};
+use core_store::{Project, ProjectLocks, Store};
+use core_watch::SyncTask;
+
+mod events;
+mod ops_runner;
+mod scheduler;
+
+use events::OpTrigger;
+use ops_runner::{
+    memo_labels, pull_outcome_name, push_outcome_name, run_op, summarize_pull, summarize_push,
+    OpContext, OpSpec, OpSummary,
+};
+use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 
 // ========== エラー型（specta::Type 実装、設計書5章） ==========
 
@@ -26,7 +38,7 @@ pub struct AppError {
 }
 
 impl AppError {
-    fn from_ops_error(e: OpsError) -> Self {
+    pub(crate) fn from_ops_error(e: OpsError) -> Self {
         let (what_happened, data_is_safe, next_action, technical_info) = match e {
             OpsError::Conflict(files) => (
                 format!(
@@ -84,6 +96,8 @@ pub struct AppState {
     pub store: Arc<Mutex<Store>>,
     /// プロジェクト ID ごとの操作キュー（状態変更の直列実行）
     pub locks: Arc<ProjectLocks>,
+    /// 起動時・定期の取り込みとアップロードのスケジューラ
+    pub scheduler: SchedulerHandle,
 }
 
 impl AppState {
@@ -92,6 +106,7 @@ impl AppState {
         AppState {
             store: Arc::new(Mutex::new(store)),
             locks: Arc::new(ProjectLocks::new()),
+            scheduler: SchedulerHandle::new(),
         }
     }
 
@@ -110,7 +125,7 @@ impl AppState {
 ///
 /// ロックは spawn_blocking の内側で取る。外側で `locks.run` に JoinHandle を
 /// 作らせると、クロージャが即座に戻ってロックが本体の実行前に解放されてしまう。
-async fn run_exclusive<T, F>(
+pub(crate) async fn run_exclusive<T, F>(
     locks: Arc<ProjectLocks>,
     id: String,
     data_is_safe: &'static str,
@@ -134,6 +149,38 @@ where
         next_action: "もう一度試してください".to_string(),
         technical_info: Some(e),
     })?
+}
+
+/// 読み取り専用の処理を blocking スレッドで実行する（直列キューは通さない）。
+async fn run_blocking<T, F>(f: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError {
+            what_happened: "タスク実行に失敗しました".to_string(),
+            data_is_safe: "ファイルは安全です".to_string(),
+            next_action: "もう一度試してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })?
+}
+
+/// ID でプロジェクトを取得する（ストアのロックは取得後すぐ解放する）。
+fn load_project(store: &Arc<Mutex<Store>>, id: &str) -> Result<Project, AppError> {
+    let guard = store.lock().map_err(|e| AppError {
+        what_happened: "データベースアクセスに失敗しました".to_string(),
+        data_is_safe: "ファイルは安全です".to_string(),
+        next_action: "もう一度試してください".to_string(),
+        technical_info: Some(e.to_string()),
+    })?;
+    guard.get_project(id).map_err(|e| AppError {
+        what_happened: "プロジェクトが見つかりません".to_string(),
+        data_is_safe: "何も変更されていません".to_string(),
+        next_action: "プロジェクト一覧から確認してください".to_string(),
+        technical_info: Some(format!("{:?}", e)),
+    })
 }
 
 // ========== Tauri コマンド（全て async/spawn_blocking） ==========
@@ -403,165 +450,187 @@ async fn list_changes(
 #[tauri::command]
 #[specta::specta]
 async fn save(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     message: String,
 ) -> Result<SaveResult, AppError> {
-    let store = state.store.clone();
-    let locks = state.locks.clone();
-    let id_clone = id.clone();
-    run_exclusive(
-        locks,
-        id,
-        "変更は保存されていません",
-        move || {
-            let store_guard = store.lock().map_err(|e| AppError {
-                what_happened: "保存に失敗しました".to_string(),
-                data_is_safe: "変更は保存されていません".to_string(),
-                next_action: "もう一度試してください".to_string(),
-                technical_info: Some(e.to_string()),
-            })?;
+    let ctx = OpContext::new(app, &state);
+    let store = state.store_clone();
+    let touch_id = id.clone();
+    let memo = message.clone();
 
-            let project = store_guard.get_project(&id_clone).map_err(|e| AppError {
-                what_happened: "プロジェクトが見つかりません".to_string(),
-                data_is_safe: "何も変更されていません".to_string(),
-                next_action: "プロジェクト一覧から確認してください".to_string(),
-                technical_info: Some(format!("{:?}", e)),
-            })?;
-
-            drop(store_guard);
-
-            let runner = GitRunner::from_path_env();
-            let ops = Ops::new(runner);
-
-            let outcome = ops
-                .save(&project.path, &message)
-                .map_err(AppError::from_ops_error)?;
-
-            let commit = match outcome {
-                core_ops::SaveOutcome::Saved { commit, .. } => Some(commit),
-                core_ops::SaveOutcome::NothingToSave => None,
-            };
-
-            let store_guard2 = store.lock().ok();
-            if let Some(sg) = store_guard2 {
-                let _ = sg.touch_project(&id_clone);
+    let outcome = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "save",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "変更は保存されていません",
+        },
+        move |ops, path| {
+            let outcome = ops.save(path, &memo)?;
+            if let Ok(guard) = store.lock() {
+                let _ = guard.touch_project(&touch_id);
             }
-
-            Ok(SaveResult {
-                commit,
-                message: Some(message),
-            })
+            Ok(outcome)
+        },
+        |o| OpSummary {
+            detail: match o {
+                core_ops::SaveOutcome::Saved { .. } => "saved",
+                core_ops::SaveOutcome::NothingToSave => "nothing-to-save",
+            }
+            .to_string(),
+            quiet: false,
         },
     )
+    .await?;
+
+    let commit = match outcome {
+        core_ops::SaveOutcome::Saved { commit, .. } => Some(commit),
+        core_ops::SaveOutcome::NothingToSave => None,
+    };
+
+    // 「保存時に自動アップロード」がオンなら、スケジューラがキュー経由でアップロードする
+    if commit.is_some() {
+        state.scheduler.request_push(&id);
+    }
+
+    Ok(SaveResult {
+        commit,
+        message: Some(message),
+    })
+}
+
+/// 未保存の変更から保存メモの案を作る（ルールベース、設計書 10.3）。
+/// 読み取りのみのため直列キューは通さない。
+#[tauri::command]
+#[specta::specta]
+async fn suggest_memo(state: tauri::State<'_, AppState>, id: String) -> Result<String, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(GitRunner::from_path_env());
+        ops.suggest_memo(&project.path, &memo_labels())
+            .map_err(AppError::from_ops_error)
+    })
     .await
+}
+
+/// 指定した保存時点の全ファイル一覧（読み取りのみ）。
+#[tauri::command]
+#[specta::specta]
+async fn list_files_at(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    commit: String,
+) -> Result<Vec<FileEntry>, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(GitRunner::from_path_env());
+        let files = ops
+            .list_files_at(&project.path, &commit)
+            .map_err(AppError::from_ops_error)?;
+        Ok(files
+            .into_iter()
+            .map(|f| FileEntry {
+                path: f.path,
+                size: f.size as f64,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// 競合ファイルを UI 向けの型へ変換する
+fn conflict_item(f: core_ops::ConflictFile) -> ConflictItem {
+    ConflictItem {
+        path: f.path,
+        this_saved_at: f.this_saved_at.map(|t| t as f64),
+        cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
+        kind: match f.kind {
+            core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
+            core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
+            core_ops::ConflictKind::DeletedByUs => ConflictKind::DeletedByUs,
+            core_ops::ConflictKind::DeletedByThem => ConflictKind::DeletedByThem,
+            core_ops::ConflictKind::BothDeleted => ConflictKind::BothDeleted,
+        },
+    }
 }
 
 /// 取り込む（fetch + merge）を実行。
 #[tauri::command]
 #[specta::specta]
-async fn pull(state: tauri::State<'_, AppState>, id: String) -> Result<PullResult, AppError> {
-    let store = state.store.clone();
-    let locks = state.locks.clone();
-    let id_clone = id.clone();
-    run_exclusive(locks, id, "ファイルは安全です", move || {
-        let store_guard = store.lock().map_err(|e| AppError {
-            what_happened: "取り込みに失敗しました".to_string(),
-            data_is_safe: "ファイルは安全です".to_string(),
-            next_action: "もう一度試してください".to_string(),
-            technical_info: Some(e.to_string()),
-        })?;
+async fn pull(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<PullResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let result = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "pull",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは安全です",
+        },
+        |ops, path| ops.pull(path),
+        summarize_pull,
+    )
+    .await;
+    // 手動の結果もスケジューラの計画に反映する（成功すれば失敗状態が解除される）
+    state
+        .scheduler
+        .note_result(&id, SyncTask::Pull, pull_task_result(&result));
+    let outcome = result?;
 
-        let project = store_guard.get_project(&id_clone).map_err(|e| AppError {
-            what_happened: "プロジェクトが見つかりません".to_string(),
-            data_is_safe: "何も変更されていません".to_string(),
-            next_action: "プロジェクト一覧から確認してください".to_string(),
-            technical_info: Some(format!("{:?}", e)),
-        })?;
-
-        drop(store_guard);
-
-        let runner = GitRunner::from_path_env();
-        let ops = Ops::new(runner).with_labels(Labels::default());
-
-        let outcome = ops.pull(&project.path).map_err(AppError::from_ops_error)?;
-
-        let (outcome_str, conflicts) = match outcome {
-            core_ops::PullOutcome::UpToDate => ("up-to-date".to_string(), vec![]),
-            core_ops::PullOutcome::FastForwarded => ("fast-forwarded".to_string(), vec![]),
-            core_ops::PullOutcome::Merged { .. } => ("merged".to_string(), vec![]),
-            core_ops::PullOutcome::Conflicted { files } => (
-                "conflicted".to_string(),
-                files
-                    .into_iter()
-                    .map(|f| ConflictItem {
-                        path: f.path,
-                        this_saved_at: f.this_saved_at.map(|t| t as f64),
-                        cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
-                        kind: match f.kind {
-                            core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
-                            core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
-                            core_ops::ConflictKind::DeletedByUs => ConflictKind::DeletedByUs,
-                            core_ops::ConflictKind::DeletedByThem => ConflictKind::DeletedByThem,
-                            core_ops::ConflictKind::BothDeleted => ConflictKind::BothDeleted,
-                        },
-                    })
-                    .collect(),
-            ),
-            core_ops::PullOutcome::NoUpstream => ("no-upstream".to_string(), vec![]),
-        };
-
-        Ok(PullResult {
-            outcome: outcome_str,
-            conflicts,
-        })
+    let name = pull_outcome_name(&outcome).to_string();
+    let conflicts = match outcome {
+        core_ops::PullOutcome::Conflicted { files } => {
+            files.into_iter().map(conflict_item).collect()
+        }
+        _ => vec![],
+    };
+    Ok(PullResult {
+        outcome: name,
+        conflicts,
     })
-    .await
 }
 
 /// アップロード（push）を実行。
 #[tauri::command]
 #[specta::specta]
-async fn push(state: tauri::State<'_, AppState>, id: String) -> Result<PushResult, AppError> {
-    let store = state.store.clone();
-    let locks = state.locks.clone();
-    let id_clone = id.clone();
-    run_exclusive(locks, id, "ファイルは安全です", move || {
-        let store_guard = store.lock().map_err(|e| AppError {
-            what_happened: "アップロードに失敗しました".to_string(),
-            data_is_safe: "ファイルは安全です".to_string(),
-            next_action: "もう一度試してください".to_string(),
-            technical_info: Some(e.to_string()),
-        })?;
+async fn push(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<PushResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let result = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "push",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは安全です",
+        },
+        |ops, path| ops.upload(path),
+        summarize_push,
+    )
+    .await;
+    state
+        .scheduler
+        .note_result(&id, SyncTask::Push, push_task_result(&result));
+    let outcome = result?;
 
-        let project = store_guard.get_project(&id_clone).map_err(|e| AppError {
-            what_happened: "プロジェクトが見つかりません".to_string(),
-            data_is_safe: "何も変更されていません".to_string(),
-            next_action: "プロジェクト一覧から確認してください".to_string(),
-            technical_info: Some(format!("{:?}", e)),
-        })?;
-
-        drop(store_guard);
-
-        let runner = GitRunner::from_path_env();
-        let ops = Ops::new(runner).with_labels(Labels::default());
-
-        let outcome = ops
-            .upload(&project.path)
-            .map_err(AppError::from_ops_error)?;
-
-        let outcome_str = match outcome {
-            core_ops::UploadOutcome::Pushed => "pushed".to_string(),
-            core_ops::UploadOutcome::NothingToUpload => "nothing".to_string(),
-            core_ops::UploadOutcome::PulledThenPushed(_) => "pulled-then-pushed".to_string(),
-            core_ops::UploadOutcome::NeedsResolve(_) => "needs-resolve".to_string(),
-        };
-
-        Ok(PushResult {
-            outcome: outcome_str,
-        })
+    Ok(PushResult {
+        outcome: push_outcome_name(&outcome).to_string(),
     })
-    .await
 }
 
 /// 履歴を取得。
@@ -725,44 +794,30 @@ async fn restore_preview(
 #[tauri::command]
 #[specta::specta]
 async fn restore(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     commit: String,
 ) -> Result<(), AppError> {
-    let store = state.store.clone();
-    let locks = state.locks.clone();
-    let id_clone = id.clone();
-    run_exclusive(
-        locks,
-        id,
-        "ファイルは変更されていません",
-        move || {
-            let store_guard = store.lock().map_err(|e| AppError {
-                what_happened: "復元に失敗しました".to_string(),
-                data_is_safe: "ファイルは変更されていません".to_string(),
-                next_action: "もう一度試してください".to_string(),
-                technical_info: Some(e.to_string()),
-            })?;
-
-            let project = store_guard.get_project(&id_clone).map_err(|e| AppError {
-                what_happened: "プロジェクトが見つかりません".to_string(),
-                data_is_safe: "何も変更されていません".to_string(),
-                next_action: "プロジェクト一覧から確認してください".to_string(),
-                technical_info: Some(format!("{:?}", e)),
-            })?;
-
-            drop(store_guard);
-
-            let runner = GitRunner::from_path_env();
-            let ops = Ops::new(runner);
-
-            ops.restore(&project.path, &commit)
-                .map_err(AppError::from_ops_error)?;
-
-            Ok(())
+    let ctx = OpContext::new(app, &state);
+    let target = commit.clone();
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "restore",
+            trigger: OpTrigger::Manual,
+            target: Some(target),
+            data_is_safe: "ファイルは変更されていません",
+        },
+        move |ops, path| ops.restore(path, &commit),
+        |_| OpSummary {
+            detail: "restored".to_string(),
+            quiet: false,
         },
     )
-    .await
+    .await?;
+    Ok(())
 }
 
 /// 現在の競合ファイルを取得。
@@ -826,57 +881,46 @@ async fn list_conflicts(
 #[tauri::command]
 #[specta::specta]
 async fn resolve_conflicts(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     choices: Vec<(String, ConflictChoice)>,
     keep_other_copy: bool,
 ) -> Result<(), AppError> {
-    let store = state.store.clone();
-    let locks = state.locks.clone();
-    let id_clone = id.clone();
-    run_exclusive(
-        locks,
-        id,
-        "ファイルは変更されていません",
-        move || {
-            let store_guard = store.lock().map_err(|e| AppError {
-                what_happened: "競合解消に失敗しました".to_string(),
-                data_is_safe: "ファイルは変更されていません".to_string(),
-                next_action: "もう一度試してください".to_string(),
-                technical_info: Some(e.to_string()),
-            })?;
+    let ctx = OpContext::new(app, &state);
+    let converted_choices: Vec<(String, core_ops::Choice)> = choices
+        .into_iter()
+        .map(|(path, choice)| {
+            let c = match choice {
+                ConflictChoice::Mine => core_ops::Choice::Mine,
+                ConflictChoice::Theirs => core_ops::Choice::Theirs,
+            };
+            (path, c)
+        })
+        .collect();
+    let message = "2台の変更をまとめました".to_string();
 
-            let project = store_guard.get_project(&id_clone).map_err(|e| AppError {
-                what_happened: "プロジェクトが見つかりません".to_string(),
-                data_is_safe: "何も変更されていません".to_string(),
-                next_action: "プロジェクト一覧から確認してください".to_string(),
-                technical_info: Some(format!("{:?}", e)),
-            })?;
-
-            drop(store_guard);
-
-            let converted_choices: Vec<(String, core_ops::Choice)> = choices
-                .into_iter()
-                .map(|(path, choice)| {
-                    let c = match choice {
-                        ConflictChoice::Mine => core_ops::Choice::Mine,
-                        ConflictChoice::Theirs => core_ops::Choice::Theirs,
-                    };
-                    (path, c)
-                })
-                .collect();
-
-            let runner = GitRunner::from_path_env();
-            let ops = Ops::new(runner).with_labels(Labels::default());
-
-            let message = "2台の変更をまとめました".to_string();
-            ops.resolve(&project.path, &converted_choices, keep_other_copy, &message)
-                .map_err(AppError::from_ops_error)?;
-
-            Ok(())
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "resolve",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは変更されていません",
+        },
+        move |ops, path| ops.resolve(path, &converted_choices, keep_other_copy, &message),
+        |_| OpSummary {
+            detail: "resolved".to_string(),
+            quiet: false,
         },
     )
-    .await
+    .await?;
+
+    // 解消後は状態を確かめる取り込みと、まとめた保存のアップロードを予定する
+    state.scheduler.request_pull(&id);
+    state.scheduler.request_push(&id);
+    Ok(())
 }
 
 // ========== Data Types (Tauri-Specta 用) ==========
@@ -999,6 +1043,15 @@ pub enum ConflictChoice {
     Theirs,
 }
 
+/// 保存時点のファイル（S3「この時点の全ファイルを見る」用）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct FileEntry {
+    /// リポジトリ相対パス
+    pub path: String,
+    /// ファイルサイズ（バイト）
+    pub size: f64,
+}
+
 /// 同期状態
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct SyncStatus {
@@ -1012,22 +1065,32 @@ pub struct SyncStatus {
 // ========== Tauri Setup ==========
 
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        list_projects,
-        add_project,
-        remove_project,
-        project_status,
-        list_changes,
-        save,
-        pull,
-        push,
-        list_history,
-        diff,
-        restore_preview,
-        restore,
-        list_conflicts,
-        resolve_conflicts,
-    ])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            list_projects,
+            add_project,
+            remove_project,
+            project_status,
+            list_changes,
+            save,
+            pull,
+            push,
+            list_history,
+            diff,
+            restore_preview,
+            restore,
+            list_conflicts,
+            resolve_conflicts,
+            suggest_memo,
+            list_files_at,
+        ])
+        .events(collect_events![
+            events::StatusChanged,
+            events::OpProgress,
+            events::OpFinished,
+            events::SyncStateChanged,
+            events::NeedsAttention,
+        ])
 }
 
 /// src/lib/bindings.ts を書き出す（debug 起動時と export-bindings bin から呼ぶ）
@@ -1042,6 +1105,7 @@ pub fn export_bindings() {
 
 pub fn run() {
     let builder = specta_builder();
+    let invoke_handler = builder.invoke_handler();
 
     #[cfg(debug_assertions)]
     export_bindings();
@@ -1049,7 +1113,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
+            // イベントの登録（UI への通知に必要）
+            builder.mount_events(app);
+
             // app_data_dir 内に DB を配置
             let app_data_dir = app.path().app_data_dir().map_err(|e| {
                 tauri::Error::Io(std::io::Error::other(format!(
@@ -1073,9 +1140,12 @@ pub fn run() {
             let state = AppState::new(store);
             app.manage(state);
 
+            // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）
+            scheduler::spawn(app.handle().clone());
+
             Ok(())
         })
-        .invoke_handler(builder.invoke_handler())
+        .invoke_handler(invoke_handler)
         .run(tauri::generate_context!())
         .expect("アプリの起動に失敗しました");
 }

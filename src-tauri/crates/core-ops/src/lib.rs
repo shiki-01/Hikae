@@ -1,12 +1,14 @@
 // 保存・取り込み・アップロード・ぶつかり解消などの高層操作 API。
 
+mod memo;
 mod models;
 mod operations;
 
+pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
-    Choice, ConflictFile, ConflictKind, DiffLine, DiffLineKind, FileInHistory, HistoryEntry,
-    Identity, Labels, OpsError, PullOutcome, ResolveOutcome, RestoreFileChange, RestorePreview,
-    SaveOutcome, SyncState, UploadOutcome,
+    new_restore_points, Choice, ConflictFile, ConflictKind, DiffLine, DiffLineKind, FileInHistory,
+    HistoryEntry, Identity, Labels, OpsError, PullOutcome, ResolveOutcome, RestoreFileChange,
+    RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
 };
 
 use core_git::GitRunner;
@@ -131,6 +133,16 @@ impl Ops {
     /// 特定時点のファイル一覧を取得。
     pub fn list_files_at(&self, repo: &Path, commit: &str) -> Result<Vec<FileInHistory>, OpsError> {
         operations::list_files_at(self.runner(), repo, commit)
+    }
+
+    /// 未保存の変更からルールベースで保存メモの案を作る（設計書 10.3）。変更がなければ空文字列。
+    pub fn suggest_memo(&self, repo: &Path, labels: &MemoLabels) -> Result<String, OpsError> {
+        operations::suggest_memo_for(self.runner(), repo, labels)
+    }
+
+    /// 復元点（隠し ref）の一覧。操作の前後で比べ、操作が作った復元点の特定に使う。
+    pub fn restore_point_refs(&self, repo: &Path) -> Result<Vec<String>, OpsError> {
+        operations::restore_point_refs(self.runner(), repo)
     }
 
     /// 2つの時点の差分を取得（行単位）。

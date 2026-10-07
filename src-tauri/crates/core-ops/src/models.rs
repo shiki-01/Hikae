@@ -224,3 +224,64 @@ pub enum DiffLineKind {
     /// 削除行
     Removed,
 }
+
+impl OpsError {
+    /// ジャーナルに記録するための分類名。エラー本文（git の stderr など）は含めない。
+    /// stderr にはリモート URL などが含まれうるため、記録には種類だけを使う。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            OpsError::Git(core_git::GitError::Timeout { .. }) => "git-timeout",
+            OpsError::Git(_) => "git",
+            OpsError::Safety(_) => "safety",
+            OpsError::Io(_) => "io",
+            OpsError::Conflict(_) => "conflict",
+            OpsError::Unexpected(_) => "unexpected",
+        }
+    }
+}
+
+/// 操作の前後の復元点 ref の一覧を比べ、その操作が新しく作った復元点を返す。
+/// 同じ種類が複数あれば、名前（時刻入り）が最大のものを選ぶ。
+pub fn new_restore_points(before: &[String], after: &[String]) -> RestorePointInfo {
+    let created = |prefix: &str| {
+        after
+            .iter()
+            .filter(|r| r.starts_with(prefix) && !before.contains(r))
+            .max()
+            .cloned()
+    };
+    RestorePointInfo {
+        snapshot_ref: created("refs/hikae/snapshots/"),
+        backup_ref: created("refs/hikae/backup/"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_restore_points_returns_only_refs_created_by_the_operation() {
+        let before = vec![
+            "refs/hikae/backup/save/20260101T000000Z".to_string(),
+            "refs/hikae/snapshots/main/20260101T000000Z".to_string(),
+        ];
+        let mut after = before.clone();
+        after.push("refs/hikae/backup/pull/20260102T000000Z".to_string());
+        after.push("refs/hikae/backup/pull/20260102T000500Z".to_string());
+        let info = new_restore_points(&before, &after);
+        assert_eq!(info.snapshot_ref, None);
+        assert_eq!(
+            info.backup_ref.as_deref(),
+            Some("refs/hikae/backup/pull/20260102T000500Z")
+        );
+        assert_eq!(new_restore_points(&after, &after).backup_ref, None);
+    }
+
+    #[test]
+    fn error_kind_does_not_leak_message() {
+        let e = OpsError::Unexpected("token ghp_secret".to_string());
+        assert_eq!(e.kind(), "unexpected");
+        assert_eq!(OpsError::Conflict(vec![]).kind(), "conflict");
+    }
+}

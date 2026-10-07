@@ -7,8 +7,11 @@ use rusqlite::Connection;
 pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     let current_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-    if current_version == 0 {
+    if current_version < 1 {
         migrate_to_v1(conn)?;
+    }
+    if current_version < 2 {
+        migrate_to_v2(conn)?;
     }
 
     // 将来のバージョンはここに追加
@@ -80,6 +83,35 @@ fn migrate_to_v1(conn: &Connection) -> Result<(), StoreError> {
         );
 
         PRAGMA user_version = 1;
+        "#,
+    )?;
+
+    Ok(())
+}
+
+/// v2: 操作ジャーナル（設計書 6.3）
+/// 外部キーは張らない。プロジェクトの登録を外しても操作の記録は残す。
+fn migrate_to_v2(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            triggered_by TEXT NOT NULL DEFAULT 'manual',
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            detail TEXT,
+            snapshot_ref TEXT,
+            backup_ref TEXT,
+            target TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_journal_project_started
+            ON journal (project_id, started_at DESC, id DESC);
+
+        PRAGMA user_version = 2;
         "#,
     )?;
 

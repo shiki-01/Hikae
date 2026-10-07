@@ -1,5 +1,6 @@
 // 各操作の実装。設計書 4.1～4.5 に従う。
 
+use crate::memo::{self, MemoChange, MemoChangeKind, MemoLabels};
 use crate::models::*;
 use core_git::GitRunner;
 use core_safety::{create_backup_ref, create_restore_point};
@@ -332,34 +333,136 @@ pub(crate) fn list_files_at(
     repo: &Path,
     commit: &str,
 ) -> Result<Vec<FileInHistory>, OpsError> {
-    // git ls-tree で tree を走査
-    let out = runner.run_ok(repo, &["ls-tree", "-r", commit])?;
-    let output = String::from_utf8_lossy(&out.stdout);
+    // 先頭が `-` の値はオプションとして解釈されるため受け付けない
+    if commit.is_empty() || commit.starts_with('-') {
+        return Err(OpsError::Unexpected("invalid commit".to_string()));
+    }
 
+    // `-z` によりパスは引用符なしの生のバイト列で届く（日本語名・空白を含む名前も正しく扱える）
+    let out = runner.run_ok(repo, &["ls-tree", "-r", "-z", "-l", commit])?;
+    Ok(parse_ls_tree_long(&out.stdout))
+}
+
+/// `ls-tree -r -z -l` の出力を解析する。
+/// 各エントリは `<mode> <type> <oid> <size>\t<path>` が NUL で区切られる。
+/// サブモジュール（commit）など blob 以外は一覧に含めない。
+fn parse_ls_tree_long(stdout: &[u8]) -> Vec<FileInHistory> {
     let mut files = Vec::new();
-    for line in output.lines() {
-        // フォーマット: "<mode> <type> <hash> <size> <path>"（-rz 形式の場合）
-        // 標準的には: "<mode> <type> <hash> <path>"
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 {
+    for entry in stdout.split(|b| *b == 0) {
+        if entry.is_empty() {
             continue;
         }
-
-        let mode = parts[0].to_string();
-        let _type_str = parts[1];
-        let _hash = parts[2];
-        let path = parts[3..].join(" ");
-
-        // ファイルのサイズは `git cat-file` で取得（ここでは 0 に固定）
+        let Some(tab) = entry.iter().position(|b| *b == b'\t') else {
+            continue;
+        };
+        let meta = String::from_utf8_lossy(&entry[..tab]);
+        let path = String::from_utf8_lossy(&entry[tab + 1..]).into_owned();
+        let mut fields = meta.split_whitespace();
+        let (Some(mode), Some(kind), Some(_oid), Some(size)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if kind != "blob" {
+            continue;
+        }
         files.push(FileInHistory {
             path,
-            mode,
-            size: 0,
+            mode: mode.to_string(),
+            size: size.parse().unwrap_or(0),
             is_tracked: true,
         });
     }
+    files
+}
 
-    Ok(files)
+/// いまの作業状態（未保存の変更）からメモの案を作る（設計書 4.1 手順 3 / 10.3）。
+/// 作業フォルダ・インデックスは変更しない（`status` の読み取りのみ）。
+pub(crate) fn suggest_memo_for(
+    runner: &GitRunner,
+    repo: &Path,
+    labels: &MemoLabels,
+) -> Result<String, OpsError> {
+    // 未追跡ファイルをフォルダ単位にまとめず 1 件ずつ列挙する
+    let out = runner.run_ok(
+        repo,
+        &["status", "--porcelain=v2", "-z", "-uall", "--no-renames"],
+    )?;
+    let status =
+        core_git::parse_status_v2(&out.stdout).map_err(|e| OpsError::Unexpected(e.to_string()))?;
+    let changes = memo_changes_from_status(repo, &status);
+    Ok(memo::suggest_memo(&changes, labels))
+}
+
+/// `status` のエントリを、メモ生成の入力へ変換する。
+/// ファイルの大きさを変更量の目安にする（削除は 0）。
+fn memo_changes_from_status(repo: &Path, status: &core_git::StatusV2) -> Vec<MemoChange> {
+    use core_git::{StatusCode, StatusKind};
+
+    let mut changes = Vec::new();
+    for entry in &status.entries {
+        let (kind, old_path) = match &entry.kind {
+            StatusKind::Ignored => continue,
+            StatusKind::Untracked => (MemoChangeKind::Added, None),
+            StatusKind::Unmerged { .. } => (MemoChangeKind::Modified, None),
+            StatusKind::Rename {
+                original_path,
+                copy,
+                ..
+            } => {
+                if *copy {
+                    (MemoChangeKind::Added, None)
+                } else {
+                    (MemoChangeKind::Renamed, Some(original_path.clone()))
+                }
+            }
+            StatusKind::Change { index, worktree } => {
+                if *worktree == StatusCode::Deleted
+                    || (*index == StatusCode::Deleted && *worktree == StatusCode::Unmodified)
+                {
+                    (MemoChangeKind::Deleted, None)
+                } else if *index == StatusCode::Added || *worktree == StatusCode::Added {
+                    (MemoChangeKind::Added, None)
+                } else {
+                    (MemoChangeKind::Modified, None)
+                }
+            }
+        };
+        let weight = if kind == MemoChangeKind::Deleted {
+            0
+        } else {
+            std::fs::metadata(repo.join(&entry.path))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        };
+        changes.push(MemoChange {
+            kind,
+            path: entry.path.clone(),
+            old_path,
+            weight,
+        });
+    }
+    changes
+}
+
+/// 復元点（`refs/hikae/backup/` と `refs/hikae/snapshots/`）の ref 名を列挙する。
+/// 操作の前後で差を取り、その操作が作った復元点をジャーナルへ記録するために使う。
+pub(crate) fn restore_point_refs(runner: &GitRunner, repo: &Path) -> Result<Vec<String>, OpsError> {
+    let out = runner.run_ok(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/hikae/backup/",
+            "refs/hikae/snapshots/",
+        ],
+    )?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// 2つの時点の差分を取得（行単位）。

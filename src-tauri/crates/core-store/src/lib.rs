@@ -7,9 +7,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub mod journal;
 pub mod migrations;
 pub mod models;
 
+pub use journal::{
+    now_rfc3339, redact, JournalEntry, JournalOutcome, JournalTrigger, NewJournalEntry,
+};
 pub use migrations::run_migrations;
 pub use models::{Project, ProjectConfig};
 
@@ -175,6 +179,64 @@ impl Store {
         self.conn
             .execute("DELETE FROM projects WHERE id = ?", params![id])?;
         Ok(())
+    }
+
+    /// 操作ジャーナルへ 1 件追記する。文字列は `redact` を通して認証情報を伏せる。
+    pub fn record_journal(&self, entry: &NewJournalEntry) -> Result<i64, StoreError> {
+        let clean = |s: &Option<String>| s.as_deref().map(redact);
+        self.conn.execute(
+            "INSERT INTO journal
+                (project_id, operation, triggered_by, started_at, finished_at, outcome,
+                 detail, snapshot_ref, backup_ref, target)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                entry.project_id,
+                redact(&entry.operation),
+                entry.trigger.as_str(),
+                entry.started_at,
+                entry.finished_at,
+                entry.outcome.as_str(),
+                clean(&entry.detail),
+                clean(&entry.snapshot_ref),
+                clean(&entry.backup_ref),
+                clean(&entry.target),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// プロジェクトのジャーナルを新しい順に取得する。
+    pub fn list_journal(
+        &self,
+        project_id: &str,
+        limit: u32,
+    ) -> Result<Vec<JournalEntry>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, operation, triggered_by, started_at, finished_at, outcome,
+                    detail, snapshot_ref, backup_ref, target
+             FROM journal
+             WHERE project_id = ?
+             ORDER BY started_at DESC, id DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, limit], |row| {
+                Ok(JournalEntry {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    operation: row.get(2)?,
+                    trigger: JournalTrigger::from_db(&row.get::<_, String>(3)?),
+                    started_at: row.get(4)?,
+                    finished_at: row.get(5)?,
+                    outcome: JournalOutcome::from_db(&row.get::<_, String>(6)?),
+                    detail: row.get(7)?,
+                    snapshot_ref: row.get(8)?,
+                    backup_ref: row.get(9)?,
+                    target: row.get(10)?,
+                })
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// 最終表示日時を更新。

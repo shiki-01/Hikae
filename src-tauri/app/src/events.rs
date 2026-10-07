@@ -1,0 +1,90 @@
+// Rust から UI へ通知するイベント（設計書 9.3）。
+// tauri-specta で型付けし、`src/lib/bindings.ts` に `events` として出力される。
+
+use serde::{Deserialize, Serialize};
+
+/// 操作の起動元
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub enum OpTrigger {
+    /// ユーザーの操作
+    #[serde(rename = "manual")]
+    Manual,
+    /// スケジューラによる自動実行
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+/// 同期状態（オフライン・認証失敗は例外ではなく状態として扱う）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub enum SyncStateKind {
+    #[serde(rename = "idle")]
+    Idle,
+    /// オフライン。自動で再試行する
+    #[serde(rename = "offline")]
+    Offline,
+    /// 再認証が必要
+    #[serde(rename = "auth-required")]
+    AuthRequired,
+    /// 変更のぶつかりの解消待ち
+    #[serde(rename = "conflicted")]
+    Conflicted,
+    /// そのほかの失敗。自動で再試行する
+    #[serde(rename = "error")]
+    Error,
+}
+
+/// ユーザーの対応が必要な理由
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub enum AttentionReason {
+    /// 変更のぶつかりがある
+    #[serde(rename = "conflict")]
+    Conflict,
+    /// 再認証が必要
+    #[serde(rename = "auth")]
+    Auth,
+    /// 未保存の変更があるため、自動の取り込みを見送った
+    #[serde(rename = "unsaved-changes")]
+    UnsavedChanges,
+}
+
+/// プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct StatusChanged {
+    pub project_id: String,
+}
+
+/// 状態変更操作を開始した
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct OpProgress {
+    pub project_id: String,
+    /// `save` / `restore` / `pull` / `push` / `resolve`
+    pub operation: String,
+    pub trigger: OpTrigger,
+}
+
+/// 状態変更操作が終わった
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct OpFinished {
+    pub project_id: String,
+    pub operation: String,
+    pub trigger: OpTrigger,
+    pub ok: bool,
+    /// 結果の要約（`merged` / `up-to-date` / 失敗の種類など。エラー本文は含まない）
+    pub outcome: String,
+}
+
+/// 同期状態が変わった
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct SyncStateChanged {
+    pub project_id: String,
+    pub state: SyncStateKind,
+    /// 次に自動で再試行する時刻（Unix 秒）。再試行待ちでなければ null
+    pub retry_at: Option<f64>,
+}
+
+/// ユーザーの対応が必要になった
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct NeedsAttention {
+    pub project_id: String,
+    pub reason: AttentionReason,
+}
