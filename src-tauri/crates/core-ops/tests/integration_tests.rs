@@ -642,3 +642,73 @@ fn test_12_history_is_preserved_and_pre_merge_backup_points_to_old_head(
     setup.cleanup()?;
     Ok(())
 }
+
+#[test]
+fn test_13_labels_are_injected_and_pull_creates_a_single_restore_point(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-13")?;
+    let labels = core_ops::Labels {
+        auto_save_memo: "memo-from-caller".to_string(),
+        copy_mine: "mine-label".to_string(),
+        copy_theirs: "theirs-label".to_string(),
+    };
+    let ops_a = Ops::new(new_runner());
+    let ops_b = Ops::new(new_runner()).with_labels(labels);
+
+    // B に未保存の変更がある状態で、A の別ファイルの変更を取り込む
+    common::write_test_file(&setup.pc_a, "from-a.txt", "a\n")?;
+    ops_a.save(&setup.pc_a, "A change")?;
+    ops_a.upload(&setup.pc_a)?;
+    common::write_test_file(&setup.pc_b, "unsaved-b.txt", "b\n")?;
+
+    match ops_b.pull(&setup.pc_b)? {
+        core_ops::PullOutcome::Merged { .. } => {}
+        other => panic!("expected Merged, got {other:?}"),
+    }
+
+    // 自動保存のメモは呼び出し側が渡した文言
+    let (_, subjects, _) = run_git(&setup.pc_b, &["log", "--format=%s", "--no-merges"]);
+    assert!(
+        subjects.lines().any(|l| l == "memo-from-caller"),
+        "auto-save memo should come from Labels: {subjects}"
+    );
+    // pull の復元点（バックアップ ref）は 1 回分だけ
+    let (_, backups, _) = run_git(&setup.pc_b, &["for-each-ref", "refs/hikae/backup/pull/"]);
+    assert_eq!(
+        backups.lines().count(),
+        1,
+        "one restore point per pull: {backups}"
+    );
+
+    // 競合 → 使わなかった版の別名コピーにラベルが付き、元のフォルダに作られる
+    common::write_test_file(&setup.pc_a, "dir/doc.txt", "base\n")?;
+    ops_a.save(&setup.pc_a, "add doc")?;
+    ops_a.upload(&setup.pc_a)?;
+    ops_b.pull(&setup.pc_b)?;
+    common::write_test_file(&setup.pc_a, "dir/doc.txt", "A\n")?;
+    ops_a.save(&setup.pc_a, "A doc")?;
+    ops_a.upload(&setup.pc_a)?;
+    common::write_test_file(&setup.pc_b, "dir/doc.txt", "B\n")?;
+    ops_b.save(&setup.pc_b, "B doc")?;
+    ops_b.pull(&setup.pc_b)?;
+    let outcome = ops_b.resolve(
+        &setup.pc_b,
+        &[("dir/doc.txt".to_string(), Choice::Mine)],
+        true,
+        "merged",
+    )?;
+    assert_eq!(outcome.copies.len(), 1);
+    assert!(
+        outcome.copies[0].starts_with("dir/doc (theirs-label ")
+            && outcome.copies[0].ends_with(").txt"),
+        "unexpected copy name: {}",
+        outcome.copies[0]
+    );
+    assert_eq!(
+        std::fs::read_to_string(setup.pc_b.join(&outcome.copies[0]))?,
+        "A\n"
+    );
+
+    setup.cleanup()?;
+    Ok(())
+}

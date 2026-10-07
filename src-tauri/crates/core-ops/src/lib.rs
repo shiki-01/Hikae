@@ -4,7 +4,7 @@ mod models;
 mod operations;
 
 pub use models::{
-    Choice, ConflictFile, ConflictKind, Identity, OpsError, PullOutcome, ResolveOutcome,
+    Choice, ConflictFile, ConflictKind, Identity, Labels, OpsError, PullOutcome, ResolveOutcome,
     SaveOutcome, SyncState, UploadOutcome,
 };
 
@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 pub struct Ops {
     runner: Arc<GitRunner>,
     clock: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
+    labels: Labels,
 }
 
 impl Ops {
@@ -26,12 +27,19 @@ impl Ops {
         Ops {
             runner: r,
             clock: Arc::new(OffsetDateTime::now_utc),
+            labels: Labels::default(),
         }
     }
 
     /// テスト用に時刻ソースを変更できるビルダーメソッド。
     pub fn with_clock(mut self, f: impl Fn() -> OffsetDateTime + Send + Sync + 'static) -> Self {
         self.clock = Arc::new(f);
+        self
+    }
+
+    /// 履歴メモ・別名コピーに使う文言を差し替える。
+    pub fn with_labels(mut self, labels: Labels) -> Self {
+        self.labels = labels;
         self
     }
 
@@ -72,7 +80,7 @@ impl Ops {
 
     /// upstream から取り込む。未保存変更があれば自動保存してから取り込む。
     pub fn pull(&self, repo: &Path) -> Result<PullOutcome, OpsError> {
-        operations::pull(self.runner(), repo, self.now())
+        operations::pull(self.runner(), repo, self.now(), &self.labels)
     }
 
     /// 現在の競合ファイル一覧を返す。
@@ -95,6 +103,7 @@ impl Ops {
             keep_other_copy,
             message,
             self.now(),
+            &self.labels,
         )
     }
 
@@ -105,7 +114,7 @@ impl Ops {
 
     /// upstream に push する。拒否されたら pull→再試行。
     pub fn upload(&self, repo: &Path) -> Result<UploadOutcome, OpsError> {
-        operations::upload(self.runner(), repo, self.now())
+        operations::upload(self.runner(), repo, self.now(), &self.labels)
     }
 
     /// 同期状態を返す。ahead / behind / has_upstream / dirty。

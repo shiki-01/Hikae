@@ -131,6 +131,7 @@ pub(crate) fn pull(
     runner: &GitRunner,
     repo: &Path,
     now: OffsetDateTime,
+    labels: &Labels,
 ) -> Result<PullOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -144,16 +145,15 @@ pub(crate) fn pull(
         return Ok(PullOutcome::NoUpstream);
     }
 
-    // 未保存の変更があるか確認
-    let has_changes = !read_status(runner, repo)?.entries.is_empty();
+    // 復元点は取り込みの前に 1 回だけ作る（未保存の変更もここに含まれる）
+    let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
+    let branch = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
+    let _ = create_restore_point(runner, repo, &branch, "pull", now)?;
 
-    if has_changes {
-        // 自動保存
-        let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
-        let branch = String::from_utf8_lossy(&branch_output.stdout)
-            .trim()
-            .to_string();
-        let _ = create_restore_point(runner, repo, &branch, "pull", now)?;
+    // 未保存の変更があれば先に保存する
+    if !read_status(runner, repo)?.entries.is_empty() {
         runner.run_ok(repo, &["add", "-A"])?;
         runner.run_ok(
             repo,
@@ -162,19 +162,10 @@ pub(crate) fn pull(
                 "core.hooksPath=",
                 "commit",
                 "-m",
-                "取り込む前の自動保存",
+                &labels.auto_save_memo,
             ],
         )?;
     }
-
-    // ブランチ名を取得
-    let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
-    let branch = String::from_utf8_lossy(&branch_output.stdout)
-        .trim()
-        .to_string();
-
-    // 復元点を作成
-    let _ = create_restore_point(runner, repo, &branch, "pull", now)?;
 
     // fetch
     runner.run_ok(repo, &["fetch", "--prune", "origin"])?;
@@ -276,6 +267,7 @@ pub(crate) fn resolve(
     keep_other_copy: bool,
     message: &str,
     now: OffsetDateTime,
+    labels: &Labels,
 ) -> Result<ResolveOutcome, OpsError> {
     // 現在の競合ファイルを確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -317,7 +309,13 @@ pub(crate) fn resolve(
                         runner.run(repo, &["show", &format!(":{other_stage}:{}", path)])?;
 
                     if show_output.code == 0 {
-                        let copy_path = make_copy_filename(path);
+                        // 使わなかった側の版に付けるラベル（Mine を選んだなら破棄側はクラウドの版）
+                        let label = if *choice == Choice::Mine {
+                            &labels.copy_theirs
+                        } else {
+                            &labels.copy_mine
+                        };
+                        let copy_path = make_copy_path(repo, path, label, now);
                         std::fs::write(repo.join(&copy_path), &show_output.stdout)?;
                         copies.push(copy_path);
                     }
@@ -414,6 +412,7 @@ pub(crate) fn upload(
     runner: &GitRunner,
     repo: &Path,
     now: OffsetDateTime,
+    labels: &Labels,
 ) -> Result<UploadOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -448,7 +447,7 @@ pub(crate) fn upload(
         || stderr.contains("fetch first")
     {
         // pull を実行
-        let pull_result = pull(runner, repo, now)?;
+        let pull_result = pull(runner, repo, now, labels)?;
 
         match &pull_result {
             PullOutcome::Conflicted { files } => {
@@ -487,33 +486,62 @@ pub(crate) fn sync_state(runner: &GitRunner, repo: &Path) -> Result<SyncState, O
     })
 }
 
-/// 使わない版を別名で保存する際のファイル名を生成
-fn make_copy_filename(path: &str) -> String {
-    let now = OffsetDateTime::now_utc();
-    let date_str = format!("{:02}-{:02}", now.month() as u8, now.day());
+/// 使わない版を別名で保存するときのパスを作る。
+/// `<元のフォルダ>/<名前> (<ラベル> MM-DD).<拡張子>`。既存ファイルは上書きせず、連番を付ける。
+fn make_copy_path(repo: &Path, path: &str, label: &str, now: OffsetDateTime) -> String {
+    let date = format!("{:02}-{:02}", now.month() as u8, now.day());
+    let p = Path::new(path);
+    let dir = p.parent().and_then(|d| d.to_str()).unwrap_or("");
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
 
-    let path_obj = std::path::Path::new(path);
-    let stem = path_obj.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let ext = path_obj.extension().and_then(|s| s.to_str()).unwrap_or("");
-
-    if ext.is_empty() {
-        format!("{} ({})", stem, date_str)
-    } else {
-        format!("{} ({}).{}", stem, date_str, ext)
+    let join = |name: String| {
+        if dir.is_empty() {
+            name
+        } else {
+            format!("{dir}/{name}")
+        }
+    };
+    let mut candidate = join(format!("{stem} ({label} {date}){ext}"));
+    let mut n = 2;
+    while repo.join(&candidate).exists() {
+        candidate = join(format!("{stem} ({label} {date} {n}){ext}"));
+        n += 1;
     }
+    candidate
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::macros::datetime;
+
+    const NOW: OffsetDateTime = datetime!(2026-10-07 12:00 UTC);
 
     #[test]
-    fn test_make_copy_filename() {
-        let name1 = make_copy_filename("memo.txt");
-        assert!(name1.contains("memo"));
-        assert!(name1.contains(".txt"));
+    fn copy_path_keeps_directory_extension_and_label() {
+        let tmp = std::env::temp_dir();
+        assert_eq!(
+            make_copy_path(&tmp, "sub/メモ 1.txt", "cloud", NOW),
+            "sub/メモ 1 (cloud 10-07).txt"
+        );
+        assert_eq!(
+            make_copy_path(&tmp, "file", "this PC", NOW),
+            "file (this PC 10-07)"
+        );
+    }
 
-        let name2 = make_copy_filename("file");
-        assert!(name2.contains("file"));
+    #[test]
+    fn copy_path_never_overwrites_existing_files() {
+        let dir = std::env::temp_dir().join(format!("core-ops-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("a (cloud 10-07).txt"), "x").expect("write");
+        let p = make_copy_path(&dir, "a.txt", "cloud", NOW);
+        assert_eq!(p, "a (cloud 10-07 2).txt");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
