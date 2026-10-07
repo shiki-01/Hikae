@@ -535,6 +535,12 @@ version = "0.0.1"
 dependencies = [
  "core-git",
  "core-safety",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
 ]
 
 [[package]]

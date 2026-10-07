@@ -4,7 +4,9 @@ mod parser;
 mod runner;
 mod validation;
 
-pub use parser::{parse_status_v2, StatusEntry, StatusKind, StatusV2, XYStatus};
+pub use parser::{
+    parse_status_v2, BranchInfo, ParseError, StatusCode, StatusEntry, StatusKind, StatusV2,
+};
 pub use runner::{GitOutput, GitRunner};
 pub use validation::{validate, Rejection};
 

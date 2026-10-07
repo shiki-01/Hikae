@@ -10,7 +10,7 @@ node_modules/
 !.env.example
 
 # Rust / Tauri
-/src-tauri/target/
+target/
 /src-tauri/app/gen/
 
 # OS の一時ファイル
