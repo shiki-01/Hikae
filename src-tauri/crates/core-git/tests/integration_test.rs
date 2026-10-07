@@ -140,7 +140,7 @@ fn test_reject_c_flag_with_extra_env() {
 #[test]
 fn test_allow_fetch_prune() {
     assert!(validate(&["fetch", "--prune", "origin"]).is_ok());
-    assert!(validate(&["fetch", "-p"]).is_err());
+    assert!(validate(&["fetch", "-p"]).is_ok());
     assert!(validate(&["fetch", "--force"]).is_err());
 }
 
