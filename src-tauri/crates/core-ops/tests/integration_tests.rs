@@ -830,3 +830,64 @@ fn test_16_new_restore_points_identifies_refs_made_by_the_operation(
     setup.cleanup()?;
     Ok(())
 }
+
+/// pull の復元点（refs/hikae/backup/pull/*）の件数
+fn count_pull_restore_points(repo: &std::path::Path) -> usize {
+    let (_, out, _) = run_git(repo, &["for-each-ref", "refs/hikae/backup/pull/"]);
+    out.lines().count()
+}
+
+#[test]
+fn test_17_pull_without_updates_creates_no_restore_point() -> Result<(), Box<dyn std::error::Error>>
+{
+    let setup = TestSetup::new("test-17")?;
+    let ops_b = Ops::new(new_runner());
+    let head_before = get_head_commit(&setup.pc_b);
+
+    // 更新も未保存の変更も無い取り込みは、何度繰り返しても復元点を増やさない
+    for _ in 0..2 {
+        match ops_b.pull(&setup.pc_b)? {
+            core_ops::PullOutcome::UpToDate => {}
+            other => panic!("expected UpToDate, got {other:?}"),
+        }
+    }
+    assert_eq!(count_pull_restore_points(&setup.pc_b), 0);
+    assert_eq!(get_head_commit(&setup.pc_b), head_before);
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_18_pull_with_updates_creates_one_restore_point() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-18")?;
+    let ops_a = Ops::new(new_runner());
+    let ops_b = Ops::new(new_runner());
+
+    common::write_test_file(&setup.pc_a, "from-a.txt", "a\n")?;
+    ops_a.save(&setup.pc_a, "A change")?;
+    ops_a.upload(&setup.pc_a)?;
+
+    match ops_b.pull(&setup.pc_b)? {
+        core_ops::PullOutcome::FastForwarded => {}
+        other => panic!("expected FastForwarded, got {other:?}"),
+    }
+    assert_eq!(count_pull_restore_points(&setup.pc_b), 1);
+    assert!(setup.pc_b.join("from-a.txt").exists());
+
+    // 取り込み後にもう一度呼んでも増えない
+    ops_b.pull(&setup.pc_b)?;
+    assert_eq!(count_pull_restore_points(&setup.pc_b), 1);
+
+    // 未保存の変更だけがある場合は自動保存が走るため、復元点を作る
+    common::write_test_file(&setup.pc_b, "unsaved.txt", "u\n")?;
+    ops_b.pull(&setup.pc_b)?;
+    let (_, all, _) = run_git(&setup.pc_b, &["for-each-ref", "refs/hikae/"]);
+    assert!(
+        !all.trim().is_empty(),
+        "restore point expected before auto-save"
+    );
+
+    setup.cleanup()?;
+    Ok(())
+}

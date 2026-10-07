@@ -127,6 +127,26 @@ pub(crate) fn save(
     })
 }
 
+/// HEAD と upstream の (アップロード待ち, 取り込み待ち) の件数を返す。
+fn ahead_behind(runner: &GitRunner, repo: &Path) -> Result<(i32, i32), OpsError> {
+    let count_output = runner.run_ok(
+        repo,
+        &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+    )?;
+    let count_str = String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .to_string();
+    let parts: Vec<&str> = count_str.split_whitespace().collect();
+    if parts.len() >= 2 {
+        Ok((
+            parts[0].parse::<i32>().unwrap_or(0),
+            parts[1].parse::<i32>().unwrap_or(0),
+        ))
+    } else {
+        Ok((0, 0))
+    }
+}
+
 /// upstream から取り込む。未保存変更があれば自動保存してから pull。
 pub(crate) fn pull(
     runner: &GitRunner,
@@ -146,7 +166,19 @@ pub(crate) fn pull(
         return Ok(PullOutcome::NoUpstream);
     }
 
-    // 復元点は取り込みの前に 1 回だけ作る（未保存の変更もここに含まれる）
+    // fetch は remote-tracking ref を更新するだけで、作業フォルダ・インデックスは変えない。
+    // 復元点より先に実行し、変更が必要かどうかの判定材料にする
+    runner.run_ok(repo, &["fetch", "--prune", "origin"])?;
+
+    let has_unsaved = !read_status(runner, repo)?.entries.is_empty();
+    let (_, behind_before) = ahead_behind(runner, repo)?;
+
+    // 取り込む内容も自動保存する内容も無ければ何も変更しないため、復元点は作らない
+    if behind_before == 0 && !has_unsaved {
+        return Ok(PullOutcome::UpToDate);
+    }
+
+    // 作業フォルダ・履歴を変更する前に復元点を 1 回だけ作る（未保存の変更もここに含まれる）
     let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
     let branch = String::from_utf8_lossy(&branch_output.stdout)
         .trim()
@@ -154,7 +186,7 @@ pub(crate) fn pull(
     let _ = create_restore_point(runner, repo, &branch, "pull", now)?;
 
     // 未保存の変更があれば先に保存する
-    if !read_status(runner, repo)?.entries.is_empty() {
+    if has_unsaved {
         runner.run_ok(repo, &["add", "-A"])?;
         runner.run_ok(
             repo,
@@ -168,26 +200,8 @@ pub(crate) fn pull(
         )?;
     }
 
-    // fetch
-    runner.run_ok(repo, &["fetch", "--prune", "origin"])?;
-
-    // ahead/behind を算出
-    let count_output = runner.run_ok(
-        repo,
-        &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
-    )?;
-    let count_str = String::from_utf8_lossy(&count_output.stdout)
-        .trim()
-        .to_string();
-    let parts: Vec<&str> = count_str.split_whitespace().collect();
-    let (ahead, behind) = if parts.len() >= 2 {
-        (
-            parts[0].parse::<i32>().unwrap_or(0),
-            parts[1].parse::<i32>().unwrap_or(0),
-        )
-    } else {
-        (0, 0)
-    };
+    // 自動保存でアップロード待ちが増えうるため、改めて算出する
+    let (ahead, behind) = ahead_behind(runner, repo)?;
 
     // 状態判定
     if behind == 0 {

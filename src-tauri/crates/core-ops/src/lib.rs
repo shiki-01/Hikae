@@ -2,6 +2,7 @@
 
 mod memo;
 mod models;
+mod open_path;
 mod operations;
 
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
@@ -10,6 +11,7 @@ pub use models::{
     HistoryEntry, Identity, Labels, OpsError, PullOutcome, ResolveOutcome, RestoreFileChange,
     RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
 };
+pub use open_path::{resolve_in_project, OpenPathError};
 
 use core_git::GitRunner;
 use std::path::Path;

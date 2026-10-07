@@ -3,12 +3,5 @@
   "identifier": "default",
   "description": "メインウィンドウの基本権限",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:default",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
-    }
-  ]
+  "permissions": ["core:default", "dialog:default"]
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 use core_git::GitRunner;
@@ -542,6 +543,59 @@ async fn list_files_at(
             .collect())
     })
     .await
+}
+
+/// プロジェクト内のファイルを既定のアプリで開く。
+/// 相対パスはここで検証し、プロジェクト外（`..`・絶対パス・シンボリックリンク経由）は開かない。
+/// 読み取りのみのため直列キューは通さない。
+#[tauri::command]
+#[specta::specta]
+async fn open_project_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    relative_path: String,
+) -> Result<(), AppError> {
+    let store = state.store_clone();
+    let target = run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        core_ops::resolve_in_project(&project.path, &relative_path).map_err(open_path_error)
+    })
+    .await?;
+
+    app.opener()
+        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| AppError {
+            what_happened: "ファイルを開けませんでした".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "対応するアプリがインストールされているか確認してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })
+}
+
+/// パス検証の拒否理由を AppError へ変換する。
+fn open_path_error(e: core_ops::OpenPathError) -> AppError {
+    use core_ops::OpenPathError as E;
+    let (what_happened, next_action) = match &e {
+        E::NotFound => (
+            "開こうとしたファイルが見つかりません",
+            "削除や移動がされていないか確認してください",
+        ),
+        E::RootUnavailable(_) | E::Io(_) => (
+            "ファイルを確認できませんでした",
+            "フォルダの場所や権限を確認してください",
+        ),
+        E::Invalid | E::NotRelative | E::Outside => (
+            "プロジェクトの外にあるファイルは開けません",
+            "プロジェクト内のファイルを選んでください",
+        ),
+    };
+    AppError {
+        what_happened: what_happened.to_string(),
+        data_is_safe: "ファイルは変更されていません。".to_string(),
+        next_action: next_action.to_string(),
+        technical_info: Some(e.to_string()),
+    }
 }
 
 /// 競合ファイルを UI 向けの型へ変換する
@@ -1083,6 +1137,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             resolve_conflicts,
             suggest_memo,
             list_files_at,
+            open_project_file,
         ])
         .events(collect_events![
             events::StatusChanged,
