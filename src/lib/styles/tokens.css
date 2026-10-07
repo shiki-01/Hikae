@@ -1,6 +1,6 @@
 /*
  * デザイントークン（docs/design-requirements.md 2章）。
- * 値は仮。デザイン確定後に値だけ差し替える。
+ * 値は Figma（Hikae / Tokens ページ）から取得した確定値。
  * Master CSS の名前空間規則（--color-*, --font-size-*, --spacing-*, --radius-*, --shadow-*, --duration-*）に従う。
  */
 @import '@master/css';
@@ -8,63 +8,66 @@
 /* 色: ライト */
 @theme light {
 	--color-bg: #ffffff;
-	--color-bg-subtle: #f5f5f4;
+	--color-bg-subtle: #f6f6f4;
 	--color-bg-raised: #ffffff;
-	--color-fg: #1c1917;
-	--color-fg-muted: #57534e;
-	--color-fg-faint: #a8a29e;
-	--color-border: #e7e5e4;
-	--color-border-strong: #d6d3d1;
-	--color-accent: #2563eb;
+	--color-fg: #1f1f1f;
+	--color-fg-muted: #818080;
+	--color-fg-faint: #b3b3b3;
+	--color-border: #e3e3e0;
+	--color-border-strong: #c4c4c0;
+	--color-accent: #2f6fdb;
 	--color-accent-fg: #ffffff;
-	--color-accent-subtle: #dbeafe;
-	--color-state-saved: #16a34a;
-	--color-state-unsaved: #d97706;
-	--color-state-sync: #2563eb;
-	--color-state-danger: #dc2626;
-	--color-diff-add-bg: #dcfce7;
-	--color-diff-add-fg: #166534;
-	--color-diff-del-bg: #fee2e2;
-	--color-diff-del-fg: #991b1b;
-	--color-diff-mod-bg: #fef9c3;
-	--color-snapshot: #d6d3d1;
-	--color-focus-ring: #2563eb;
+	--color-accent-subtle: #e8f0fc;
+	--color-state-saved: #1ec266;
+	--color-state-unsaved: #edae00;
+	--color-state-sync: #2583d0;
+	--color-state-danger: #db3829;
+	--color-diff-add-bg: #e6f4ea;
+	--color-diff-add-fg: #1e6b3a;
+	--color-diff-del-bg: #fbe9e7;
+	--color-diff-del-fg: #a3291f;
+	--color-diff-mod-bg: #fff4d6;
+	--color-snapshot: #b5b5b0;
+	--color-focus-ring: #2f6fdb;
 }
 
 /* 色: ダーク */
 @theme dark {
-	--color-bg: #1c1917;
-	--color-bg-subtle: #292524;
-	--color-bg-raised: #332f2c;
-	--color-fg: #fafaf9;
-	--color-fg-muted: #a8a29e;
-	--color-fg-faint: #78716c;
-	--color-border: #44403c;
-	--color-border-strong: #57534e;
-	--color-accent: #60a5fa;
-	--color-accent-fg: #0c0a09;
-	--color-accent-subtle: #1e3a8a;
-	--color-state-saved: #4ade80;
-	--color-state-unsaved: #fbbf24;
-	--color-state-sync: #60a5fa;
-	--color-state-danger: #f87171;
-	--color-diff-add-bg: #14532d;
-	--color-diff-add-fg: #86efac;
-	--color-diff-del-bg: #7f1d1d;
-	--color-diff-del-fg: #fca5a5;
-	--color-diff-mod-bg: #713f12;
-	--color-snapshot: #57534e;
-	--color-focus-ring: #60a5fa;
+	--color-bg: #1a1a1a;
+	--color-bg-subtle: #222222;
+	--color-bg-raised: #2a2a2a;
+	--color-fg: #ededed;
+	--color-fg-muted: #a8a8a8;
+	--color-fg-faint: #6e6e6e;
+	--color-border: #383838;
+	--color-border-strong: #555555;
+	--color-accent: #5b8fea;
+	--color-accent-fg: #0f0f0f;
+	--color-accent-subtle: #1e2c44;
+	--color-state-saved: #4ec282;
+	--color-state-unsaved: #ffb648;
+	--color-state-sync: #5b8fea;
+	--color-state-danger: #e5665c;
+	--color-diff-add-bg: #16301f;
+	--color-diff-add-fg: #7fd39b;
+	--color-diff-del-bg: #3a1b19;
+	--color-diff-del-fg: #f09a92;
+	--color-diff-mod-bg: #3a3115;
+	--color-snapshot: #5e5e5e;
+	--color-focus-ring: #5b8fea;
 }
 
 /* タイポグラフィ・余白・形状・動き */
 @theme {
-	--font-size-title: 1.5rem;
-	--font-size-heading: 1.125rem;
+	--font-size-title: 1.25rem;
+	--font-size-heading: 1rem;
 	--font-size-body: 0.875rem;
 	--font-size-small: 0.75rem;
 	--font-size-mono: 0.8125rem;
-	--font-family-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+	--font-family-sans:
+		'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo UI', system-ui, sans-serif;
+	--font-family-mono:
+		'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
 
 	--spacing-1: 4px;
 	--spacing-2: 8px;
@@ -72,7 +75,6 @@
 	--spacing-4: 16px;
 	--spacing-5: 20px;
 	--spacing-6: 24px;
-	--spacing-7: 28px;
 	--spacing-8: 32px;
 
 	--radius-sm: 4px;
@@ -80,7 +82,108 @@
 	--radius-lg: 12px;
 
 	--shadow-overlay: 0 8px 24px rgb(0 0 0 / 16%);
+	--color-scrim: rgb(0 0 0 / 50%);
 
 	--duration-fast: 120ms;
 	--duration-base: 240ms;
+}
+
+/* グローバルスタイル（要素の基本スタイルは @layer base、トークンを CSS 変数で参照） */
+@layer base {
+	html {
+		color-scheme: light dark;
+	}
+	body {
+		margin: 0;
+		background: var(--color-bg);
+		color: var(--color-fg);
+		font-family: var(--font-family-sans);
+		font-size: var(--font-size-body);
+		line-height: 22px;
+	}
+	input::placeholder,
+	textarea::placeholder {
+		color: var(--color-fg-faint);
+	}
+	dialog {
+		color: var(--color-fg);
+	}
+	dialog::backdrop {
+		background: var(--color-scrim);
+	}
+	:focus-visible {
+		outline: 2px solid var(--color-focus-ring);
+		outline-offset: 2px;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.01ms !important;
+		}
+	}
+}
+
+/* タイポグラフィの複合スタイル（design-requirements.md 2.2）。クラスから `type-title` のように使う */
+@components {
+	type-title {
+		font-size: var(--font-size-title);
+		font-weight: 700;
+		line-height: 28px;
+	}
+	type-heading {
+		font-size: var(--font-size-heading);
+		font-weight: 700;
+		line-height: 24px;
+	}
+	type-body {
+		font-size: var(--font-size-body);
+		font-weight: 400;
+		line-height: 22px;
+	}
+	type-small {
+		font-size: var(--font-size-small);
+		font-weight: 400;
+		line-height: 18px;
+	}
+	type-mono {
+		font-family: var(--font-family-mono);
+		font-size: var(--font-size-mono);
+		font-weight: 400;
+		line-height: 20px;
+	}
+}
+
+/* 動きのあるコンポーネント用のキーフレーム */
+@keyframes hikae-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@keyframes hikae-pulse {
+	50% {
+		opacity: 0.5;
+	}
+}
+@keyframes hikae-slide {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+
+@components {
+	motion-spin {
+		animation: hikae-spin 1s linear infinite;
+	}
+	motion-pulse {
+		animation: hikae-pulse 1.4s ease-in-out infinite;
+	}
+	motion-slide {
+		animation: hikae-slide 1.2s ease-in-out infinite;
+	}
 }
