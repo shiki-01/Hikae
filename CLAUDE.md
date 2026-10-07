@@ -1,0 +1,90 @@
+# Hikae
+
+非エンジニア向けの GUI Git ツール（Windows / macOS デスクトップアプリ）。Git を「バックアップ」と「履歴管理」の用途に限定し、Git の用語を画面に一切出さずに全操作を完結させる。
+
+- 詳細設計: `docs/design.md`（要件、フロー、Git コマンド対応、安全設計、設定、データモデル、ロードマップ）
+- デザイン要件: `docs/design-requirements.md`（トークン名、コンポーネント、画面レイアウト）
+- 実装前に該当章を必ず読むこと。設計と矛盾する実装が必要になった場合は、実装せずに理由を報告して判断を仰ぐ
+
+## 技術スタック（確定）
+
+| 領域             | 採用                                                                             |
+| ---------------- | -------------------------------------------------------------------------------- |
+| 基盤             | Tauri 2                                                                          |
+| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript           |
+| スタイル         | Master CSS（rc 版、バージョンを完全固定。正式版への追従はしない）                |
+| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ） |
+| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                              |
+| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）  |
+| ファイル監視     | notify + notify-debouncer-full                                                   |
+| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）           |
+| アプリ内データ   | SQLite（rusqlite）                                                               |
+| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替           |
+| docx / xlsx 抽出 | zip + quick-xml、calamine                                                        |
+
+## リポジトリ構成
+
+```text
+.
+├── CLAUDE.md
+├── docs/                 # 設計書（編集は人間が行う。Claude は誤記の指摘のみ）
+├── src/                  # SvelteKit フロントエンド
+│   ├── lib/features/*    # projects, changes, history, compare, conflict, settings, ai, extensions
+│   ├── lib/components/*  # デザイン要件 3章のコンポーネント
+│   └── lib/bindings.ts   # tauri-specta の生成物（手で編集しない）
+└── src-tauri/            # Cargo workspace
+    ├── crates/core-git
+    ├── crates/core-safety
+    ├── crates/core-ops
+    ├── crates/core-watch
+    ├── crates/core-github
+    ├── crates/core-preview
+    ├── crates/core-llm
+    ├── crates/core-store
+    └── app/              # Tauri コマンド・イベント、操作キュー、スケジューラ
+```
+
+- `core-*` crate は Tauri に依存させない（単体テストと CLI での動作確認を可能にするため）
+- 依存方向は `docs/design.md` 8.3 の表に従う。逆方向の依存を追加しない
+
+## 安全上の不変条件（最優先。いかなる理由でも破らない）
+
+1. 次の git 操作を実装・実行しない: `push --force` / `--force-with-lease` / `+refspec` / `--delete` / `--mirror`、`reset --hard`、`clean`、`branch -D`、`checkout -f`、`rebase`、`filter-branch`、`commit --amend`、`gc --prune=now`、`reflog expire`
+2. git の呼び出しは必ず `core-git` の `GitRunner` を通す。`std::process::Command` で git を直接呼ばない。`GitRunner` は許可リストに一致しない引数を実行時に拒否する
+3. 状態を変更する操作（保存、元に戻す、取り込み、ぶつかり解消、除外設定）は、実行前に `core-safety` で復元点を作る。復元点を作らずに作業フォルダやインデックスを変更するコードを書かない
+4. 自動保存（スナップショット）は一時インデックス（`GIT_INDEX_FILE`）で作り、ユーザーの作業フォルダとインデックスを一切変更しない
+5. `update-ref -d` は `refs/<app>/` 名前空間以外に使わない
+6. 未追跡ファイルを削除しない。追跡解除は `git rm --cached` のみ
+7. 同一プロジェクトへの状態変更は `app` 層の直列キューで1件ずつ実行する
+8. ユーザーのグローバル git 設定（`~/.gitconfig`）に書き込まない。必要な設定は `-c` またはリポジトリ単位で行う
+9. トークンを平文でファイル・ログ・エラーメッセージに出さない
+
+これらに関わる変更では、変更内容と不変条件を守っている根拠を報告に含めること。
+
+## Git 呼び出しの既定値
+
+- 出力は常に機械可読形式（`--porcelain=v2`、`-z`）で解析する。人間向け出力を正規表現で解析しない
+- リポジトリ作成時に `core.autocrlf=false`、`core.precomposeUnicode=true` を設定する
+- commit は `-c core.hooksPath=` を付けて実行する
+- 署名は GitHub のユーザー名と noreply アドレスをリポジトリ単位で設定する
+
+## UI の規約
+
+- 画面上に Git 用語を出さない。用語は `docs/design.md` 2.1 の対応表に従う（例: commit → 保存、push → アップロード、conflict → 変更のぶつかり）
+- 文言はすべて i18n キー経由（初期は日本語のみ）。コンポーネント内に日本語文字列を直書きしない
+- 色・余白などは `docs/design-requirements.md` 2章のトークン名で Master CSS の variables として定義し、コンポーネントでは値を直書きしない。値はデザイン確定前は仮でよい
+- エラー表示は「何が起きたか」「データは無事か」「次の行動」の3要素（`docs/design.md` 5章）
+
+## コーディング規約
+
+- コードコメントは日本語で書く。ライブラリ名・技術用語はカタカナにせず英字のまま書く
+- Rust: `cargo fmt`、`cargo clippy -- -D warnings` を通す。`unwrap()` は テスト以外で使わない
+- TypeScript / Svelte: `prettier`、`eslint`、`svelte-check` を通す
+- `core-git`・`core-safety`・`core-ops` には、一時ディレクトリに実リポジトリを作る統合テストを書く（モックで済ませない）
+
+## 進め方
+
+- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 0（技術検証）
+- 1つの作業単位ごとに commit する。commit メッセージは英語、Conventional Commits 形式
+- 設計にない機能を追加しない。必要だと判断した場合は提案として報告する
+- 判断に迷う点は推測で埋めず、選択肢と推奨を添えて質問する

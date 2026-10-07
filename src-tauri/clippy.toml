@@ -1,0 +1,3 @@
+# テスト以外での unwrap / expect は禁止（CLAUDE.md）。テスト内は許可する。
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

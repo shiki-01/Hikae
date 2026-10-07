@@ -1,0 +1,7 @@
+{
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"skipLibCheck": true
+	},
+	"exclude": ["build", "src-tauri", "node_modules"]
+}
