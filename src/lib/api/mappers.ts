@@ -48,6 +48,12 @@ export function parseDate(value: string): Date | null {
 	return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/** Unix 秒を Date に変換する。null・非有限値・0 以下は null（日時を表示しない） */
+export function fromUnixSeconds(value: number | null): Date | null {
+	if (value === null || !Number.isFinite(value) || value <= 0) return null;
+	return new Date(value * 1000);
+}
+
 export function mapChangeKind(kind: ChangeKind): ChangeType {
 	return kind;
 }
@@ -74,14 +80,14 @@ export function mapConflictKind(kind: BackendConflictKind): ConflictKind {
 	}
 }
 
-/** 競合ファイル。バックエンドは保存日時と PC 名を返さないため、日時は epoch、PC 名は空にする */
+/** 競合ファイル。保存日時（Unix 秒）が無ければ null、PC 名はバックエンドが返さないため常に null */
 export function mapConflict(item: ConflictItem): ConflictFile {
 	return {
 		path: item.path,
 		kind: mapConflictKind(item.kind),
-		thisPcSavedAt: new Date(0),
-		cloudSavedAt: new Date(0),
-		cloudPcName: ''
+		thisPcSavedAt: fromUnixSeconds(item.this_saved_at),
+		cloudSavedAt: fromUnixSeconds(item.cloud_saved_at),
+		cloudPcName: null
 	};
 }
 

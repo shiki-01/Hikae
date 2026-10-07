@@ -1,5 +1,8 @@
+import { open } from '@tauri-apps/plugin-dialog';
+import { openPath } from '@tauri-apps/plugin-opener';
 import { commands } from '#lib/bindings.js';
 import { mockApi } from './mock';
+import { resolveInProject } from './paths';
 import {
 	mapChange,
 	mapConflict,
@@ -18,6 +21,7 @@ import type {
 	ConflictFile,
 	FileDiff,
 	ImpactItem,
+	OpenTarget,
 	PointFile,
 	Project,
 	ProjectApi,
@@ -81,8 +85,9 @@ export const tauriApi: ProjectApi = {
 
 	getProject: loadProject,
 
-	async pickFolder(): Promise<string> {
-		return unsupported('folder picker (dialog plugin)');
+	async pickFolder(): Promise<string | null> {
+		const selected = await open({ directory: true, multiple: false });
+		return typeof selected === 'string' ? selected : null;
 	},
 
 	async addProject(input: AddProjectInput): Promise<Project> {
@@ -178,7 +183,14 @@ export const tauriApi: ProjectApi = {
 		return unsupported('add files');
 	},
 
-	async openFile(): Promise<void> {
-		unsupported('open file');
+	async openFile(projectId: string, path: string, target: OpenTarget): Promise<void> {
+		if (target !== 'default') unsupported(`open file with target ${target}`);
+		const infos = await unwrap(commands.listProjects());
+		const project = infos.find((item) => item.id === projectId);
+		if (!project) throw new Error(`project not found: ${projectId}`);
+		// プロジェクト外へのパス（`..` や絶対パス）は開かない
+		const absolute = resolveInProject(project.path, path);
+		if (absolute === null) throw new Error(`path is outside the project: ${path}`);
+		await openPath(absolute);
 	}
 };

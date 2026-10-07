@@ -92,7 +92,9 @@
 	async function pickFolder() {
 		picking = true;
 		try {
-			form.folder = await api.pickFolder();
+			const folder = await api.pickFolder();
+			if (folder === null) return;
+			form.folder = folder;
 			if (form.mode === 'existing' && !form.name.trim()) form.name = nameFromFolder(form.folder);
 		} catch (error) {
 			reportError(error);

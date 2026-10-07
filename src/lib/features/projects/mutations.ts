@@ -31,8 +31,14 @@ export function useRemoveProject(onDone?: () => void) {
 export function useRelocateProject(onDone?: () => void) {
 	const client = useQueryClient();
 	return createMutation(() => ({
-		mutationFn: async (id: string) => api.relocateProject(id, await api.pickFolder()),
-		onSuccess: async () => {
+		mutationFn: async (id: string) => {
+			const folder = await api.pickFolder();
+			if (folder === null) return false;
+			await api.relocateProject(id, folder);
+			return true;
+		},
+		onSuccess: async (changed: boolean) => {
+			if (!changed) return;
 			await client.invalidateQueries({ queryKey: keys.projects });
 			onDone?.();
 		},

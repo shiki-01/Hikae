@@ -33,14 +33,18 @@
 		choice === null ? null : choice === 'this' ? 'cloud' : 'this'
 	);
 
-	function detail(side: Choice): string {
+	/** 保存日時が無い場合は説明文を出さない */
+	function detail(side: Choice): string | undefined {
 		if (side === 'this') {
-			return t('conflict.this_pc_detail', { time: formatDateTime(conflict.thisPcSavedAt) });
+			return conflict.thisPcSavedAt
+				? t('conflict.this_pc_detail', { time: formatDateTime(conflict.thisPcSavedAt) })
+				: undefined;
 		}
-		return t('conflict.cloud_detail', {
-			time: formatDateTime(conflict.cloudSavedAt),
-			pc: conflict.cloudPcName
-		});
+		if (!conflict.cloudSavedAt) return undefined;
+		const time = formatDateTime(conflict.cloudSavedAt);
+		return conflict.cloudPcName
+			? t('conflict.cloud_detail', { time, pc: conflict.cloudPcName })
+			: t('conflict.cloud_detail_no_pc', { time });
 	}
 
 	const keepBothHint = $derived(

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { describeError } from '#lib/features/notifications/error-view.js';
 import {
+	fromUnixSeconds,
 	mapChange,
 	mapConflict,
 	mapConflictKind,
@@ -63,7 +64,9 @@ describe('競合種別の変換', () => {
 	});
 
 	it('競合ファイルの変換でパスと種別が保たれる', () => {
-		expect(mapConflict({ path: 'x', kind: 'both-modified' })).toMatchObject({
+		expect(
+			mapConflict({ path: 'x', kind: 'both-modified', this_saved_at: null, cloud_saved_at: null })
+		).toMatchObject({
 			path: 'x',
 			kind: 'both'
 		});
@@ -90,7 +93,10 @@ describe('競合種別の変換', () => {
 			conflictCount: 0
 		});
 		expect(
-			mapPull({ outcome: 'conflicted', conflicts: [{ path: 'a', kind: 'both-added' }] })
+			mapPull({
+				outcome: 'conflicted',
+				conflicts: [{ path: 'a', kind: 'both-added', this_saved_at: null, cloud_saved_at: null }]
+			})
 		).toEqual({ mergedCount: 0, conflictCount: 1 });
 		expect(mapPull({ outcome: 'merged', conflicts: [] }).mergedCount).toBe(1);
 	});
@@ -149,5 +155,29 @@ describe('エラーの 3 要素の変換', () => {
 		expect(view.message).toBe('ファイルは無事です\nもう一度試してください');
 		expect(view.autoRecovering).toBe(false);
 		expect(view.technical).toBe('git: boom');
+	});
+});
+
+describe('競合の日時', () => {
+	it('Unix 秒を Date にし、無い場合は null にする', () => {
+		const base = { path: 'a.txt', kind: 'both-modified' as const };
+		const both = mapConflict({
+			...base,
+			this_saved_at: 1_700_000_000,
+			cloud_saved_at: 1_700_000_060
+		});
+		expect(both.thisPcSavedAt?.getTime()).toBe(1_700_000_000_000);
+		expect(both.cloudSavedAt?.getTime()).toBe(1_700_000_060_000);
+		expect(both.cloudPcName).toBeNull();
+
+		const none = mapConflict({ ...base, this_saved_at: null, cloud_saved_at: null });
+		expect(none.thisPcSavedAt).toBeNull();
+		expect(none.cloudSavedAt).toBeNull();
+	});
+
+	it('0 以下や非有限値は日時なしとして扱う', () => {
+		expect(fromUnixSeconds(0)).toBeNull();
+		expect(fromUnixSeconds(-1)).toBeNull();
+		expect(fromUnixSeconds(Number.NaN)).toBeNull();
 	});
 });

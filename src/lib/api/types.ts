@@ -59,9 +59,12 @@ export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 export interface ConflictFile {
 	path: string;
 	kind: ConflictKind;
-	thisPcSavedAt: Date;
-	cloudSavedAt: Date;
-	cloudPcName: string;
+	/** この PC 側の最終保存日時。取得できない場合は null（画面では非表示） */
+	thisPcSavedAt: Date | null;
+	/** クラウド側の最終保存日時。取得できない場合は null（画面では非表示） */
+	cloudSavedAt: Date | null;
+	/** クラウド側を保存した PC 名。取得できない場合は null */
+	cloudPcName: string | null;
 }
 
 export type Choice = 'this' | 'cloud';
@@ -147,7 +150,8 @@ export interface ProjectApi {
 	getProject(id: string): Promise<Project>;
 	listOwners(): Promise<Owner[]>;
 	listRemoteProjects(query: string): Promise<RemoteProject[]>;
-	pickFolder(): Promise<string>;
+	/** フォルダ選択。キャンセル時は null */
+	pickFolder(): Promise<string | null>;
 	addProject(input: AddProjectInput): Promise<Project>;
 	removeProject(id: string): Promise<void>;
 	relocateProject(id: string, folder: string): Promise<Project>;

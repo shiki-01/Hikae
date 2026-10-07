@@ -386,7 +386,7 @@ export const mockApi: ProjectApi = {
 		return needle ? all.filter((r) => r.name.toLowerCase().includes(needle)) : all;
 	},
 
-	async pickFolder(): Promise<string> {
+	async pickFolder(): Promise<string | null> {
 		await sleep(150);
 		return 'C:\\Users\\student\\Documents\\NewFolder';
 	},

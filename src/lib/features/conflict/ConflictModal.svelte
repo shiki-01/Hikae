@@ -66,12 +66,16 @@
 			{
 				value: 'this',
 				label: t('conflict.this_pc'),
-				description: t('conflict.saved_at', { time: formatDateTime(conflict.thisPcSavedAt) })
+				description: conflict.thisPcSavedAt
+					? t('conflict.saved_at', { time: formatDateTime(conflict.thisPcSavedAt) })
+					: undefined
 			},
 			{
 				value: 'cloud',
 				label: t('conflict.cloud'),
-				description: t('conflict.saved_at', { time: formatDateTime(conflict.cloudSavedAt) })
+				description: conflict.cloudSavedAt
+					? t('conflict.saved_at', { time: formatDateTime(conflict.cloudSavedAt) })
+					: undefined
 			}
 		];
 	}

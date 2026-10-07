@@ -496,6 +496,8 @@ async fn pull(state: tauri::State<'_, AppState>, id: String) -> Result<PullResul
                     .into_iter()
                     .map(|f| ConflictItem {
                         path: f.path,
+                        this_saved_at: f.this_saved_at.map(|t| t as f64),
+                        cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
                         kind: match f.kind {
                             core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
                             core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
@@ -799,6 +801,8 @@ async fn list_conflicts(
             .into_iter()
             .map(|f| ConflictItem {
                 path: f.path,
+                this_saved_at: f.this_saved_at.map(|t| t as f64),
+                cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
                 kind: match f.kind {
                     core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
                     core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
@@ -967,6 +971,10 @@ pub struct RestorePreviewData {
 pub struct ConflictItem {
     pub path: String,
     pub kind: ConflictKind,
+    /// この PC 側の最終保存日時（Unix 秒）。不明なら null
+    pub this_saved_at: Option<f64>,
+    /// クラウド側の最終保存日時（Unix 秒）。不明なら null
+    pub cloud_saved_at: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
@@ -1039,6 +1047,8 @@ pub fn run() {
     export_bindings();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // app_data_dir 内に DB を配置
             let app_data_dir = app.path().app_data_dir().map_err(|e| {

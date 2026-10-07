@@ -33,3 +33,11 @@ describe('ぶつかり項目', () => {
 		expect(name.endsWith(' 01-02)')).toBe(true);
 	});
 });
+
+describe('日時が不明な場合の別名', () => {
+	it('日付を付けず、版の名前だけを括弧に入れる', () => {
+		const name = alternateName('docs/report.docx', 'cloud', null);
+		expect(name).toMatch(/^docs\/report \([^)\s]+\)\.docx$/);
+		expect(name).not.toMatch(/\d\d-\d\d/);
+	});
+});

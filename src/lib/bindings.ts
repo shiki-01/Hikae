@@ -61,6 +61,10 @@ export type ConflictChoice = "mine" | "theirs";
 export type ConflictItem = {
 	path: string,
 	kind: ConflictKind,
+	/**  この PC 側の最終保存日時（Unix 秒）。不明なら null */
+	this_saved_at: number | null,
+	/**  クラウド側の最終保存日時（Unix 秒）。不明なら null */
+	cloud_saved_at: number | null,
 };
 
 export type ConflictKind = "both-modified" | "both-added" | "deleted-by-us" | "deleted-by-them" | "both-deleted";

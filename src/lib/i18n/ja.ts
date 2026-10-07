@@ -158,6 +158,7 @@ const messages = {
 	'conflict.saved_at': '{time} に保存',
 	'conflict.this_pc_detail': 'この PC の版・{time} に保存',
 	'conflict.cloud_detail': 'クラウドの版・{time} に保存（{pc}）',
+	'conflict.cloud_detail_no_pc': 'クラウドの版・{time} に保存',
 	'conflict.use_this': 'この PC の版を使う',
 	'conflict.use_cloud': 'クラウドの版を使う',
 	'conflict.keep_file': '残す',

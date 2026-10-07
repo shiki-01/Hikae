@@ -64,6 +64,10 @@ pub enum UploadOutcome {
 pub struct ConflictFile {
     pub path: String,
     pub kind: ConflictKind,
+    /// この PC 側でそのファイルが最後に保存された時刻（Unix 秒）。取得できなければ None
+    pub this_saved_at: Option<i64>,
+    /// クラウド側でそのファイルが最後に保存された時刻（Unix 秒）。取得できなければ None
+    pub cloud_saved_at: Option<i64>,
 }
 
 /// 競合の種類

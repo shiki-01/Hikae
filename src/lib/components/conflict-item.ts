@@ -26,15 +26,17 @@ export function conflictOptions(kind: ConflictKind): ConflictOption[] {
 	}
 }
 
-export function alternateName(path: string, unused: Choice, date: Date): string {
+/** 日時が不明（null）のときは日付部分を付けない */
+export function alternateName(path: string, unused: Choice, date: Date | null): string {
 	const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
 	const folder = path.slice(0, slash + 1);
 	const file = path.slice(slash + 1);
 	const dot = file.lastIndexOf('.');
 	const stem = dot > 0 ? file.slice(0, dot) : file;
 	const extension = dot > 0 ? file.slice(dot) : '';
+	const side = unused === 'cloud' ? t('conflict.alt_cloud') : t('conflict.alt_this');
+	if (date === null) return `${folder}${stem} (${side})${extension}`;
 	const month = String(date.getMonth() + 1).padStart(2, '0');
 	const day = String(date.getDate()).padStart(2, '0');
-	const side = unused === 'cloud' ? t('conflict.alt_cloud') : t('conflict.alt_this');
 	return `${folder}${stem} (${side} ${month}-${day})${extension}`;
 }

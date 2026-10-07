@@ -247,10 +247,25 @@ pub(crate) fn conflicts(runner: &GitRunner, repo: &Path) -> Result<Vec<ConflictF
         conflicts.push(ConflictFile {
             path: entry.path.clone(),
             kind,
+            // この PC 側は HEAD、クラウド側は取り込み中の MERGE_HEAD
+            this_saved_at: last_saved_at(runner, repo, "HEAD", &entry.path),
+            cloud_saved_at: last_saved_at(runner, repo, "MERGE_HEAD", &entry.path),
         });
     }
 
     Ok(conflicts)
+}
+
+/// 指定の参照でそのパスを最後に変更したコミットの時刻（Unix 秒）を返す。
+/// 参照が無い・履歴が空・解析できない場合は None（表示側で日時を隠す）。
+fn last_saved_at(runner: &GitRunner, repo: &Path, rev: &str, path: &str) -> Option<i64> {
+    let out = runner
+        .run_ok(
+            repo,
+            &["log", "--max-count=1", "--format=%ct", rev, "--", path],
+        )
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// `status --porcelain=v2 -z --branch` を実行して解析する

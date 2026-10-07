@@ -201,9 +201,18 @@ fn test_3_conflict_mine() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].path, "conflict.txt");
             assert_eq!(files[0].kind, core_ops::ConflictKind::BothModified);
+            // 競合時にこの PC 側とクラウド側の最終保存日時が取得できる
+            assert!(files[0].this_saved_at.is_some_and(|t| t > 0));
+            assert!(files[0].cloud_saved_at.is_some_and(|t| t > 0));
         }
         _ => panic!("expected Conflicted"),
     }
+
+    // conflicts() でも同じ日時が取得できる
+    let listed = ops_b.conflicts(&setup.pc_b)?;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].this_saved_at.is_some_and(|t| t > 0));
+    assert!(listed[0].cloud_saved_at.is_some_and(|t| t > 0));
 
     // B에서 작업 폴더에 conflict marker가 있는지 확인
     let content = std::fs::read_to_string(setup.pc_b.join("conflict.txt"))?;
