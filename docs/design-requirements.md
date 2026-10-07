@@ -14,7 +14,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | テーマ | ライト / ダーク（OS 設定に追従）。両方のデザインが必要 |
 | フォント | OS 標準（macOS: Hiragino Sans、Windows: Yu Gothic UI / Meiryo UI）。等幅は差分表示のみ（SF Mono / Consolas 系） |
 | 言語 | 日本語のみ。ただし英語化を見越し、ボタン幅は文字数 1.5 倍の伸びに耐えること |
-| 実装 | SvelteKit（Svelte 5）+ Master CSS（rc 固定）。2章のトークン名をそのまま Master CSS の variables 名にする |
+| 実装 | SvelteKit（Svelte 5）+ Master CSS（rc 固定）。2章のトークン名を Master CSS の `@theme` 変数名にする。rc 版は名前空間付きの CSS 変数になるため、色は `--color-<トークン名>`（例: `--color-bg-subtle`）、余白は `--spacing-<n>`、角丸は `--radius-<名>`、文字サイズは `--font-size-<名>`、影は `--shadow-<名>`、動きは `--duration-<名>` で定義し、クラスからは `bg:bg-subtle`、`p:3` のように名前空間を省いて参照する。実体は `src/lib/styles/tokens.css` |
 | アクセシビリティ | 本文コントラスト 4.5:1 以上、キーボードのみで全操作可能、フォーカスリング必須。状態を色だけで表さない（アイコン＋文言を併用） |
 
 ## 2. 基礎トークン

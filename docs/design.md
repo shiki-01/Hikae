@@ -278,17 +278,17 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 2. `git fetch --prune origin`
 3. `git rev-list --left-right --count HEAD...@{u}` でアップロード待ち／取り込み待ちを算出
 4. 取り込み待ちのみ: `git merge --ff-only @{u}`
-5. 双方に差がある: `git update-ref refs/<app>/backup/pre-merge/<時刻> HEAD` の後、`git merge --no-edit @{u}`
+5. 双方に差がある: `git update-ref refs/<app>/backup/pre-merge/<時刻> <HEAD の OID>`（`rev-parse HEAD` で解決した完全な OID を渡す。`update-ref` は値に OID のみ受け付ける）の後、`git merge --no-edit @{u}`
 6. 競合なし → 完了。競合あり → 4.4
 7. 自動アップロードがオンなら 4.5
 8. 追加処理: 取り込みで「除外設定により相手側で追跡を外されたファイル」が削除される場合、マージ前の内容を作業フォルダに書き戻す（4.8 の注意点への対策）
 
 ### 4.4 変更のぶつかり解消
 
-1. 対象一覧: `git status --porcelain=v2` の `u` 行（両方変更／片方削除を区別）
+1. 対象一覧: `git status --porcelain=v2 -z` の `u` 行（両方変更／片方削除を区別）。`-z` 形式ではエントリが NUL 区切りで、パスは空白区切りフィールドの末尾に置かれる
 2. 「この PC の版」: `git checkout --ours -- <path>`、「クラウドの版」: `git checkout --theirs -- <path>`
 3. 「使わなかった版を別名で残す」: `git show :3:<path>`（または `:2:`）の内容を `<名前> (クラウドの版 MM-DD).<拡張子>` として書き出す
-4. 片方が削除している場合: 「残す」／「削除を受け入れる」の2択（`git add` または `git rm`）
+4. 片方が削除している場合: 「残す」／「削除を受け入れる」の2択（`git add` または `git rm --cached`。作業フォルダの実体はアプリが削除する。`GitRunner` は `--cached` なしの `rm` を許可しない）
 5. 行単位編集（テキストのみ、Phase 2）: `:1:`（共通の元）、`:2:`、`:3:` を取得し、アプリ内の3ペインで組み立てて書き込む
 6. 全件解消後: `git add <paths>` → `git commit --no-edit`（メモは「2台の変更をまとめました」に置換）
 7. 「あとで」: `git merge --abort`。復元点 `pre-merge` が残っているので状態は完全に戻る
@@ -371,7 +371,9 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - `push` の `--force` / `--force-with-lease` / `+refspec`、`--delete`、`--mirror`
 - `reset --hard`、`clean`、`branch -D`、`checkout -f`、`restore` を `--source` なしで worktree に適用する呼び出し（未保存変更の破棄になるため）
 - `rebase`、`filter-branch`、`commit --amend`、`gc --prune=now`、`reflog expire`
-- `update-ref -d` は自アプリの名前空間（`refs/<app>/`）以外を拒否
+
+実装は上の禁止リストではなく**許可リスト方式**（default deny）です。サブコマンドごとに許可するフラグを列挙し、列挙にないフラグはすべて拒否します。git は長いオプションの省略形（`--forc` など）を受け付けるため、禁止リスト方式では回避されるからです。`-c` で渡せる設定キーも許可リストで制限し（`alias.*`、`core.sshCommand` などは拒否）、`fetch --prune` は remote-tracking ref の整理のみなので許可します。
+- `update-ref` は作成・更新・削除のすべてを自アプリの名前空間（`refs/<app>/`）以外では拒否する。値は完全な OID のみ受け付け、削除を意味する全ゼロ OID も拒否する（`-d` を複数回指定して検査を回避する手口と、全ゼロ OID による削除を塞ぐため）
 
 ### 6.2 第2層: 復元点（隠し ref）
 
@@ -484,6 +486,13 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | LLM 実行 | `llama-server` サイドカー（OpenAI 互換 API） | llama.cpp の Rust バインディングで同一プロセス実行 | メモリ不足で落ちてもアプリ本体は無事。Ollama も OpenAI 互換 API を持つため、接続先 URL の切替だけで両対応できる |
 | 配布・更新 | Tauri bundler（Windows: NSIS、macOS: dmg）+ tauri-plugin-updater + GitHub Releases | Microsoft Store、Mac App Store | ストアはサンドボックス制約で任意フォルダ操作・サイドカー実行が難しい |
 | 署名 | Windows: コード署名証明書（Azure Trusted Signing 等）、macOS: Developer ID + 公証 | 署名なし | 署名なしだと SmartScreen / Gatekeeper の警告で非エンジニアが離脱する |
+
+**ツールチェーンと設定の注意**（Phase 0 で判明）:
+
+- Rust は 1.99 以上が必要（specta rc.25 が 1.89 でコンパイルできず、tauri 2.12 は 1.90 以上を要求）。`src-tauri/rust-toolchain.toml` で固定する
+- Master CSS rc の設定は `master.css.ts` ではなく CSS の `@theme` で書く。トークン名は名前空間付きの CSS 変数になる（例: `--color-bg`、`--spacing-3`）。使われた変数だけが出力される
+- SvelteKit 3 では `svelte.config.js` が廃止され設定は Vite 側に書く。`$lib` は `#lib`（`package.json` の `imports`）に変わった
+- Windows では、tauri にリンクするテスト実行ファイルが起動しない（`STATUS_ENTRYPOINT_NOT_FOUND`）。型生成は別 bin（`export-bindings`）で行う
 
 **認証の詳細**: スコープは `repo`（非公開リポジトリの読み書き）と `read:org`（所属 Org の一覧）です。git への受け渡しは、アプリ自身を credential helper として登録し（`git -c credential.helper= -c credential.helper="!<アプリ> credential"`）、ユーザーのグローバル git 設定には書き込みません。
 
@@ -688,6 +697,8 @@ MVP は「1台目で保存・履歴・元に戻す、2台目で取り込む」�
 | Phase 4 | 拡張機能の一覧・署名検証、英語 UI、Git LFS 対応の要否判断 | 利用者の要望とリスク評価に基づき個別判断 |
 
 Phase 1 で特に工数を見込むべき箇所は、Windows でのファイルロック（E12）、改行コード・文字コードの扱い、Gatekeeper / SmartScreen を含む配布の3点です。いずれも Phase 0 で一度通しておくことを推奨します。
+
+**Phase 0 の結果**（2026-10-08、Windows のみ）: 保存 → アップロード → 取り込み → 競合 → 2択解消が、2つの clone とローカル bare リポジトリで通ることを確認しました。一時インデックスのスナップショット、許可リスト付き `GitRunner`、Device Flow の実装（実認証は未確認）も完了しています。macOS での検証、CI の実行、署名・公証、操作ジャーナル（6.3）、スナップショットの間引きは未着手です。詳細は `docs/notes/phase0-report.md` を参照してください。
 
 ## 13. リスクと判断が必要な論点
 

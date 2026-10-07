@@ -6,21 +6,27 @@
 - デザイン要件: `docs/design-requirements.md`（トークン名、コンポーネント、画面レイアウト）
 - 実装前に該当章を必ず読むこと。設計と矛盾する実装が必要になった場合は、実装せずに理由を報告して判断を仰ぐ
 
+## 開発環境の前提
+
+- Rust は 1.99.0 固定（`src-tauri/rust-toolchain.toml`）。パッケージマネージャは pnpm
+- SvelteKit 3 のため、`src/lib` は `#lib` で参照する（`$lib` は使えない）。設定は `vite.config.ts` に書く
+- Windows では tauri にリンクするテストが起動しないため、tauri 依存の crate（`app`）には単体テストを置かない。型生成は `cargo run -p hikae --bin export-bindings`
+
 ## 技術スタック（確定）
 
-| 領域             | 採用                                                                             |
-| ---------------- | -------------------------------------------------------------------------------- |
-| 基盤             | Tauri 2                                                                          |
-| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript           |
-| スタイル         | Master CSS（rc 版、バージョンを完全固定。正式版への追従はしない）                |
-| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ） |
-| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                              |
-| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）  |
-| ファイル監視     | notify + notify-debouncer-full                                                   |
-| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）           |
-| アプリ内データ   | SQLite（rusqlite）                                                               |
-| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替           |
-| docx / xlsx 抽出 | zip + quick-xml、calamine                                                        |
+| 領域             | 採用                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| 基盤             | Tauri 2                                                                                       |
+| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript                        |
+| スタイル         | Master CSS（rc 版、`2.0.0-rc.88` に完全固定。正式版への追従はしない）。設定は CSS の `@theme` |
+| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ）              |
+| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                                           |
+| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）               |
+| ファイル監視     | notify + notify-debouncer-full                                                                |
+| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）                        |
+| アプリ内データ   | SQLite（rusqlite）                                                                            |
+| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替                        |
+| docx / xlsx 抽出 | zip + quick-xml、calamine                                                                     |
 
 ## リポジトリ構成
 
@@ -53,7 +59,7 @@
 2. git の呼び出しは必ず `core-git` の `GitRunner` を通す。`std::process::Command` で git を直接呼ばない。`GitRunner` は許可リストに一致しない引数を実行時に拒否する
 3. 状態を変更する操作（保存、元に戻す、取り込み、ぶつかり解消、除外設定）は、実行前に `core-safety` で復元点を作る。復元点を作らずに作業フォルダやインデックスを変更するコードを書かない
 4. 自動保存（スナップショット）は一時インデックス（`GIT_INDEX_FILE`）で作り、ユーザーの作業フォルダとインデックスを一切変更しない
-5. `update-ref -d` は `refs/<app>/` 名前空間以外に使わない
+5. `update-ref` は作成・更新・削除のすべてを `refs/<app>/` 名前空間に限る（値は完全な OID のみ）
 6. 未追跡ファイルを削除しない。追跡解除は `git rm --cached` のみ
 7. 同一プロジェクトへの状態変更は `app` 層の直列キューで1件ずつ実行する
 8. ユーザーのグローバル git 設定（`~/.gitconfig`）に書き込まない。必要な設定は `-c` またはリポジトリ単位で行う
@@ -72,7 +78,7 @@
 
 - 画面上に Git 用語を出さない。用語は `docs/design.md` 2.1 の対応表に従う（例: commit → 保存、push → アップロード、conflict → 変更のぶつかり）
 - 文言はすべて i18n キー経由（初期は日本語のみ）。コンポーネント内に日本語文字列を直書きしない
-- 色・余白などは `docs/design-requirements.md` 2章のトークン名で Master CSS の variables として定義し、コンポーネントでは値を直書きしない。値はデザイン確定前は仮でよい
+- 色・余白などは `docs/design-requirements.md` 2章のトークン名で Master CSS の `@theme` 変数（`src/lib/styles/tokens.css`）として定義し、コンポーネントでは値を直書きしない。値はデザイン確定前は仮でよい
 - エラー表示は「何が起きたか」「データは無事か」「次の行動」の3要素（`docs/design.md` 5章）
 
 ## コーディング規約
@@ -84,7 +90,7 @@
 
 ## 進め方
 
-- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 0（技術検証）
+- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 0（技術検証）の完了確認中。結果は `docs/notes/phase0-report.md`。Phase 1 に進む前に、macOS での CI 実行と Device Flow の実認証を確認する
 - 1つの作業単位ごとに commit する。commit メッセージは英語、Conventional Commits 形式
 - 設計にない機能を追加しない。必要だと判断した場合は提案として報告する
 - 判断に迷う点は推測で埋めず、選択肢と推奨を添えて質問する
