@@ -546,6 +546,12 @@ name = "core-safety"
 version = "0.0.1"
 dependencies = [
  "core-git",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
