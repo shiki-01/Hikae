@@ -4,7 +4,134 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	/**  雛形確認用のサンプルコマンド（Phase 1 で削除する） */
-	greet: (name: string) => __TAURI_INVOKE<string>("greet", { name }),
+	/**  プロジェクト一覧を取得。 */
+	listProjects: () => typedError<ProjectInfo[], AppError>(__TAURI_INVOKE("list_projects")),
+	/**  プロジェクトを追加（既存フォルダ登録・新規作成・GitHub から clone）。 */
+	addProject: (id: string, displayName: string, path: string, owner: string, remoteUrl: string | null) => typedError<null, AppError>(__TAURI_INVOKE("add_project", { id, displayName, path, owner, remoteUrl })),
+	/**  プロジェクトを削除（登録のみ。フォルダは消さない）。 */
+	removeProject: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { id })),
+	/**  プロジェクトの状態を取得（未保存の変更、アップロード待ち、競合など）。 */
+	projectStatus: (id: string) => typedError<SyncStatus, AppError>(__TAURI_INVOKE("project_status", { id })),
+	/**  変更ファイル一覧を取得。 */
+	listChanges: (id: string) => typedError<ChangeFile[], AppError>(__TAURI_INVOKE("list_changes", { id })),
+	/**  保存（commit）を実行。 */
+	save: (id: string, message: string) => typedError<SaveResult, AppError>(__TAURI_INVOKE("save", { id, message })),
+	/**  取り込む（fetch + merge）を実行。 */
+	pull: (id: string) => typedError<PullResult, AppError>(__TAURI_INVOKE("pull", { id })),
+	/**  アップロード（push）を実行。 */
+	push: (id: string) => typedError<PushResult, AppError>(__TAURI_INVOKE("push", { id })),
+	/**  履歴を取得。 */
+	listHistory: (id: string, maxCount: number) => typedError<HistoryItem[], AppError>(__TAURI_INVOKE("list_history", { id, maxCount })),
+	/**  差分を取得（2つの時点の比較）。 */
+	diff: (id: string, from: string, to: string, path: string | null) => typedError<DiffLine[], AppError>(__TAURI_INVOKE("diff", { id, from, to, path })),
+	/**  元に戻す操作のプレビュー（影響ファイル一覧）。 */
+	restorePreview: (id: string, commit: string) => typedError<RestorePreviewData, AppError>(__TAURI_INVOKE("restore_preview", { id, commit })),
+	/**  元に戻す実行。 */
+	restore: (id: string, commit: string) => typedError<null, AppError>(__TAURI_INVOKE("restore", { id, commit })),
+	/**  現在の競合ファイルを取得。 */
+	listConflicts: (id: string) => typedError<ConflictItem[], AppError>(__TAURI_INVOKE("list_conflicts", { id })),
+	/**  競合を解消。 */
+	resolveConflicts: (id: string, choices: ([string, ConflictChoice])[], keepOtherCopy: boolean) => typedError<null, AppError>(__TAURI_INVOKE("resolve_conflicts", { id, choices, keepOtherCopy })),
 };
+
+/* Types */
+/**  何が起きたか、データは無事か、次の行動を含むエラー型 */
+export type AppError = {
+	/**  何が起きたか（ユーザー向けの平易な説明） */
+	what_happened: string,
+	/**  データは無事か（1文で） */
+	data_is_safe: string,
+	/**  次の行動（ボタンラベルと説明） */
+	next_action: string,
+	/**  技術情報（Git エラー原文など。秘密情報は除外） */
+	technical_info: string | null,
+};
+
+/**  変更ファイル */
+export type ChangeFile = {
+	path: string,
+	kind: ChangeKind,
+};
+
+export type ChangeKind = "modified" | "added" | "deleted" | "renamed";
+
+export type ConflictChoice = "mine" | "theirs";
+
+/**  競合ファイル */
+export type ConflictItem = {
+	path: string,
+	kind: ConflictKind,
+};
+
+export type ConflictKind = "both-modified" | "both-added" | "deleted-by-us" | "deleted-by-them" | "both-deleted";
+
+/**  差分行 */
+export type DiffLine = {
+	kind: DiffLineKind,
+	content: string,
+};
+
+export type DiffLineKind = "added" | "removed" | "context";
+
+/**  履歴アイテム */
+export type HistoryItem = {
+	commit: string,
+	timestamp: string,
+	message: string,
+	changed_files_count: number,
+	is_snapshot: boolean,
+};
+
+/**  プロジェクト情報 */
+export type ProjectInfo = {
+	id: string,
+	display_name: string,
+	path: string,
+	remote_url: string | null,
+	owner: string,
+	last_viewed_at: string,
+};
+
+/**  取り込み結果 */
+export type PullResult = {
+	outcome: string,
+	conflicts: ConflictItem[],
+};
+
+/**  アップロード結果 */
+export type PushResult = {
+	outcome: string,
+};
+
+/**  元に戻すプレビュー */
+export type RestorePreviewData = {
+	modified: string[],
+	deleted: string[],
+	created: string[],
+};
+
+/**  保存結果 */
+export type SaveResult = {
+	commit: string | null,
+	message: string | null,
+};
+
+/**  同期状態 */
+export type SyncStatus = {
+	unsaved_changes: number,
+	upload_pending: number,
+	pull_pending: number,
+	has_conflicts: boolean,
+	is_syncing: boolean,
+};
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 

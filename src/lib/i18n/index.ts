@@ -1,9 +1,12 @@
 import ja from './ja';
 
-type Messages = typeof ja;
-type Keys = keyof Messages;
+export type MessageKey = keyof typeof ja;
+export type MessageParams = Record<string, string | number>;
 
-// 翻訳キーの型チェック付き翻訳関数
-export function t(key: Keys): string {
-	return ja[key] || key;
+export function t(key: MessageKey, params?: MessageParams): string {
+	const template: string = ja[key];
+	if (!params) return template;
+	return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+		name in params ? String(params[name]) : match
+	);
 }

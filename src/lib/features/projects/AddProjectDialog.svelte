@@ -1,0 +1,301 @@
+<script lang="ts">
+	import { AlertTriangle, CloudDownload, FolderOpen, FolderPlus } from '@lucide/svelte';
+	import type { Component } from 'svelte';
+	import { t, type MessageKey } from '#lib/i18n/index.js';
+	import { api } from '#lib/api/index.js';
+	import type { AddProjectMode, Project } from '#lib/api/types.js';
+	import Button from '#lib/components/Button.svelte';
+	import Dialog from '#lib/components/Dialog.svelte';
+	import OwnerPicker from '#lib/components/OwnerPicker.svelte';
+	import Radio from '#lib/components/Radio.svelte';
+	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
+	import Skeleton from '#lib/components/Skeleton.svelte';
+	import TextField from '#lib/components/TextField.svelte';
+	import { reportError } from '#lib/features/notifications/store.svelte.js';
+	import {
+		canSubmit,
+		emptyForm,
+		nameFromFolder,
+		validateAddProject,
+		type AddProjectForm
+	} from './add-project';
+	import { useAddProject } from './mutations';
+	import { useOwners, useRemoteProjects } from './queries';
+
+	interface Props {
+		open: boolean;
+		initialMode?: AddProjectMode | null;
+		onclose: () => void;
+		onadded?: (project: Project) => void;
+	}
+
+	let { open, initialMode = null, onclose, onadded }: Props = $props();
+
+	const owners = useOwners();
+	const ownerList = $derived(owners.data ?? []);
+	const defaultOwner = $derived(ownerList.find((o) => o.canCreate)?.id ?? 'personal');
+
+	let step = $state<'choose' | 'form'>('choose');
+	let form = $state<AddProjectForm>(emptyForm('existing', 'personal'));
+	let submitted = $state(false);
+	let search = $state('');
+	let picking = $state(false);
+
+	const remote = useRemoteProjects(
+		() => search,
+		() => open && step === 'form' && form.mode === 'github'
+	);
+
+	const add = useAddProject((project) => {
+		onadded?.(project);
+		onclose();
+	});
+
+	$effect(() => {
+		if (!open) return;
+		submitted = false;
+		search = '';
+		step = initialMode ? 'form' : 'choose';
+		form = emptyForm(initialMode ?? 'existing', defaultOwner);
+	});
+
+	const errors = $derived(submitted ? validateAddProject(form, ownerList) : {});
+	const remoteList = $derived(remote.data ?? []);
+	const groups = $derived(
+		ownerList
+			.map((owner) => ({ owner, items: remoteList.filter((r) => r.ownerId === owner.id) }))
+			.filter((group) => group.items.length > 0)
+	);
+
+	const cards: { mode: AddProjectMode; icon: Component; title: MessageKey; text: MessageKey }[] = [
+		{
+			mode: 'existing',
+			icon: FolderOpen,
+			title: 'add_project.existing',
+			text: 'add_project.existing_text'
+		},
+		{
+			mode: 'github',
+			icon: CloudDownload,
+			title: 'add_project.from_github',
+			text: 'add_project.from_github_text'
+		},
+		{ mode: 'new', icon: FolderPlus, title: 'add_project.new', text: 'add_project.new_text' }
+	];
+
+	function choose(mode: AddProjectMode) {
+		form = emptyForm(mode, defaultOwner);
+		submitted = false;
+		step = 'form';
+	}
+
+	async function pickFolder() {
+		picking = true;
+		try {
+			form.folder = await api.pickFolder();
+			if (form.mode === 'existing' && !form.name.trim()) form.name = nameFromFolder(form.folder);
+		} catch (error) {
+			reportError(error);
+		} finally {
+			picking = false;
+		}
+	}
+
+	function submit() {
+		submitted = true;
+		if (!canSubmit(form, ownerList)) return;
+		const picked = remoteList.find((r) => r.id === form.remoteId);
+		add.mutate({
+			mode: form.mode,
+			name: form.mode === 'github' ? (picked?.name ?? '') : form.name.trim(),
+			folder: form.folder,
+			ownerId: form.mode === 'github' ? (picked?.ownerId ?? form.ownerId) : form.ownerId,
+			visibility: form.visibility,
+			remoteId: form.remoteId ?? undefined
+		});
+	}
+
+	function back() {
+		if (initialMode) onclose();
+		else step = 'choose';
+	}
+</script>
+
+<Dialog
+	{open}
+	variant="form"
+	title={t('add_project.title')}
+	description={step === 'choose' ? t('add_project.choose_hint') : undefined}
+	busy={add.isPending}
+	{onclose}
+>
+	{#if step === 'choose'}
+		<div class="flex flex-direction:column gap:3">
+			{#each cards as card (card.mode)}
+				{@const Icon = card.icon}
+				<button
+					type="button"
+					onclick={() => choose(card.mode)}
+					class="flex align-items:center gap:4 p:4 r:md bg:bg-raised fg:fg b:1px|solid|border-strong b:1px|solid|accent:hover text-align:left cursor:pointer"
+				>
+					<span
+						class="size:40px r:md bg:accent-subtle flex align-items:center justify-content:center flex-shrink:0"
+						aria-hidden="true"
+					>
+						<Icon size={20} class="fg:accent" />
+					</span>
+					<span class="flex flex-direction:column">
+						<span class="type-body font-weight:700">{t(card.title)}</span>
+						<span class="type-small fg:fg-muted">{t(card.text)}</span>
+					</span>
+				</button>
+			{/each}
+		</div>
+	{:else}
+		<form
+			id="add-project-form"
+			class="flex flex-direction:column gap:4"
+			onsubmit={(event) => {
+				event.preventDefault();
+				submit();
+			}}
+		>
+			<h3 class="m:0 type-heading">
+				{t(
+					form.mode === 'existing'
+						? 'add_project.existing'
+						: form.mode === 'github'
+							? 'add_project.from_github'
+							: 'add_project.new'
+				)}
+			</h3>
+
+			{#if form.mode === 'github'}
+				<TextField
+					bind:value={search}
+					type="search"
+					label={t('add_project.github_search')}
+					placeholder={t('add_project.github_search_placeholder')}
+				/>
+				<div class="flex flex-direction:column gap:3" aria-live="polite">
+					{#if remote.isPending}
+						<Skeleton class="h:24px" />
+						<Skeleton class="h:24px" />
+					{:else if groups.length === 0}
+						<p class="m:0 type-body fg:fg-muted">{t('add_project.github_empty')}</p>
+					{:else}
+						{#each groups as group (group.owner.id)}
+							<fieldset class="m:0 p:0 b:0 flex flex-direction:column gap:2">
+								<legend class="type-small fg:fg-muted mb:1">
+									{group.owner.kind === 'org'
+										? t('add_project.owner_org', { name: group.owner.name })
+										: t('add_project.owner_personal_named', { name: group.owner.name })}
+								</legend>
+								{#each group.items as item (item.id)}
+									<Radio
+										name="remote-project"
+										value={item.id}
+										group={form.remoteId}
+										label={item.name}
+										onselect={(value) => (form.remoteId = value)}
+									/>
+								{/each}
+							</fieldset>
+						{/each}
+					{/if}
+					{#if errors.remote}
+						<p class="m:0 type-small fg:state-danger" role="alert">{t(errors.remote)}</p>
+					{/if}
+				</div>
+			{:else}
+				<TextField
+					bind:value={form.name}
+					label={t('add_project.name')}
+					error={errors.name ? t(errors.name) : undefined}
+					maxLength={60}
+				/>
+			{/if}
+
+			<div class="flex align-items:end gap:2">
+				<TextField
+					value={form.folder}
+					readonly
+					label={form.mode === 'github'
+						? t('add_project.github_clone_folder')
+						: form.mode === 'new'
+							? t('add_project.folder_new')
+							: t('add_project.folder')}
+					placeholder={t('add_project.folder_placeholder')}
+					error={errors.folder ? t(errors.folder) : undefined}
+					class="flex:1"
+				/>
+				<Button variant="secondary" loading={picking} onclick={pickFolder}>
+					{t('add_project.browse')}
+				</Button>
+			</div>
+
+			{#if form.mode !== 'github'}
+				<div class="flex flex-direction:column gap:2">
+					<span class="type-small font-weight:500" id="owner-label">{t('add_project.owner')}</span>
+					{#if owners.isPending}
+						<Skeleton class="h:48px" />
+					{:else}
+						<OwnerPicker
+							owners={ownerList}
+							bind:value={form.ownerId}
+							ariaLabel={t('add_project.owner')}
+						/>
+					{/if}
+					{#if errors.owner}
+						<p class="m:0 type-small fg:state-danger" role="alert">{t(errors.owner)}</p>
+					{/if}
+				</div>
+
+				<div class="flex flex-direction:column gap:2">
+					<span class="type-small font-weight:500">{t('add_project.visibility')}</span>
+					<SegmentedControl
+						bind:value={form.visibility}
+						ariaLabel={t('add_project.visibility')}
+						options={[
+							{ value: 'private', label: t('add_project.visibility_private') },
+							{ value: 'public', label: t('add_project.visibility_public') }
+						]}
+						class="align-self:flex-start"
+					/>
+					{#if form.visibility === 'public'}
+						<p
+							class="m:0 flex align-items:start gap:2 p:3 r:md bg:bg-subtle b:1px|solid|state-unsaved type-body"
+							role="note"
+						>
+							<AlertTriangle
+								size={18}
+								class="fg:state-unsaved flex-shrink:0 mt:2px"
+								aria-hidden="true"
+							/>
+							{t('add_project.visibility_warning')}
+						</p>
+					{:else}
+						<p class="m:0 type-small fg:fg-muted">{t('add_project.visibility_private_hint')}</p>
+					{/if}
+				</div>
+			{/if}
+		</form>
+	{/if}
+
+	{#snippet actions()}
+		{#if step === 'form'}
+			<Button variant="ghost" disabled={add.isPending} onclick={back}
+				>{t('add_project.back')}</Button
+			>
+			<span class="flex:1"></span>
+			<Button variant="secondary" disabled={add.isPending} onclick={onclose}>
+				{t('add_project.cancel')}
+			</Button>
+			<Button loading={add.isPending} onclick={submit}>
+				{t('add_project.button')}
+			</Button>
+		{:else}
+			<Button variant="secondary" onclick={onclose}>{t('add_project.cancel')}</Button>
+		{/if}
+	{/snippet}
+</Dialog>

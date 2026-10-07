@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@lucide/svelte':
+        specifier: 1.45.0
+        version: 1.45.0(svelte@5.57.2(@typescript-eslint/types@8.71.1))
       '@master/css':
         specifier: 2.0.0-rc.88
         version: 2.0.0-rc.88
@@ -173,6 +176,11 @@ packages:
 
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
+
+  '@lucide/svelte@1.45.0':
+    resolution: {integrity: sha512-SBqLvcYGEDz82Lwz7meR4qM+SGeDKRU/RBo8BhAhARNUzIXTrykbFLabW9X1Fokp01Yw2kOFx/AsLUUIxj0NLA==}
+    peerDependencies:
+      svelte: ^5
 
   '@master/css-compiler@2.0.0-rc.88':
     resolution: {integrity: sha512-rrfBNKLQia/J7DsV3ZZP+xpfP1OQkewq7OlHosclCxt1iBYoVSUFK6eniX0nP3Ji+zRWLKnkDz43P9TWDrSyGA==}
@@ -1609,6 +1617,10 @@ snapshots:
       keyv: 5.6.0
 
   '@keyv/serialize@1.1.1': {}
+
+  '@lucide/svelte@1.45.0(svelte@5.57.2(@typescript-eslint/types@8.71.1))':
+    dependencies:
+      svelte: 5.57.2(@typescript-eslint/types@8.71.1)
 
   '@master/css-compiler@2.0.0-rc.88':
     dependencies:
