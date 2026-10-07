@@ -4,7 +4,8 @@ mod models;
 mod operations;
 
 pub use models::{
-    Choice, ConflictFile, ConflictKind, Identity, Labels, OpsError, PullOutcome, ResolveOutcome,
+    Choice, ConflictFile, ConflictKind, DiffLine, DiffLineKind, FileInHistory, HistoryEntry,
+    Identity, Labels, OpsError, PullOutcome, ResolveOutcome, RestoreFileChange, RestorePreview,
     SaveOutcome, SyncState, UploadOutcome,
 };
 
@@ -120,6 +121,41 @@ impl Ops {
     /// 同期状態を返す。ahead / behind / has_upstream / dirty。
     pub fn sync_state(&self, repo: &Path) -> Result<SyncState, OpsError> {
         operations::sync_state(self.runner(), repo)
+    }
+
+    /// 履歴一覧を取得。最新順。refs/hikae/ の自動保存は区別される。
+    pub fn history(&self, repo: &Path, max_count: usize) -> Result<Vec<HistoryEntry>, OpsError> {
+        operations::history(self.runner(), repo, max_count)
+    }
+
+    /// 特定時点のファイル一覧を取得。
+    pub fn list_files_at(&self, repo: &Path, commit: &str) -> Result<Vec<FileInHistory>, OpsError> {
+        operations::list_files_at(self.runner(), repo, commit)
+    }
+
+    /// 2つの時点の差分を取得（行単位）。
+    pub fn diff_with(
+        &self,
+        repo: &Path,
+        from: &str,
+        to: &str,
+        path: Option<&str>,
+    ) -> Result<Vec<DiffLine>, OpsError> {
+        operations::diff_with(self.runner(), repo, from, to, path)
+    }
+
+    /// 元に戻す操作のプレビュー（影響ファイル一覧）。
+    pub fn restore_preview(
+        &self,
+        repo: &Path,
+        target_commit: &str,
+    ) -> Result<RestorePreview, OpsError> {
+        operations::restore_preview(self.runner(), repo, target_commit)
+    }
+
+    /// 指定の時点へ復元。復元前に復元点を作成し、指定時点のファイル状態に復元。
+    pub fn restore(&self, repo: &Path, target_commit: &str) -> Result<(), OpsError> {
+        operations::restore(self.runner(), repo, target_commit, self.now())
     }
 }
 

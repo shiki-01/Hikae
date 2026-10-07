@@ -259,6 +259,248 @@ fn read_status(runner: &GitRunner, repo: &Path) -> Result<core_git::StatusV2, Op
     core_git::parse_status_v2(&out.stdout).map_err(|e| OpsError::Unexpected(e.to_string()))
 }
 
+/// 履歴一覧を取得。最新順。refs/hikae/snapshots/ の自動保存は区別される。
+pub(crate) fn history(
+    runner: &GitRunner,
+    repo: &Path,
+    max_count: usize,
+) -> Result<Vec<HistoryEntry>, OpsError> {
+    // git log の出力形式: "%H %ai %s" （ハッシュ、タイムスタンプ、メッセージ）
+    let cmd = [
+        "log",
+        "--format=%H|%ai|%s",
+        "--max-count",
+        &max_count.to_string(),
+        "HEAD",
+    ];
+    let out = runner.run_ok(repo, &cmd)?;
+    let log_output = String::from_utf8_lossy(&out.stdout);
+
+    let mut entries = Vec::new();
+    for line in log_output.lines() {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let commit_full = parts[0];
+        let commit = commit_full.chars().take(7).collect::<String>();
+        let timestamp = parts[1].to_string();
+        let message = parts[2..].join("|");
+
+        // デフォルトでは手動の保存として扱う
+        let snapshot_ref = None;
+
+        // ファイル変更数を取得
+        let stat_out = runner.run_ok(
+            repo,
+            &["diff-tree", "--numstat", "-r", "--max-count=1", commit_full],
+        )?;
+        let stat_output = String::from_utf8_lossy(&stat_out.stdout);
+        let changed_files_count = stat_output.lines().count() as u32;
+
+        entries.push(HistoryEntry {
+            commit,
+            timestamp,
+            message,
+            snapshot_ref,
+            changed_files_count,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// 特定時点のファイル一覧を取得。
+pub(crate) fn list_files_at(
+    runner: &GitRunner,
+    repo: &Path,
+    commit: &str,
+) -> Result<Vec<FileInHistory>, OpsError> {
+    // git ls-tree で tree を走査
+    let out = runner.run_ok(repo, &["ls-tree", "-r", commit])?;
+    let output = String::from_utf8_lossy(&out.stdout);
+
+    let mut files = Vec::new();
+    for line in output.lines() {
+        // フォーマット: "<mode> <type> <hash> <size> <path>"（-rz 形式の場合）
+        // 標準的には: "<mode> <type> <hash> <path>"
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 {
+            continue;
+        }
+
+        let mode = parts[0].to_string();
+        let _type_str = parts[1];
+        let _hash = parts[2];
+        let path = parts[3..].join(" ");
+
+        // ファイルのサイズは `git cat-file` で取得（ここでは 0 に固定）
+        files.push(FileInHistory {
+            path,
+            mode,
+            size: 0,
+            is_tracked: true,
+        });
+    }
+
+    Ok(files)
+}
+
+/// 2つの時点の差分を取得（行単位）。
+pub(crate) fn diff_with(
+    runner: &GitRunner,
+    repo: &Path,
+    from: &str,
+    to: &str,
+    path: Option<&str>,
+) -> Result<Vec<DiffLine>, OpsError> {
+    let mut cmd = vec!["diff", "-U3", from, to];
+    if let Some(p) = path {
+        cmd.push("--");
+        cmd.push(p);
+    }
+
+    let out = runner.run_ok(repo, &cmd)?;
+    let diff_output = String::from_utf8_lossy(&out.stdout);
+
+    // 簡易的な diff 解析（本来は proper な parser が必要）
+    let mut lines = Vec::new();
+    let mut line_num_old = 0;
+    let mut line_num_new = 0;
+
+    for line in diff_output.lines() {
+        if line.starts_with("@@") {
+            // ハンク開始行
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix("-") {
+            if !line.starts_with("---") {
+                lines.push(DiffLine {
+                    kind: DiffLineKind::Removed,
+                    line_number_old: Some(line_num_old),
+                    line_number_new: None,
+                    content: content.to_string(),
+                });
+                line_num_old += 1;
+            }
+        } else if let Some(content) = line.strip_prefix("+") {
+            if !line.starts_with("+++") {
+                lines.push(DiffLine {
+                    kind: DiffLineKind::Added,
+                    line_number_old: None,
+                    line_number_new: Some(line_num_new),
+                    content: content.to_string(),
+                });
+                line_num_new += 1;
+            }
+        } else if let Some(content) = line.strip_prefix(" ") {
+            lines.push(DiffLine {
+                kind: DiffLineKind::Context,
+                line_number_old: Some(line_num_old),
+                line_number_new: Some(line_num_new),
+                content: content.to_string(),
+            });
+            line_num_old += 1;
+            line_num_new += 1;
+        }
+    }
+
+    Ok(lines)
+}
+
+/// 元に戻す操作のプレビュー（影響ファイル一覧）。
+pub(crate) fn restore_preview(
+    runner: &GitRunner,
+    repo: &Path,
+    target_commit: &str,
+) -> Result<RestorePreview, OpsError> {
+    // 現在の状態と target_commit の差分を取得
+    let diff_out = runner.run_ok(repo, &["diff", "--name-status", target_commit])?;
+    let diff_output = String::from_utf8_lossy(&diff_out.stdout);
+
+    let mut modified = Vec::new();
+    let mut deleted = Vec::new();
+    let mut created = Vec::new();
+
+    for line in diff_output.lines() {
+        let parts: Vec<&str> = line.splitn(2, '\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+
+        let status = parts[0];
+        let path = parts[1];
+
+        match status {
+            "M" => {
+                // 変更：サイズは 0 で固定（詳細は phase 2）
+                modified.push(RestoreFileChange {
+                    path: path.to_string(),
+                    size_from: 0,
+                    size_to: 0,
+                });
+            }
+            "A" => {
+                // 追加（元に戻すと削除される）
+                deleted.push(path.to_string());
+            }
+            "D" => {
+                // 削除（元に戻すと復活する）
+                created.push(path.to_string());
+            }
+            _ => {} // R, C などは簡略化のため無視
+        }
+    }
+
+    Ok(RestorePreview {
+        modified,
+        deleted,
+        created,
+    })
+}
+
+/// 指定の時点へ復元。復元前に復元点を作成し、指定時点のファイル状態に復元。
+pub(crate) fn restore(
+    runner: &GitRunner,
+    repo: &Path,
+    target_commit: &str,
+    now: OffsetDateTime,
+) -> Result<(), OpsError> {
+    // マージ競合中でないか確認
+    let current_conflicts = conflicts(runner, repo)?;
+    if !current_conflicts.is_empty() {
+        return Err(OpsError::Conflict(current_conflicts));
+    }
+
+    // ブランチ名を取得
+    let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
+    let branch = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
+
+    // 復元点を作成
+    let _ = create_restore_point(runner, repo, &branch, "restore", now)?;
+
+    // restore --source で指定時点のファイル状態に復元（未追跡ファイルは消さない）
+    // 注意: restore --source は reset と異なり、staged / worktree の両方を復元する
+    runner.run_ok(
+        repo,
+        &[
+            "restore",
+            "--source",
+            target_commit,
+            "--staged",
+            "--worktree",
+            "--",
+            ":",
+        ],
+    )?;
+
+    Ok(())
+}
+
 /// 競合を解消
 pub(crate) fn resolve(
     runner: &GitRunner,

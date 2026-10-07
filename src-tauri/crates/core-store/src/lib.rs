@@ -1,9 +1,464 @@
 // アプリ内データ管理（SQLite: rusqlite）。
+// プロジェクト登録、スナップショット索引、設定を管理する。
+
+use rusqlite::{params, Connection, Result as SqliteResult};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use thiserror::Error;
+
+pub mod migrations;
+pub mod models;
+
+pub use migrations::run_migrations;
+pub use models::{Project, ProjectConfig};
+
+/// Store のエラー型
+#[derive(Error, Debug)]
+pub enum StoreError {
+    #[error("Database error: {0}")]
+    Db(#[from] rusqlite::Error),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Project not found: {0}")]
+    ProjectNotFound(String),
+
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
+}
+
+/// SQLite データベースへのアクセスをラップする。
+/// すべてのテーブルスキーマはマイグレーション時に user_version で管理される。
+pub struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    /// 既存の、またはこれから作成するデータベースに接続する。
+    pub fn open(db_path: &Path) -> Result<Self, StoreError> {
+        // 親ディレクトリがなければ作成する
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let conn = Connection::open(db_path)?;
+
+        // マイグレーション実行
+        run_migrations(&conn)?;
+
+        Ok(Store { conn })
+    }
+
+    /// プロジェクト一覧を取得。最終表示日時でソート。
+    pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config
+             FROM projects
+             ORDER BY last_viewed_at DESC"
+        )?;
+
+        let projects = stmt
+            .query_map([], |row| {
+                Ok(Project {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    path: row.get::<_, String>(2)?.into(),
+                    remote_url: row.get(3)?,
+                    owner: row.get(4)?,
+                    default_branch: row.get(5)?,
+                    last_viewed_at: row.get(6)?,
+                    config: row.get(7)?,
+                })
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+
+        Ok(projects)
+    }
+
+    /// ID でプロジェクトを取得。
+    pub fn get_project(&self, id: &str) -> Result<Project, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config
+             FROM projects WHERE id = ?"
+        )?;
+
+        let project = stmt
+            .query_row([id], |row| {
+                Ok(Project {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    path: row.get::<_, String>(2)?.into(),
+                    remote_url: row.get(3)?,
+                    owner: row.get(4)?,
+                    default_branch: row.get(5)?,
+                    last_viewed_at: row.get(6)?,
+                    config: row.get(7)?,
+                })
+            })
+            .map_err(|_| StoreError::ProjectNotFound(id.to_string()))?;
+
+        Ok(project)
+    }
+
+    /// プロジェクトを追加。
+    pub fn add_project(
+        &self,
+        id: &str,
+        display_name: &str,
+        path: &Path,
+        remote_url: Option<&str>,
+        owner: &str,
+        default_branch: &str,
+    ) -> Result<(), StoreError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let config = serde_json::json!({});
+
+        self.conn.execute(
+            "INSERT INTO projects (id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                id,
+                display_name,
+                path.to_string_lossy().to_string(),
+                remote_url,
+                owner,
+                default_branch,
+                now,
+                config.to_string(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// プロジェクトを更新（表示名、最終表示日時など）。
+    pub fn update_project(
+        &self,
+        id: &str,
+        display_name: Option<&str>,
+        remote_url: Option<Option<&str>>,
+        owner: Option<&str>,
+        config: Option<&str>,
+    ) -> Result<(), StoreError> {
+        // 現在の値を取得
+        let current = self.get_project(id)?;
+
+        let new_display_name = display_name.unwrap_or(&current.display_name);
+        let new_remote_url = remote_url
+            .map(|u| u.map(|s| s.to_string()))
+            .unwrap_or(current.remote_url);
+        let new_owner = owner.unwrap_or(&current.owner);
+        let new_config = config.unwrap_or(&current.config);
+        let now = chrono::Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "UPDATE projects
+             SET display_name = ?, remote_url = ?, owner = ?, config = ?, last_viewed_at = ?
+             WHERE id = ?",
+            params![
+                new_display_name,
+                new_remote_url,
+                new_owner,
+                new_config,
+                now,
+                id,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// プロジェクトを削除（登録のみ。フォルダは消さない）。
+    pub fn remove_project(&self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM projects WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    /// 最終表示日時を更新。
+    pub fn touch_project(&self, id: &str) -> Result<(), StoreError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET last_viewed_at = ? WHERE id = ?",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+}
+
+/// プロジェクト単位の直列実行ロック。状態変更操作の並行実行を防ぐ。
+/// Tauri 非依存で、単体テスト可能。
+pub struct ProjectLocks {
+    locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl ProjectLocks {
+    /// 新規作成
+    pub fn new() -> Self {
+        ProjectLocks {
+            locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// プロジェクト ID のロックを取得してクロージャを実行。
+    /// 同一 ID への操作は直列実行（クリティカルセクション内で f を実行）。
+    pub fn run<T, F>(&self, project_id: &str, f: F) -> Result<T, String>
+    where
+        F: FnOnce() -> T,
+    {
+        let mut locks = self.locks.lock().map_err(|e| e.to_string())?;
+        let lock_arc = locks
+            .entry(project_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+
+        // locks の Mutex を drop（ロック取得の前に map からリリース）
+        drop(locks);
+
+        // lock_arc のロックを取得して f を実行
+        let _guard = lock_arc.lock().map_err(|e| e.to_string())?;
+        Ok(f())
+    }
+}
+
+impl Default for ProjectLocks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for ProjectLocks {
+    fn clone(&self) -> Self {
+        ProjectLocks {
+            locks: Mutex::new(
+                self.locks
+                    .lock()
+                    .expect("lock poison")
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::TempDir;
+
+    fn setup_test_db() -> (Store, TempDir) {
+        let tmpdir = TempDir::new().expect("failed to create temp dir");
+        let db_path = tmpdir.path().join("test.db");
+        let store = Store::open(&db_path).expect("failed to open store");
+        (store, tmpdir)
+    }
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn test_add_and_get_project() {
+        let (store, _tmpdir) = setup_test_db();
+
+        store
+            .add_project(
+                "proj-1",
+                "My Project",
+                Path::new("/path/to/project"),
+                Some("https://github.com/user/repo"),
+                "myuser",
+                "main",
+            )
+            .expect("failed to add project");
+
+        let proj = store.get_project("proj-1").expect("failed to get project");
+        assert_eq!(proj.id, "proj-1");
+        assert_eq!(proj.display_name, "My Project");
+        assert_eq!(proj.owner, "myuser");
+    }
+
+    #[test]
+    fn test_list_projects() {
+        let (store, _tmpdir) = setup_test_db();
+
+        store
+            .add_project(
+                "proj-1",
+                "Project 1",
+                Path::new("/path/1"),
+                None,
+                "user",
+                "main",
+            )
+            .expect("failed to add project");
+
+        store
+            .add_project(
+                "proj-2",
+                "Project 2",
+                Path::new("/path/2"),
+                None,
+                "user",
+                "main",
+            )
+            .expect("failed to add project");
+
+        let projects = store.list_projects().expect("failed to list projects");
+        assert_eq!(projects.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_project() {
+        let (store, _tmpdir) = setup_test_db();
+
+        store
+            .add_project(
+                "proj-1",
+                "Project",
+                Path::new("/path"),
+                None,
+                "user",
+                "main",
+            )
+            .expect("failed to add project");
+
+        store.remove_project("proj-1").expect("failed to remove");
+
+        let result = store.get_project("proj-1");
+        assert!(matches!(result, Err(StoreError::ProjectNotFound(_))));
+    }
+
+    #[test]
+    fn test_touch_project() {
+        let (store, _tmpdir) = setup_test_db();
+
+        store
+            .add_project(
+                "proj-1",
+                "Project",
+                Path::new("/path"),
+                None,
+                "user",
+                "main",
+            )
+            .expect("failed to add");
+
+        let proj1 = store.get_project("proj-1").expect("failed to get");
+        let time1 = proj1.last_viewed_at;
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        store.touch_project("proj-1").expect("failed to touch");
+
+        let proj2 = store.get_project("proj-1").expect("failed to get");
+        let time2 = proj2.last_viewed_at;
+
+        assert!(time2 > time1);
+    }
+
+    /// 同一 ID での並行実行が直列化されることを検証。
+    /// AtomicUsize で同時実行数の最大値を測定。
+    #[test]
+    fn test_project_locks_same_id_serializes() {
+        use std::sync::Arc;
+
+        let locks = Arc::new(ProjectLocks::new());
+        let concurrent_count = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = vec![];
+
+        for _ in 0..4 {
+            let locks_clone = locks.clone();
+            let count_clone = concurrent_count.clone();
+            let max_clone = max_concurrent.clone();
+
+            let handle = std::thread::spawn(move || {
+                locks_clone
+                    .run("proj-1", || {
+                        // クリティカルセクション開始
+                        let now = count_clone.fetch_add(1, Ordering::SeqCst);
+                        let new_max = now + 1;
+
+                        // max_concurrent を更新（最大同時実行数を記録）
+                        let mut old_max = max_clone.load(Ordering::SeqCst);
+                        while new_max > old_max {
+                            match max_clone.compare_exchange(
+                                old_max,
+                                new_max,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => old_max = actual,
+                            }
+                        }
+
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+
+                        // クリティカルセクション終了
+                        count_clone.fetch_sub(1, Ordering::SeqCst);
+                    })
+                    .expect("run failed")
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("thread join failed");
+        }
+
+        let max = max_concurrent.load(Ordering::SeqCst);
+        assert_eq!(
+            max, 1,
+            "同一 ID でのロック: 最大同時実行数は 1 であるべき（実際: {}）",
+            max
+        );
+    }
+
+    /// 異なる ID での並行実行が可能であることを検証。
+    #[test]
+    fn test_project_locks_different_ids_parallel() {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        let locks = Arc::new(ProjectLocks::new());
+
+        let start = Instant::now();
+
+        let handle1 = {
+            let locks_clone = locks.clone();
+            std::thread::spawn(move || {
+                locks_clone
+                    .run("proj-1", || {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    })
+                    .expect("run failed")
+            })
+        };
+
+        let handle2 = {
+            let locks_clone = locks.clone();
+            std::thread::spawn(move || {
+                locks_clone
+                    .run("proj-2", || {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    })
+                    .expect("run failed")
+            })
+        };
+
+        handle1.join().expect("thread join failed");
+        handle2.join().expect("thread join failed");
+
+        let elapsed = start.elapsed();
+
+        // 並行実行なら 100-150ms、直列実行なら 200ms+ になるはず
+        assert!(
+            elapsed.as_millis() < 180,
+            "異なる ID でのロック: 並行実行すべき（実行時間: {}ms）",
+            elapsed.as_millis()
+        );
     }
 }

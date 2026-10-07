@@ -157,3 +157,66 @@ impl Default for Labels {
         }
     }
 }
+
+/// 履歴の1つのエントリ
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// commit のハッシュ（短縮形）
+    pub commit: String,
+    /// タイムスタンプ（ISO 8601）
+    pub timestamp: String,
+    /// コミットメッセージ
+    pub message: String,
+    /// `refs/hikae/snapshots/` に該当する自動保存の ref（None なら手動の保存）
+    pub snapshot_ref: Option<String>,
+    /// このコミットで変更されたファイル数
+    pub changed_files_count: u32,
+}
+
+/// 特定時点のファイル情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileInHistory {
+    pub path: String,
+    pub mode: String, // "100644" など
+    pub size: u64,
+    pub is_tracked: bool,
+}
+
+/// 元に戻す操作のプレビュー（影響ファイル一覧）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestorePreview {
+    /// 変更されるファイル（いまの内容 → 復元後の内容）
+    pub modified: Vec<RestoreFileChange>,
+    /// 削除されるファイル
+    pub deleted: Vec<String>,
+    /// 復活するファイル
+    pub created: Vec<String>,
+}
+
+/// 復元時のファイルの変更情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreFileChange {
+    pub path: String,
+    pub size_from: u64,
+    pub size_to: u64,
+}
+
+/// 差分の行
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub line_number_old: Option<u32>,
+    pub line_number_new: Option<u32>,
+    pub content: String,
+}
+
+/// 差分行の種別
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiffLineKind {
+    /// コンテキスト行
+    Context,
+    /// 追加行
+    Added,
+    /// 削除行
+    Removed,
+}
