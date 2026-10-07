@@ -27,7 +27,10 @@ fn push_refspec_after_double_dash_is_checked() {
 }
 
 #[test]
-fn fetch_refspec_after_double_dash_is_checked() {
+fn fetch_prune_is_allowed_but_forced_refspecs_are_not() {
+    assert_allowed(&["fetch", "--prune", "origin"]);
+    assert_rejected(&["fetch", "--force", "origin"]);
+    assert_rejected(&["fetch", "origin", "+refs/heads/*:refs/heads/*"]);
     assert_rejected(&["fetch", "origin", "--", "+refs/heads/*:refs/heads/*"]);
 }
 

@@ -1,7 +1,5 @@
+use crate::APP_REF_NAMESPACE;
 use serde::{Deserialize, Serialize};
-
-/// アプリが ref の作成・更新・削除を行ってよい名前空間
-pub const APP_REF_NAMESPACE: &str = "refs/hikae/";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rejection {
@@ -1351,7 +1349,7 @@ fn validate_remote_args(args: &[&str]) -> Result<(), Rejection> {
 }
 
 fn validate_fetch_args(args: &[&str]) -> Result<(), Rejection> {
-    let not_allowed = ["--prune", "-p", "--force", "-f"];
+    let not_allowed = ["--force", "-f"];
 
     for arg in args {
         if not_allowed.contains(arg) {
@@ -1364,6 +1362,8 @@ fn validate_fetch_args(args: &[&str]) -> Result<(), Rejection> {
     let allowed = [
         "-q",
         "--quiet",
+        "--prune",
+        "-p",
         "--no-tags",
         "--tags",
         "--progress",

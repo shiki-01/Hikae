@@ -52,6 +52,30 @@ impl GitRunner {
         self.run_with_env(repo, args, &[])
     }
 
+    /// 終了コードが 0 以外なら `GitError::Failed` にする版
+    pub fn run_ok(&self, repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
+        self.run_allow_codes(repo, args, &[0])
+    }
+
+    /// 指定した終了コードのみ成功とみなす版（例: merge の競合は終了コード 1）
+    pub fn run_allow_codes(
+        &self,
+        repo: &Path,
+        args: &[&str],
+        allowed: &[i32],
+    ) -> Result<GitOutput, GitError> {
+        let out = self.run(repo, args)?;
+        if allowed.contains(&out.code) {
+            Ok(out)
+        } else {
+            Err(GitError::Failed {
+                code: out.code,
+                stderr: out.stderr,
+                args_summary: args.join(" "),
+            })
+        }
+    }
+
     /// git コマンドを環境変数付きで実行する
     pub fn run_with_env(
         &self,
