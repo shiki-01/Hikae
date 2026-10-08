@@ -305,7 +305,10 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 - 順序: `fetch --prune` は作業フォルダ・インデックスを変えないため、復元点より**先**に実行する。その結果で、取り込む内容（取り込み待ち）も自動保存する内容（未保存の変更）も無いと分かれば、**復元点を作らず**「最新です」（`UpToDate`）として終える。1 回の取り込みで作る復元点は最大 1 組（操作名 `pull`）で、双方に差があるときは手順 5 の `pre-merge` が加わる
 - サイズ検査: 未保存の変更があるときは、取り込み前の自動保存にも 4.1 手順 1 と同じ検査を行う。警告（閾値超）または保存不可のファイルが 1 件でもあれば、**何も変更せず**（復元点も作らず）取り込みを見送り、該当ファイルを構造化した結果（`PullResult.size_check`。アップロード中の取り込みなら `PushResult.size_check`）で返す。取り込み側には「そのまま」の承諾は無く、画面で保存の手順（外す／承諾）を済ませてから取り込みをやり直す。自動実行のときは `NeedsAttention`（理由 `large-files`）で画面に知らせる
 - 自動保存のメモ: 「取り込み前の自動保存」（呼び出し側が渡す文言）に、4.1 と同じ `Hikae-PC` トレーラーを付ける。自動保存の commit が増えるため、自動保存後にアップロード待ちを数え直す
-- 「取り込む前に自動で保存」の設定（`save_before_pull`）をオフにした場合に働くのは、スケジューラの**自動**の取り込みだけで、未保存の変更があれば取り込まずに `NeedsAttention`（理由 `unsaved-changes`）で知らせる。手動の取り込みは、設定にかかわらず未保存の変更を自動保存してから取り込む。E06 の確認ダイアログは未接続
+- 「取り込む前に自動で保存」の設定（`save_before_pull`）をオフ（「確認する」）にした場合の動作は、起動元で分かれる
+  - **自動**の取り込み（スケジューラ）: 未保存の変更があれば取り込まずに `NeedsAttention`（理由 `unsaved-changes`）で知らせる
+  - **手動**の取り込み: `pull(id, save_confirmed)`。設定が「確認する」で `save_confirmed` が偽のとき、`Ops::pull_with_policy(.., UnsavedPolicy::Confirm)` で実行する。`fetch --prune` の後、**取り込む内容（取り込み待ち）と未保存の変更の両方がある**ときだけ、何も変更せず（復元点も作らず、サイズ検査より前に）`PullOutcome::NeedsSaveConfirmation { unsaved_count }` を返す。画面は結果 `needs-save-confirmation` と `PullResult.unsaved_count` で E06 の確認ダイアログを出す。取り込む内容が無ければ、未保存の変更には触れず `UpToDate` で終える（保存は取り込みの前処理のため）。利用者が「保存して取り込む」を選ぶと `save_confirmed = true` で呼び直し、従来どおり（復元点 → 自動保存 → 取り込み、サイズ検査を含む）に実行する。設定がオン、または `save_confirmed` が真のときは `UnsavedPolicy::SaveFirst`（従来の動作）
+  - アップロード中の取り込み（`upload`）は常に `SaveFirst`。確認は取り込みの操作にだけ付く
 - 手順 8 の実際の範囲（`restore_files_untracked_by_remote`）: 取り込み前の HEAD にあり取り込み後の HEAD に無いパス（`diff --name-only -z --no-renames --diff-filter=D`）のうち、(a) 取り込み後の .gitignore で保存対象外（`git check-ignore -q`）になっていて、(b) 作業フォルダに実体（リンクを含む）が無いものだけを、`git restore --source <取り込み前の HEAD> --worktree -- :(literal)<パス>` で 1 ファイルずつ書き戻す。相手が実際に削除したファイル（保存対象外になっていないもの）は書き戻さない。既にファイルがあるパスは上書きしない。インデックスは変更しない（`rm` は使わない）。個々の失敗は取り込みの失敗にしない（取り込み前の内容は復元点に残る）。早送り・マージ成功の直後に行い、競合で止まった取り込みでは 4.4 の解消後に行う
 
 ### 4.4 変更のぶつかり解消
@@ -372,9 +375,10 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - 既定のアプリで開く: Tauri の opener プラグイン。実装は Rust 側（`OpenerExt::open_path`）からのみ呼び、画面側（JS）には opener の権限を与えない（`capabilities/default.json` は `core:default` と `dialog:default` のみ）
   - 開く前に Rust 側でパスを検証する（`resolve_in_project`）。(1) 字句検査: 空・NUL を含むもの、先頭が `/` または `\`（絶対パス・UNC）、ドライブ指定（`C:`）、`/` と `\` のどちらで区切っても `..` を含むもの、Windows では `:` を含むもの（代替データストリーム）を拒否。(2) 実体検査: プロジェクトのルートと結合後のパスをそれぞれ `canonicalize` し、後者がルートの配下で、かつルート自身でないことを確認（シンボリックリンクやジャンクションで外へ出るものを拒否）
   - 拒否・失敗はエラーコード `outside_project`、`file_not_found`、`file_unreadable`（5.1）で返す
-- VS Code で開く: `vscode://file/<絶対パス>` の URL スキームを使う（`code` コマンドが PATH に無い環境でも動く）。VS Code 未インストールならメニューを非表示
-- フォルダで表示: Windows は `explorer /select,`、macOS は `open -R`
-  - **VS Code で開く・フォルダで表示・パスをコピーは未実装**。メニューの項目は画面にあるが、選ぶとバックエンド未対応のエラーになる
+- フォルダで表示: Rust 側の opener の `reveal_item_in_dir`（Windows は `explorer /select,` 相当、macOS は `open -R` 相当）を、`reveal_project_file` コマンドから呼ぶ。「既定のアプリで開く」と同じ検証（`resolve_in_project`）を通したパスだけを渡し、画面（JS）には opener の権限を与えない（`capabilities/default.json` は変更していない）。失敗は `open_failed`
+- パスをコピー: 画面側でクリップボードへ書き込むだけで、バックエンドは呼ばない。プロジェクトの場所の区切り文字に合わせて結ぶ（`components/file-actions.ts`）
+- 「開く」メニューの項目は、既定のアプリ・フォルダで表示・パスをコピーの 3 つ
+- **VS Code で開くは実装しない**: 外部コマンド（またはその URL スキーム）の実行になり、検証の対象と権限が広がるため。メニューにも出さない（設定 `open_action` の `vs-code` はスキーマにだけ残り、画面には出さない）。要望が出た場合は、実行する対象を固定した上で改めて設計する
 - 過去の版を開く: `git show <時点>:<path>` を一時フォルダに書き出し、読み取り専用属性を付けて開く
   - 実装: 時点を完全な OID に解決し、`ls-tree` で通常のファイルとして存在することを確認してから、`git cat-file -p <OID>:<パス>` で内容を読む（許可リストは変更していない）。パスは `..`・絶対パス・ドライブ指定・`.git` 配下・先頭が `:` のものを拒否する。コミットは先頭が `-` のものや空白・制御文字を含むものを拒否する
   - 書き出し先は `<temp>/hikae-preview/<プロジェクト ID>/<12 桁のコミット>/<相対パス>`（`<temp>` は OS の一時フォルダ）。プロジェクト ID は英数字・`-`・`_` のみ 128 文字以内を許す。作業フォルダにもリポジトリにも書かない。書き出したファイルは読み取り専用にする（開いたアプリでの編集が履歴に紛れ込まないように）。同じ内容のファイルが既にあれば書き直さない
@@ -427,7 +431,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 
 - Rust のコマンドは失敗を `AppError` で返す。項目は `code`（機械可読なエラーコード）、`params`（文言に差し込む値。ファイル名・件数など表示用の値だけで、トークン・認証情報・git の標準エラー出力は入れない）、`what_happened` / `data_is_safe` / `next_action`（日本語の 3 要素）、`technical_info`（「技術情報を表示」欄用。git の標準エラー出力など）
 - 画面は `code` と `params` から、`src/lib/i18n/ja.ts` の `errcode.<code>.what` / `.safe` / `.next` を引く。**3 つがそろい、差し込む値も足りているときは ja.ts の文言を優先する**。コードが未知、文言が無い、値が足りないときは、Rust 側が返した 3 要素をそのまま表示する。このため、どのエラーでも「何が起きたか」「データは無事か」「次の行動」の 3 要素がそろう
-- ja.ts に `errcode.*` が無く、Rust 側の 3 要素で表示されるコードは、`status_failed`、`history_failed`、`diff_failed`、`change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`、`invalid_settings`
+- 本節の**すべてのコード**に ja.ts の `errcode.*`（3 要素）がある（`error-view.test.ts` が一覧を検査する）。Rust 側の 3 要素が表示されるのは、コードが未知のとき、または params の値が足りないときだけ。内部エラー系（`task_failed`、`lock_failed`、`database_error` など利用者が対処できないもの）は汎用の文言にしている
 - 設計書の E01〜E20 の文言（`error.E01` など）は ja.ts にあるが、バックエンドのエラー（`errcode.*`）の表示には使わない。画面側で直接生成するのは E11 だけ（下の対応表）
 
 **エラーコード**（`app/src/lib.rs` の `AppError` の説明に従う。`OpsError` と認証エラーに 1 対 1 で対応）
@@ -452,7 +456,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E03 | `network_unavailable`（API・取得）。自動の取り込み・アップロードの失敗は標準エラー出力の文言かタイムアウトで「オフライン」に分類し、例外ではなく同期状態として扱う。手動の取り込み・アップロードの通信失敗は `git_failed` / `git_timeout` で返る |
 | E04 | `github_unavailable`（API の 5xx）。git の失敗では 5xx を見分けず「その他」に分類する |
 | E05 | `conflict`（params: `count`）。解消は D3 |
-| E06 | 自動の取り込みを見送る場合のみ（4.3 の補足）。確認ダイアログは未接続 |
+| E06 | 結果 `needs-save-confirmation`（`PullResult.unsaved_count` に件数）。設定「取り込む前に保存」が「確認する」の手動の取り込みで、取り込む内容と未保存の変更の両方があるとき、何も変更せずに返す。画面は確認ダイアログ（`PullSaveDialog`）を出し、「保存して取り込む」で `save_confirmed = true` として呼び直す。自動の取り込みは `NeedsAttention`（理由 `unsaved-changes`）で知らせる（4.3 の補足）。エラーではないためエラーコードは持たない |
 | E07 / E08 | 上記の構造化した結果 |
 | E11 | 画面（一覧）のダイアログと、フォルダの付け替え（`relocate_project`。`relocate_*`）は実装済み。登録パスが存在しない・フォルダでない・リポジトリ（`.git`）でないときは、`list_projects`（`ProjectInfo.folder_missing`）と `project_status`（`SyncStatus.folder_missing`）が真を返し、**git を実行しない**（`list_history` は空を返す）。スケジューラは該当プロジェクトの自動の取り込み・アップロードを見送り、見つからなくなった最初の巡回で `NeedsAttention`（理由 `folder-missing`）を通知する。判定はファイルシステムだけで行う（`core-ops` の `project_folder_state`） |
 | E12 | `file_in_use`（下記） |
@@ -627,21 +631,22 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブで、各タブの項目は即時保存。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブで、各タブの項目は即時保存。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`snapshot_retention_days`、`large_file_warn_mb`、`show_snapshots_in_timeline`）。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
 | 設定キー | 状況 |
 | --- | --- |
 | `pull_on_startup`、`pull_interval_minutes`、`auto_push_after_save` | 反映済み。スケジューラの実行計画に使う。変更は次の巡回を待たずに反映される |
-| `save_before_pull` | 一部。オフのとき、**自動**の取り込みを未保存の変更があれば見送って通知する（4.3 の補足）。手動の取り込みは常に自動保存してから取り込む。確認ダイアログは未接続 |
+| `save_before_pull` | 反映済み。オフ（「確認する」）のとき、**自動**の取り込みは未保存の変更があれば見送って通知し、**手動**の取り込みは、取り込む内容と未保存の変更の両方があるとき確認ダイアログ（E06）を出す（4.3 の補足、5.1）。オンのときは、どちらも自動保存してから取り込む |
 | `snapshot_retention_days` | 反映済み。復元点の間引きと操作ジャーナルの保持期間に使う（6.2、6.3） |
 | `large_file_warn_mb` | 反映済み。保存・取り込み・アップロード中の取り込みのサイズ検査に使う（プロジェクト別の上書きを含む）。ファイルの追加（D&D）の警告は 50MB 固定で、この設定には従わない |
 | `show_snapshots_in_timeline` | 反映済み。履歴のタイムラインで自動保存を折りたたむ・表示する・隠す |
-| `conflict_mode`、`push_reminder_hours` | 保存のみ。参照する処理が無い（自動の取り込みで起きたぶつかりは常に通知だけを出し、利用者が手動で取り込んで起きたときは解消画面を開く。アップロード待ちの通知は未実装） |
-| `auto_save_after_restore` | 保存のみ。元に戻した後の自動保存は未実装（4.2） |
-| `auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_size_cap_x` | 保存のみ。ファイル監視による自動保存が未実装（Phase 2） |
-| `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
+| `conflict_mode`、`push_reminder_hours` | 保存のみ・**画面から外した**。参照する処理が無い（自動の取り込みで起きたぶつかりは常に通知だけを出し、利用者が手動で取り込んで起きたときは解消画面を開く。アップロード待ちの通知は未実装） |
+| `auto_save_after_restore` | 保存のみ・**画面から外した**。元に戻した後の自動保存は未実装（4.2） |
+| `auto_snapshot_enabled`、`auto_snapshot_delay_secs` | 保存のみ・**画面から外した**。ファイル監視による自動保存が未実装（Phase 2） |
+| `snapshot_size_cap_x` | 保存のみ。ファイル監視による自動保存が未実装（Phase 2）。画面には元から無い |
+| `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
 | `ai_runner`、`ai_model`、`ai_scope`、`ai_model_source`、`ai_custom_gguf_path` | 保存のみ（Phase 2） |
 | `git_executable` | 保存のみ。git は同梱されておらず、PATH 上の git を使う（8.2） |
 | `work_copy_enabled`、`extension_dev_mode`、`extension_index_urls`、`git_lfs` | 保存のみ（Phase 3 / 4） |
