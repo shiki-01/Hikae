@@ -132,6 +132,16 @@ pub struct JournalEntry {
     pub target: Option<String>,
 }
 
+impl JournalEntry {
+    /// 操作の開始時刻（Unix 秒）。日時を解析できなければ None。
+    /// 中断された操作の復元点を探すときの下限に使う。
+    pub fn started_at_unix(&self) -> Option<i64> {
+        chrono::DateTime::parse_from_rfc3339(&self.started_at)
+            .ok()
+            .map(|d| d.timestamp())
+    }
+}
+
 /// 現在時刻（RFC3339）。ジャーナルの日時に使う。
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()

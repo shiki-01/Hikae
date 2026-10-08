@@ -45,6 +45,9 @@ pub enum AttentionReason {
     /// 未保存の変更があるため、自動の取り込みを見送った
     #[serde(rename = "unsaved-changes")]
     UnsavedChanges,
+    /// 取り込み前の自動保存に大きいファイルがあるため、自動の取り込みを見送った（E07 / E08）
+    #[serde(rename = "large-files")]
+    LargeFiles,
     /// 前回のアプリ終了で、途中で止まった操作が見つかった（E15）
     #[serde(rename = "interrupted-operation")]
     InterruptedOperation,

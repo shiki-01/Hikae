@@ -9,7 +9,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use core_git::GitError;
-use core_ops::{new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, UploadOutcome};
+use core_ops::{
+    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits, UploadOutcome,
+};
 use core_store::{
     now_rfc3339, JournalFinish, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks,
     RunningJournal, Store,
@@ -26,6 +28,8 @@ pub(crate) struct OpContext {
     pub app: tauri::AppHandle,
     pub store: Arc<Mutex<Store>>,
     pub locks: Arc<ProjectLocks>,
+    /// ログイン中のユーザー情報の控え。復元点（自動保存）の署名に、実行のたびに最新を読む
+    pub session_user: Arc<Mutex<Option<core_github::User>>>,
 }
 
 impl OpContext {
@@ -34,8 +38,28 @@ impl OpContext {
             app,
             store: state.store_clone(),
             locks: state.locks_clone(),
+            session_user: state.session_user.clone(),
         }
     }
+
+    /// 署名に使うユーザー（数値 ID, ログイン名）。未ログインなら None（固定の `Hikae`）
+    fn signing_user(&self) -> Option<(u64, String)> {
+        self.session_user
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|u| (u.id, u.login.clone())))
+    }
+}
+
+/// 設定「大きいファイルの警告閾値」から、プロジェクトのサイズ検査の閾値を作る。
+/// 設定を読めなければ既定値。
+pub(crate) fn size_limits_for(store: &Arc<Mutex<Store>>, id: &str) -> SizeLimits {
+    store
+        .lock()
+        .ok()
+        .and_then(|g| g.effective_settings(id).ok())
+        .map(|s| SizeLimits::from_warn_mb(s.large_file_warn_mb))
+        .unwrap_or_default()
 }
 
 /// 操作の種類・起動元・失敗時の説明
@@ -119,6 +143,7 @@ where
     .emit(&ctx.app);
 
     let store = ctx.store.clone();
+    let signing = ctx.signing_user();
     let target = spec.target.clone();
     let id_owned = project_id.clone();
 
@@ -129,12 +154,16 @@ where
         move || {
             let project = {
                 let guard = store.lock().map_err(|e| AppError {
+                    code: "database_error".to_string(),
+                    params: Vec::new(),
                     what_happened: "データベースアクセスに失敗しました".to_string(),
                     data_is_safe: "ファイルは変更されていません".to_string(),
                     next_action: "もう一度試してください".to_string(),
                     technical_info: Some(e.to_string()),
                 })?;
                 guard.get_project(&id_owned).map_err(|e| AppError {
+                    code: "project_not_found".to_string(),
+                    params: Vec::new(),
                     what_happened: "プロジェクトが見つかりません".to_string(),
                     data_is_safe: "何も変更されていません".to_string(),
                     next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -142,7 +171,9 @@ where
                 })?
             };
 
-            let ops = Ops::new(crate::git_runner()).with_labels(app_labels());
+            let ops = Ops::new(crate::git_runner())
+                .with_labels(app_labels())
+                .with_signing_user(signing.as_ref().map(|(id, login)| (*id, login.as_str())));
             let started_at = now_rfc3339();
             let journal_trigger = if trigger == OpTrigger::Auto {
                 JournalTrigger::Auto
@@ -303,6 +334,7 @@ pub(crate) fn pull_outcome_name(o: &PullOutcome) -> &'static str {
         PullOutcome::Merged { .. } => "merged",
         PullOutcome::Conflicted { .. } => "conflicted",
         PullOutcome::NoUpstream => "no-upstream",
+        PullOutcome::NeedsSizeDecision(_) => "needs-size-decision",
     }
 }
 
@@ -313,6 +345,7 @@ pub(crate) fn push_outcome_name(o: &UploadOutcome) -> &'static str {
         UploadOutcome::NothingToUpload => "nothing",
         UploadOutcome::PulledThenPushed(_) => "pulled-then-pushed",
         UploadOutcome::NeedsResolve(_) => "needs-resolve",
+        UploadOutcome::NeedsSizeDecision(_) => "needs-size-decision",
     }
 }
 

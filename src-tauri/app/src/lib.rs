@@ -1,4 +1,7 @@
 // Hikae の Tauri 層。コマンド・イベント、async操作キュー、状態管理を行う。
+// `AppError` は Tauri のコマンドが画面へ返す型（コード・params・3 要素の文言を持つ）で、
+// Box 化するとコマンドの戻り値型と生成される型定義が変わる。エラー経路は低頻度のため大きさは許容する。
+#![allow(clippy::result_large_err)]
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use core_git::GitRunner;
-use core_ops::{Ops, OpsError, SaveOptions, SizeLimits};
+use core_ops::{Ops, OpsError, SaveOptions};
 use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
@@ -21,16 +24,49 @@ mod scheduler;
 
 use events::{OpTrigger, StatusChanged};
 use ops_runner::{
-    memo_labels, pull_outcome_name, push_outcome_name, run_op, summarize_pull, summarize_push,
-    OpContext, OpSpec, OpSummary,
+    memo_labels, pull_outcome_name, push_outcome_name, run_op, size_limits_for, summarize_pull,
+    summarize_push, OpContext, OpSpec, OpSummary,
 };
 use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 
 // ========== エラー型（specta::Type 実装、設計書5章） ==========
 
-/// 何が起きたか、データは無事か、次の行動を含むエラー型
+/// 何が起きたか、データは無事か、次の行動を含むエラー型。
+///
+/// 画面は `code` と `params` から言語リソース（i18n キー）で文言を組み立てる。
+/// `what_happened` / `data_is_safe` / `next_action`（日本語）は、対応する文言が無い場合の
+/// フォールバックとして残す。`params` にはファイル名などの表示用の値だけを入れ、
+/// トークンや認証情報、git の標準エラー出力（`technical_info` に入れる）は入れない。
+///
+/// コード一覧（`OpsError` / 認証エラーと 1 対 1）:
+///
+/// - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
+///   `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
+///   `restore_point_not_found`、`unexpected`
+/// - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
+/// - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
+///   `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
+///   `keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、
+///   `github_error`
+/// - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
+///   `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
+///   `clone_failed`、`clone_timeout`、`clone_register_failed`
+/// - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、
+///   `project_list_failed`、`project_register_failed`、`project_remove_failed`、
+///   `relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、
+///   `relocate_failed`
+/// - 内部: `database_error`、`task_failed`、`lock_failed`、`settings_io_failed`、
+///   `invalid_settings`、`status_failed`、`history_failed`、`diff_failed`、
+///   `change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`
+///
+/// 大きいファイル（E07 / E08）はエラーではなく構造化した結果（`SizeCheckResult`）で返すため、
+/// ここにはコードを置かない。
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AppError {
+    /// 機械可読なエラーコード（上の一覧）。画面の文言の選択に使う
+    pub code: String,
+    /// 文言に差し込む値（キーと値の組。ファイル名など）
+    pub params: Vec<(String, String)>,
     /// 何が起きたか（ユーザー向けの平易な説明）
     pub what_happened: String,
     /// データは無事か（1文で）
@@ -43,40 +79,57 @@ pub struct AppError {
 
 impl AppError {
     pub(crate) fn from_ops_error(e: OpsError) -> Self {
-        let (what_happened, data_is_safe, next_action, technical_info) = match e {
-            OpsError::Conflict(files) => (
-                format!(
-                    "変更のぶつかり: {} 件のファイルが2台で別々に変更されました",
-                    files.len()
-                ),
-                "ファイルは安全に保存されています。".to_string(),
-                "競合を解消してください".to_string(),
-                Some(format!(
-                    "{} files: {:?}",
-                    files.len(),
-                    files.iter().map(|f| &f.path).collect::<Vec<_>>()
-                )),
-            ),
+        let mut params: Vec<(String, String)> = Vec::new();
+        let (code, what_happened, data_is_safe, next_action, technical_info) = match e {
+            OpsError::Conflict(files) => {
+                params.push(("count".to_string(), files.len().to_string()));
+                (
+                    "conflict",
+                    format!(
+                        "変更のぶつかり: {} 件のファイルが2台で別々に変更されました",
+                        files.len()
+                    ),
+                    "ファイルは安全に保存されています。".to_string(),
+                    "競合を解消してください".to_string(),
+                    Some(format!(
+                        "{} files: {:?}",
+                        files.len(),
+                        files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                    )),
+                )
+            }
             OpsError::Git(e) => (
+                if matches!(e, core_git::GitError::Timeout { .. }) {
+                    "git_timeout"
+                } else {
+                    "git_failed"
+                },
                 "Git 操作に失敗しました".to_string(),
                 "このパソコンのファイルは安全に残っています。".to_string(),
                 "もう一度試すか、詳細を確認してください".to_string(),
                 Some(format!("{:?}", e)),
             ),
             OpsError::Safety(e) => (
+                "safety_check_failed",
                 "安全性チェックに失敗しました".to_string(),
                 "ファイルは変更されていません。".to_string(),
                 "詳細を確認してください".to_string(),
                 Some(format!("{:?}", e)),
             ),
             OpsError::Io(e) => (
+                "io_error",
                 "ファイルアクセスエラーが発生しました".to_string(),
                 "ディスク容量や権限を確認してください".to_string(),
                 "詳細を確認してください".to_string(),
                 Some(e.to_string()),
             ),
             // 設計書 5章 E12: ファイルが他のアプリで使用中（Windows の共有違反）
-            OpsError::FileInUse { file } => (
+            OpsError::FileInUse { file } => {
+                if let Some(name) = &file {
+                    params.push(("file".to_string(), name.clone()));
+                }
+                (
+                "file_in_use",
                 match file {
                     Some(name) => {
                         format!(
@@ -92,14 +145,24 @@ impl AppError {
                 "そのファイルを開いているアプリ（Word など）を閉じてから、もう一度お試しください"
                     .to_string(),
                 Some("file-in-use".to_string()),
-            ),
+                )
+            }
             OpsError::InvalidInput(msg) => (
+                "invalid_input",
                 "指定された場所またはファイルを扱えませんでした".to_string(),
                 "ファイルは変更されていません。".to_string(),
                 "選び直してからもう一度試してください".to_string(),
                 Some(msg),
             ),
+            OpsError::RestorePointNotFound => (
+                "restore_point_not_found",
+                "中断された操作の前の状態が見つかりませんでした".to_string(),
+                "ファイルは変更されていません。データは無事です。".to_string(),
+                "取り込み直すか、履歴から元に戻したい時点を選んでください".to_string(),
+                None,
+            ),
             OpsError::Unexpected(msg) => (
+                "unexpected",
                 "予期しないエラーが発生しました".to_string(),
                 "データは安全に保存されています".to_string(),
                 "サポートに連絡してください".to_string(),
@@ -108,6 +171,8 @@ impl AppError {
         };
 
         AppError {
+            code: code.to_string(),
+            params,
             what_happened,
             data_is_safe,
             next_action,
@@ -172,12 +237,16 @@ where
     let joined = tauri::async_runtime::spawn_blocking(move || locks.run(&id, f))
         .await
         .map_err(|e| AppError {
+            code: "task_failed".to_string(),
+            params: Vec::new(),
             what_happened: "タスク実行に失敗しました".to_string(),
             data_is_safe: data_is_safe.to_string(),
             next_action: "もう一度試してください".to_string(),
             technical_info: Some(e.to_string()),
         })?;
     joined.map_err(|e| AppError {
+        code: "lock_failed".to_string(),
+        params: Vec::new(),
         what_happened: "ロック取得に失敗しました".to_string(),
         data_is_safe: data_is_safe.to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -194,6 +263,8 @@ where
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| AppError {
+            code: "task_failed".to_string(),
+            params: Vec::new(),
             what_happened: "タスク実行に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -204,12 +275,16 @@ where
 /// ID でプロジェクトを取得する（ストアのロックは取得後すぐ解放する）。
 fn load_project(store: &Arc<Mutex<Store>>, id: &str) -> Result<Project, AppError> {
     let guard = store.lock().map_err(|e| AppError {
+        code: "database_error".to_string(),
+        params: Vec::new(),
         what_happened: "データベースアクセスに失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
         technical_info: Some(e.to_string()),
     })?;
     guard.get_project(id).map_err(|e| AppError {
+        code: "project_not_found".to_string(),
+        params: Vec::new(),
         what_happened: "プロジェクトが見つかりません".to_string(),
         data_is_safe: "何も変更されていません".to_string(),
         next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -296,6 +371,8 @@ async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectI
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "project_list_failed".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクト一覧取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -303,6 +380,8 @@ async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectI
         })?;
 
         let projects = store_guard.list_projects().map_err(|e| AppError {
+            code: "project_list_failed".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクト一覧取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -323,6 +402,8 @@ async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectI
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -363,6 +444,8 @@ async fn add_project(
             // 既存のリポジトリを登録する場合に備えて、最初の保存の OID を先に調べておく
             let initial_commit = ops.initial_commit(&path).ok().flatten();
             let store_guard = store.lock().map_err(|e| AppError {
+                code: "database_error".to_string(),
+                params: Vec::new(),
                 what_happened: "データベースアクセスに失敗しました".to_string(),
                 data_is_safe: "ファイルは安全です".to_string(),
                 next_action: "もう一度試してください".to_string(),
@@ -379,6 +462,8 @@ async fn add_project(
                     "main",
                 )
                 .map_err(|e| AppError {
+                    code: "project_register_failed".to_string(),
+                    params: Vec::new(),
                     what_happened: "プロジェクト登録に失敗しました".to_string(),
                     data_is_safe: "ファイルは変更されていません".to_string(),
                     next_action: "もう一度試してください".to_string(),
@@ -404,6 +489,8 @@ async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "database_error".to_string(),
+            params: Vec::new(),
             what_happened: "データベースアクセスに失敗しました".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -411,6 +498,8 @@ async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result
         })?;
 
         store_guard.remove_project(&id).map_err(|e| AppError {
+            code: "project_remove_failed".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクト削除に失敗しました".to_string(),
             data_is_safe: "フォルダ内のファイルは残っています".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -421,6 +510,8 @@ async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "何も変更されていません".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -438,6 +529,8 @@ async fn project_status(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "status_failed".to_string(),
+            params: Vec::new(),
             what_happened: "状態取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -445,6 +538,8 @@ async fn project_status(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -480,6 +575,8 @@ async fn project_status(
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -497,6 +594,8 @@ async fn list_changes(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "change_list_failed".to_string(),
+            params: Vec::new(),
             what_happened: "変更一覧取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -504,6 +603,8 @@ async fn list_changes(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -520,6 +621,8 @@ async fn list_changes(
                 &["status", "--porcelain=v2", "-z", "--branch"],
             )
             .map_err(|e| AppError {
+                code: "change_list_failed".to_string(),
+                params: Vec::new(),
                 what_happened: "変更一覧の取得に失敗しました".to_string(),
                 data_is_safe: "ファイルは安全です".to_string(),
                 next_action: "もう一度試してください".to_string(),
@@ -559,6 +662,8 @@ async fn list_changes(
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -610,12 +715,7 @@ async fn run_save(
     // 分からない（未ログイン・オフライン）ときは既存の署名を変えない
     let signing = github::cached_signing_user(state);
     // 大きいファイルの警告閾値（設計書 7章。プロジェクト別の上書きを含む）。読めなければ既定値
-    let limits = store
-        .lock()
-        .ok()
-        .and_then(|g| g.effective_settings(&id).ok())
-        .map(|s| SizeLimits::from_warn_mb(s.large_file_warn_mb))
-        .unwrap_or_default();
+    let limits = size_limits_for(&store, &id);
     let options = SaveOptions {
         limits,
         accept_warned: choice.accept_warned,
@@ -748,6 +848,8 @@ async fn open_project_file(
     app.opener()
         .open_path(target.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|e| AppError {
+            code: "open_failed".to_string(),
+            params: Vec::new(),
             what_happened: "ファイルを開けませんでした".to_string(),
             data_is_safe: "ファイルは変更されていません。".to_string(),
             next_action: "対応するアプリがインストールされているか確認してください".to_string(),
@@ -758,21 +860,26 @@ async fn open_project_file(
 /// パス検証の拒否理由を AppError へ変換する。
 fn open_path_error(e: core_ops::OpenPathError) -> AppError {
     use core_ops::OpenPathError as E;
-    let (what_happened, next_action) = match &e {
+    let (code, what_happened, next_action) = match &e {
         E::NotFound => (
+            "file_not_found",
             "開こうとしたファイルが見つかりません",
             "削除や移動がされていないか確認してください",
         ),
         E::RootUnavailable(_) | E::Io(_) => (
+            "file_unreadable",
             "ファイルを確認できませんでした",
             "フォルダの場所や権限を確認してください",
         ),
         E::Invalid | E::NotRelative | E::Outside => (
+            "outside_project",
             "プロジェクトの外にあるファイルは開けません",
             "プロジェクト内のファイルを選んでください",
         ),
     };
     AppError {
+        code: code.to_string(),
+        params: Vec::new(),
         what_happened: what_happened.to_string(),
         data_is_safe: "ファイルは変更されていません。".to_string(),
         next_action: next_action.to_string(),
@@ -786,6 +893,8 @@ fn conflict_item(f: core_ops::ConflictFile) -> ConflictItem {
         path: f.path,
         this_saved_at: f.this_saved_at.map(|t| t as f64),
         cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
+        this_pc_name: f.this_pc_name,
+        cloud_pc_name: f.cloud_pc_name,
         kind: match f.kind {
             core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
             core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
@@ -805,6 +914,7 @@ async fn pull(
     id: String,
 ) -> Result<PullResult, AppError> {
     let ctx = OpContext::new(app, &state);
+    let limits = size_limits_for(&ctx.store, &id);
     let result = run_op(
         &ctx,
         &id,
@@ -814,7 +924,7 @@ async fn pull(
             target: None,
             data_is_safe: "ファイルは安全です",
         },
-        |ops, path| ops.pull(path),
+        move |ops, path| ops.pull_with(path, limits),
         summarize_pull,
     )
     .await;
@@ -825,15 +935,17 @@ async fn pull(
     let outcome = result?;
 
     let name = pull_outcome_name(&outcome).to_string();
-    let conflicts = match outcome {
+    let (conflicts, size_check) = match outcome {
         core_ops::PullOutcome::Conflicted { files } => {
-            files.into_iter().map(conflict_item).collect()
+            (files.into_iter().map(conflict_item).collect(), None)
         }
-        _ => vec![],
+        core_ops::PullOutcome::NeedsSizeDecision(found) => (vec![], Some(size_check_result(found))),
+        _ => (vec![], None),
     };
     Ok(PullResult {
         outcome: name,
         conflicts,
+        size_check,
     })
 }
 
@@ -846,6 +958,7 @@ async fn push(
     id: String,
 ) -> Result<PushResult, AppError> {
     let ctx = OpContext::new(app, &state);
+    let limits = size_limits_for(&ctx.store, &id);
     let result = run_op(
         &ctx,
         &id,
@@ -855,7 +968,7 @@ async fn push(
             target: None,
             data_is_safe: "ファイルは安全です",
         },
-        |ops, path| ops.upload(path),
+        move |ops, path| ops.upload_with(path, limits),
         summarize_push,
     )
     .await;
@@ -864,8 +977,13 @@ async fn push(
         .note_result(&id, SyncTask::Push, push_task_result(&result));
     let outcome = result?;
 
+    let size_check = match &outcome {
+        core_ops::UploadOutcome::NeedsSizeDecision(found) => Some(size_check_result(found.clone())),
+        _ => None,
+    };
     Ok(PushResult {
         outcome: push_outcome_name(&outcome).to_string(),
+        size_check,
     })
 }
 
@@ -880,6 +998,8 @@ async fn list_history(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "history_failed".to_string(),
+            params: Vec::new(),
             what_happened: "履歴取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -887,6 +1007,8 @@ async fn list_history(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -910,11 +1032,14 @@ async fn list_history(
                 message: e.message,
                 changed_files_count: e.changed_files_count,
                 is_snapshot: e.snapshot_ref.is_some(),
+                pc_name: e.pc_name,
             })
             .collect())
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -935,6 +1060,8 @@ async fn diff(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "diff_failed".to_string(),
+            params: Vec::new(),
             what_happened: "差分取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -942,6 +1069,8 @@ async fn diff(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -971,6 +1100,8 @@ async fn diff(
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -989,6 +1120,8 @@ async fn restore_preview(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "preview_failed".to_string(),
+            params: Vec::new(),
             what_happened: "プレビュー生成に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -996,6 +1129,8 @@ async fn restore_preview(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -1019,6 +1154,8 @@ async fn restore_preview(
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -1066,6 +1203,8 @@ async fn list_conflicts(
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
+            code: "conflict_list_failed".to_string(),
+            params: Vec::new(),
             what_happened: "競合一覧取得に失敗しました".to_string(),
             data_is_safe: "ファイルは安全です".to_string(),
             next_action: "もう一度試してください".to_string(),
@@ -1073,6 +1212,8 @@ async fn list_conflicts(
         })?;
 
         let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません".to_string(),
             data_is_safe: "何も変更されていません".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -1088,24 +1229,12 @@ async fn list_conflicts(
             .conflicts(&project.path)
             .map_err(AppError::from_ops_error)?;
 
-        Ok(conflicts
-            .into_iter()
-            .map(|f| ConflictItem {
-                path: f.path,
-                this_saved_at: f.this_saved_at.map(|t| t as f64),
-                cloud_saved_at: f.cloud_saved_at.map(|t| t as f64),
-                kind: match f.kind {
-                    core_ops::ConflictKind::BothModified => ConflictKind::BothModified,
-                    core_ops::ConflictKind::BothAdded => ConflictKind::BothAdded,
-                    core_ops::ConflictKind::DeletedByUs => ConflictKind::DeletedByUs,
-                    core_ops::ConflictKind::DeletedByThem => ConflictKind::DeletedByThem,
-                    core_ops::ConflictKind::BothDeleted => ConflictKind::BothDeleted,
-                },
-            })
-            .collect())
+        Ok(conflicts.into_iter().map(conflict_item).collect())
     })
     .await
     .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
         what_happened: "タスク実行に失敗しました".to_string(),
         data_is_safe: "ファイルは安全です".to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -1366,6 +1495,156 @@ async fn add_files(
     })
 }
 
+/// 過去の版のファイルを書き出す一時フォルダ（`<temp>/hikae-preview`）。
+/// 配下は `<プロジェクト ID>/<短縮コミット>/<相対パス>`。古いものは起動時に削除する。
+fn preview_root() -> PathBuf {
+    std::env::temp_dir().join("hikae-preview")
+}
+
+/// プロジェクト ID を一時フォルダ名に使えるか（パス区切りや `..` を含まない）
+fn is_safe_folder_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// 過去の版のファイルを開く（設計書 4.7）。
+///
+/// 指定時点の内容をアプリ専用の一時フォルダへ書き出して読み取り専用にし、既定のアプリで開く。
+/// プロジェクトのファイルとリポジトリは変更しない（読み取りのみのため直列キューは通さない）。
+/// パスは `..`・絶対パス・`.git` 配下を拒否する。
+#[tauri::command]
+#[specta::specta]
+async fn open_file_at(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    commit: String,
+    relative_path: String,
+) -> Result<(), AppError> {
+    let store = state.store_clone();
+    let target = run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        if !is_safe_folder_name(&id) {
+            return Err(AppError {
+                code: "project_not_found".to_string(),
+                params: Vec::new(),
+                what_happened: "プロジェクトが見つかりません".to_string(),
+                data_is_safe: "何も変更されていません".to_string(),
+                next_action: "プロジェクト一覧から確認してください".to_string(),
+                technical_info: None,
+            });
+        }
+        let ops = Ops::new(crate::git_runner());
+        ops.export_file_at(
+            &project.path,
+            &commit,
+            &relative_path,
+            &preview_root().join(&id),
+        )
+        .map_err(AppError::from_ops_error)
+    })
+    .await?;
+
+    app.opener()
+        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| AppError {
+            code: "open_failed".to_string(),
+            params: Vec::new(),
+            what_happened: "ファイルを開けませんでした".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "対応するアプリがインストールされているか確認してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })
+}
+
+/// 中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
+///
+/// 対象は保存・取り込み系（`save` / `pull` / `push` / `resolve`）。復元点は
+/// `refs/hikae/backup/` の、その操作が始まった後に作られた最新のもの。戻す前にいまの状態の
+/// 復元点を作り、`restore --source` で戻す（`reset --hard` / `checkout -f` は使わない）。
+/// 実行は直列キューとジャーナルを通す。復元点が見つからなければ何も変更せずエラーを返し、
+/// 中断の印は残る。成功すると中断の印を解除する。
+#[tauri::command]
+#[specta::specta]
+async fn recover_interrupted(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    let store = state.store_clone();
+    let lookup_id = id.clone();
+    let entry = run_blocking(move || {
+        let guard = store.lock().map_err(|e| AppError {
+            code: "database_error".to_string(),
+            params: Vec::new(),
+            what_happened: "データベースアクセスに失敗しました".to_string(),
+            data_is_safe: "ファイルは変更されていません".to_string(),
+            next_action: "もう一度試してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })?;
+        guard
+            .interrupted_operation(&lookup_id)
+            .map_err(|e| AppError {
+                code: "database_error".to_string(),
+                params: Vec::new(),
+                what_happened: "データベースアクセスに失敗しました".to_string(),
+                data_is_safe: "ファイルは変更されていません".to_string(),
+                next_action: "もう一度試してください".to_string(),
+                technical_info: Some(format!("{e:?}")),
+            })
+    })
+    .await?;
+
+    let Some(entry) = entry else {
+        return Err(AppError {
+            code: "no_interrupted_operation".to_string(),
+            params: Vec::new(),
+            what_happened: "中断された操作は見つかりませんでした".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "画面を更新してください".to_string(),
+            technical_info: None,
+        });
+    };
+    if !core_ops::is_recoverable_operation(&entry.operation) {
+        return Err(AppError {
+            code: "not_recoverable".to_string(),
+            params: vec![("operation".to_string(), entry.operation)],
+            what_happened: "中断された操作は、自動では元に戻せません".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "履歴から、戻したい時点を選んでください".to_string(),
+            technical_info: None,
+        });
+    }
+    // 開始時刻が読めなければ復元点を特定できない（古い復元点を使わない）
+    let Some(started_at) = entry.started_at_unix() else {
+        return Err(AppError::from_ops_error(OpsError::RestorePointNotFound));
+    };
+
+    let ctx = OpContext::new(app, &state);
+    let operation = entry.operation.clone();
+    let target = entry.operation;
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "recover",
+            trigger: OpTrigger::Manual,
+            target: Some(target),
+            data_is_safe: "ファイルは変更されていません",
+        },
+        move |ops, path| ops.recover_interrupted(path, &operation, started_at),
+        |_| OpSummary {
+            detail: "recovered".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 /// フォルダが見つからないプロジェクトの登録パスを付け替える。
 /// 付け替え先が同じプロジェクトと確認できた場合のみ更新し、ファイルは一切変更しない。
 #[tauri::command]
@@ -1392,23 +1671,28 @@ async fn relocate_project(
                     project.initial_commit.as_deref(),
                 )
                 .map_err(AppError::from_ops_error)?;
-            let (what_happened, next_action) = match check {
-                core_ops::RelocateCheck::Same => ("", ""),
+            let (code, what_happened, next_action) = match check {
+                core_ops::RelocateCheck::Same => ("", "", ""),
                 core_ops::RelocateCheck::NotARepository => (
+                    "relocate_not_a_project",
                     "選んだフォルダはプロジェクトのフォルダではありません",
                     "プロジェクトのフォルダそのものを選び直してください",
                 ),
                 core_ops::RelocateCheck::DifferentRepository => (
+                    "relocate_different_project",
                     "選んだフォルダは、このプロジェクトのものではありません",
                     "移動したプロジェクトのフォルダを選び直してください",
                 ),
                 core_ops::RelocateCheck::CannotVerify => (
+                    "relocate_cannot_verify",
                     "このプロジェクトは保存先も最初の保存の記録も登録されていないため、同じフォルダか確認できません",
                     "一覧から外して、フォルダを登録し直してください",
                 ),
             };
             if check != core_ops::RelocateCheck::Same {
                 return Err(AppError {
+                    code: code.to_string(),
+                    params: Vec::new(),
                     what_happened: what_happened.to_string(),
                     data_is_safe: "ファイルは変更されていません。".to_string(),
                     next_action: next_action.to_string(),
@@ -1417,6 +1701,8 @@ async fn relocate_project(
             }
 
             let guard = store.lock().map_err(|e| AppError {
+                code: "database_error".to_string(),
+                params: Vec::new(),
                 what_happened: "データベースアクセスに失敗しました".to_string(),
                 data_is_safe: "ファイルは変更されていません。".to_string(),
                 next_action: "もう一度試してください".to_string(),
@@ -1425,12 +1711,16 @@ async fn relocate_project(
             guard
                 .update_project_path(&id, &new_path)
                 .map_err(|e| AppError {
+                    code: "relocate_failed".to_string(),
+                    params: Vec::new(),
                     what_happened: "フォルダの場所を更新できませんでした".to_string(),
                     data_is_safe: "ファイルは変更されていません。".to_string(),
                     next_action: "もう一度試してください".to_string(),
                     technical_info: Some(format!("{e:?}")),
                 })?;
             let updated = guard.get_project(&id).map_err(|e| AppError {
+                code: "project_not_found".to_string(),
+                params: Vec::new(),
                 what_happened: "プロジェクトが見つかりません".to_string(),
                 data_is_safe: "ファイルは変更されていません。".to_string(),
                 next_action: "プロジェクト一覧から確認してください".to_string(),
@@ -1561,12 +1851,16 @@ pub struct SaveSizeChoice {
 pub struct PullResult {
     pub outcome: String,
     pub conflicts: Vec<ConflictItem>,
+    /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容（E07 / E08）。なければ null
+    pub size_check: Option<SizeCheckResult>,
 }
 
 /// アップロード結果
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct PushResult {
     pub outcome: String,
+    /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容。なければ null
+    pub size_check: Option<SizeCheckResult>,
 }
 
 /// 履歴アイテム
@@ -1577,6 +1871,8 @@ pub struct HistoryItem {
     pub message: String,
     pub changed_files_count: u32,
     pub is_snapshot: bool,
+    /// この保存を作った PC の名前。記録が無ければ null。`message` には含まれない
+    pub pc_name: Option<String>,
 }
 
 /// 差分行
@@ -1613,6 +1909,10 @@ pub struct ConflictItem {
     pub this_saved_at: Option<f64>,
     /// クラウド側の最終保存日時（Unix 秒）。不明なら null
     pub cloud_saved_at: Option<f64>,
+    /// この PC 側の最終保存を作った PC の名前。記録が無ければ null
+    pub this_pc_name: Option<String>,
+    /// クラウド側の最終保存を作った PC の名前。記録が無ければ null
+    pub cloud_pc_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
@@ -1798,6 +2098,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             add_files,
             relocate_project,
             list_point_changes,
+            open_file_at,
+            recover_interrupted,
             github::get_session,
             github::start_login,
             github::wait_login,
@@ -1887,6 +2189,15 @@ pub fn run() {
                     .emit(app.handle());
                 }
             }
+
+            // 過去の版を開くために書き出した一時ファイルのうち、古いものを削除する
+            std::thread::spawn(|| {
+                core_ops::cleanup_old_previews(
+                    &preview_root(),
+                    core_ops::PREVIEW_MAX_AGE,
+                    std::time::SystemTime::now(),
+                );
+            });
 
             // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）
             scheduler::spawn(app.handle().clone());

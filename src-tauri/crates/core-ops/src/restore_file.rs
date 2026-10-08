@@ -7,8 +7,9 @@
 use crate::models::*;
 use crate::open_path::validate_relative;
 use crate::operations::{conflicts, current_branch, read_status};
+use crate::pc_name::Meta;
 use core_git::GitRunner;
-use core_safety::{create_restore_point, list_snapshots, BACKUP_REF_PREFIX, SNAPSHOT_REF_PREFIX};
+use core_safety::{list_snapshots, BACKUP_REF_PREFIX, SNAPSHOT_REF_PREFIX};
 use std::path::Path;
 use time::OffsetDateTime;
 
@@ -60,7 +61,12 @@ pub(crate) fn resolve_commit(
 }
 
 /// 指定時点でのファイルサイズ。通常のファイルとして存在しなければ None。
-fn size_at(runner: &GitRunner, repo: &Path, oid: &str, rel: &str) -> Result<Option<u64>, OpsError> {
+pub(crate) fn size_at(
+    runner: &GitRunner,
+    repo: &Path,
+    oid: &str,
+    rel: &str,
+) -> Result<Option<u64>, OpsError> {
     let out = runner.run_ok(repo, &["ls-tree", "-z", "-l", oid, "--", rel])?;
     Ok(crate::operations::parse_ls_tree_long(&out.stdout)
         .into_iter()
@@ -138,6 +144,7 @@ pub(crate) fn restore_file(
     commit: &str,
     path: &str,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<RestoreFileOutcome, OpsError> {
     let current_conflicts = conflicts(runner, repo)?;
     if !current_conflicts.is_empty() {
@@ -155,7 +162,7 @@ pub(crate) fn restore_file(
 
     let dirty_before = !read_status(runner, repo)?.entries.is_empty();
     let branch = current_branch(runner, repo)?;
-    let point = create_restore_point(runner, repo, &branch, "restore-file", now)?;
+    let point = meta.restore_point(runner, repo, &branch, "restore-file", now)?;
 
     let spec = literal_pathspec(&rel);
     runner.run_ok(
@@ -237,6 +244,7 @@ pub(crate) fn undo_restore(
     repo: &Path,
     restore_point: &str,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<(), OpsError> {
     let oid = resolve_restore_point(runner, repo, restore_point)?;
 
@@ -246,7 +254,7 @@ pub(crate) fn undo_restore(
     }
 
     let branch = current_branch(runner, repo)?;
-    let _ = create_restore_point(runner, repo, &branch, "undo-restore", now)?;
+    let _ = meta.restore_point(runner, repo, &branch, "undo-restore", now)?;
 
     runner.run_ok(
         repo,

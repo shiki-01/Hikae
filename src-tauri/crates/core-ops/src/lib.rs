@@ -9,6 +9,9 @@ mod memo;
 mod models;
 mod open_path;
 mod operations;
+mod pc_name;
+mod preview_file;
+mod recover;
 mod relocate;
 mod restore_file;
 mod size_check;
@@ -25,9 +28,13 @@ pub use models::{
     RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
 };
 pub use open_path::{resolve_in_project, OpenPathError};
+pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
+pub use preview_file::{cleanup_old_previews, PREVIEW_MAX_AGE};
+pub use recover::is_recoverable_operation;
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
 
 use core_git::GitRunner;
+use core_safety::Signature;
 use std::path::Path;
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -37,6 +44,10 @@ pub struct Ops {
     runner: Arc<GitRunner>,
     clock: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
     labels: Labels,
+    /// 復元点（自動保存）の作者。未ログインは固定の `Hikae`
+    signature: Signature,
+    /// この PC の名前（保存・取り込みの commit のトレーラーに使う）。取得できなければ None
+    pc_name: Option<String>,
 }
 
 impl Ops {
@@ -47,6 +58,40 @@ impl Ops {
             runner: r,
             clock: Arc::new(OffsetDateTime::now_utc),
             labels: Labels::default(),
+            signature: Signature::default(),
+            pc_name: pc_name::local_pc_name(),
+        }
+    }
+
+    /// 復元点（自動保存）の作者を指定する。ログイン済みなら GitHub のユーザー名と noreply アドレス。
+    pub fn with_signature(mut self, signature: Signature) -> Self {
+        self.signature = signature;
+        self
+    }
+
+    /// ログイン済みのユーザー（GitHub の数値 ID とログイン名）を、復元点（自動保存）の作者にする。
+    /// `None`（未ログイン・確認できない）なら固定の `Hikae` のまま。
+    pub fn with_signing_user(self, user: Option<(u64, &str)>) -> Self {
+        match user {
+            Some(_) => {
+                let identity = resolve_identity(user);
+                self.with_signature(Signature::new(&identity.name, &identity.email))
+            }
+            None => self,
+        }
+    }
+
+    /// この PC の名前を指定する（テスト用。None ならトレーラーを付けない）。
+    /// 既定は環境変数などから得た PC 名。
+    pub fn with_pc_name(mut self, pc_name: Option<String>) -> Self {
+        self.pc_name = pc_name;
+        self
+    }
+
+    fn meta(&self) -> pc_name::Meta<'_> {
+        pc_name::Meta {
+            signature: &self.signature,
+            pc_name: self.pc_name.as_deref(),
         }
     }
 
@@ -111,7 +156,7 @@ impl Ops {
         memo: &str,
         options: &SaveOptions,
     ) -> Result<SaveOutcome, OpsError> {
-        operations::save(self.runner(), repo, memo, options, self.now())
+        operations::save(self.runner(), repo, memo, options, self.now(), self.meta())
     }
 
     /// 保存した場合に問題になる大きいファイルを調べる（読み取りのみ）。
@@ -125,7 +170,20 @@ impl Ops {
 
     /// upstream から取り込む。未保存変更があれば自動保存してから取り込む。
     pub fn pull(&self, repo: &Path) -> Result<PullOutcome, OpsError> {
-        operations::pull(self.runner(), repo, self.now(), &self.labels)
+        self.pull_with(repo, SizeLimits::default())
+    }
+
+    /// `pull` に、取り込み前の自動保存のサイズ検査の閾値を指定する版。
+    /// 大きいファイルがあれば何も変更せず `NeedsSizeDecision` を返す。
+    pub fn pull_with(&self, repo: &Path, limits: SizeLimits) -> Result<PullOutcome, OpsError> {
+        operations::pull(
+            self.runner(),
+            repo,
+            self.now(),
+            &self.labels,
+            limits,
+            self.meta(),
+        )
     }
 
     /// 現在の競合ファイル一覧を返す。
@@ -149,17 +207,30 @@ impl Ops {
             message,
             self.now(),
             &self.labels,
+            self.meta(),
         )
     }
 
     /// merge をキャンセル。復元点は残る。
     pub fn abort_merge(&self, repo: &Path) -> Result<(), OpsError> {
-        operations::abort_merge(self.runner(), repo, self.now())
+        operations::abort_merge(self.runner(), repo, self.now(), self.meta())
     }
 
     /// upstream に push する。拒否されたら pull→再試行。
     pub fn upload(&self, repo: &Path) -> Result<UploadOutcome, OpsError> {
-        operations::upload(self.runner(), repo, self.now(), &self.labels)
+        self.upload_with(repo, SizeLimits::default())
+    }
+
+    /// `upload` に、取り込み前の自動保存のサイズ検査の閾値を指定する版。
+    pub fn upload_with(&self, repo: &Path, limits: SizeLimits) -> Result<UploadOutcome, OpsError> {
+        operations::upload(
+            self.runner(),
+            repo,
+            self.now(),
+            &self.labels,
+            limits,
+            self.meta(),
+        )
     }
 
     /// 同期状態を返す。ahead / behind / has_upstream / dirty。
@@ -210,7 +281,7 @@ impl Ops {
     /// 指定の時点へ復元。復元前に復元点を作成し、指定時点のファイル状態に復元。
     /// 戻り値は取り消し用の復元点（`refs/hikae/` 配下の ref 名）。`undo_restore` にそのまま渡せる。
     pub fn restore(&self, repo: &Path, target_commit: &str) -> Result<Option<String>, OpsError> {
-        operations::restore(self.runner(), repo, target_commit, self.now())
+        operations::restore(self.runner(), repo, target_commit, self.now(), self.meta())
     }
 
     /// 1 ファイルだけを戻した場合の影響（読み取りのみ）。
@@ -231,13 +302,13 @@ impl Ops {
         commit: &str,
         path: &str,
     ) -> Result<RestoreFileOutcome, OpsError> {
-        restore_file::restore_file(self.runner(), repo, commit, path, self.now())
+        restore_file::restore_file(self.runner(), repo, commit, path, self.now(), self.meta())
     }
 
     /// 復元点（`refs/hikae/` 配下の ref 名、または完全な OID）の内容に戻す。
     /// 戻す前に、いまの状態の復元点を作る。
     pub fn undo_restore(&self, repo: &Path, restore_point: &str) -> Result<(), OpsError> {
-        restore_file::undo_restore(self.runner(), repo, restore_point, self.now())
+        restore_file::undo_restore(self.runner(), repo, restore_point, self.now(), self.meta())
     }
 
     /// その保存で変更されたファイルの一覧（変更の種類つき）。
@@ -257,7 +328,45 @@ impl Ops {
         sources: &[std::path::PathBuf],
         dest_subdir: &str,
     ) -> Result<AddFilesOutcome, OpsError> {
-        add_files::add_files(self.runner(), repo, sources, dest_subdir, self.now())
+        add_files::add_files(
+            self.runner(),
+            repo,
+            sources,
+            dest_subdir,
+            self.now(),
+            self.meta(),
+        )
+    }
+
+    /// 指定時点の 1 ファイルを `preview_root/<短縮コミット>/<相対パス>` へ書き出し、読み取り専用にして
+    /// そのパスを返す（過去の版を開くための一時ファイル。設計書 4.7）。リポジトリは変更しない。
+    pub fn export_file_at(
+        &self,
+        repo: &Path,
+        commit: &str,
+        relative_path: &str,
+        preview_root: &Path,
+    ) -> Result<std::path::PathBuf, OpsError> {
+        preview_file::export_file_at(self.runner(), repo, commit, relative_path, preview_root)
+    }
+
+    /// 中断された操作（`operation`、開始は Unix 秒 `started_at_unix`）の直前に作られた復元点へ、
+    /// 作業フォルダを戻す。戻す前に、いまの状態の復元点を新たに作る。
+    /// 復元点が見つからなければ何も変更せず `RestorePointNotFound`。戻した復元点の ref 名を返す。
+    pub fn recover_interrupted(
+        &self,
+        repo: &Path,
+        operation: &str,
+        started_at_unix: i64,
+    ) -> Result<String, OpsError> {
+        recover::recover_interrupted(
+            self.runner(),
+            repo,
+            operation,
+            started_at_unix,
+            self.now(),
+            self.meta(),
+        )
     }
 
     /// 付け替え先のフォルダが登録済みプロジェクトと同じリポジトリか確認する（ファイルは変更しない）。

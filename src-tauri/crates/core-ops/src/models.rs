@@ -48,6 +48,9 @@ pub enum PullOutcome {
     Conflicted { files: Vec<ConflictFile> },
     /// upstream が未設定
     NoUpstream,
+    /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず取り込みを見送った（E07 / E08）。
+    /// 復元点も作っていない。画面で保存してから（外す／承諾する）取り込みをやり直す
+    NeedsSizeDecision(SizeFindings),
 }
 
 /// アップロードの結果
@@ -61,6 +64,8 @@ pub enum UploadOutcome {
     PulledThenPushed(PullOutcome),
     /// pull で競合。解消待ち。
     NeedsResolve(Vec<ConflictFile>),
+    /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った（アップロードもしていない）
+    NeedsSizeDecision(SizeFindings),
 }
 
 /// 競合ファイルの情報
@@ -72,6 +77,10 @@ pub struct ConflictFile {
     pub this_saved_at: Option<i64>,
     /// クラウド側でそのファイルが最後に保存された時刻（Unix 秒）。取得できなければ None
     pub cloud_saved_at: Option<i64>,
+    /// この PC 側の最終保存を作った PC の名前（commit のトレーラー）。記録が無ければ None
+    pub this_pc_name: Option<String>,
+    /// クラウド側の最終保存を作った PC の名前。記録が無ければ None
+    pub cloud_pc_name: Option<String>,
 }
 
 /// 競合の種類
@@ -150,6 +159,10 @@ pub enum OpsError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// 中断された操作の直前に作られた復元点が見つからない（何も変更していない）
+    #[error("restore point for the interrupted operation was not found")]
+    RestorePointNotFound,
+
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
     Unexpected(String),
@@ -201,6 +214,9 @@ pub struct HistoryEntry {
     pub changed_files_count: u32,
     /// 手動の保存か自動保存か（`snapshot_ref` の有無と常に対応する）
     pub kind: HistoryKind,
+    /// この保存を作った PC の名前（commit のトレーラー `Hikae-PC`）。記録が無ければ None。
+    /// `message` にはトレーラーを含めない
+    pub pc_name: Option<String>,
 }
 
 /// 特定時点のファイル情報
@@ -404,6 +420,7 @@ impl OpsError {
             OpsError::FileInUse { .. } => "file-in-use",
             OpsError::Conflict(_) => "conflict",
             OpsError::InvalidInput(_) => "invalid-input",
+            OpsError::RestorePointNotFound => "restore-point-not-found",
             OpsError::Unexpected(_) => "unexpected",
         }
     }

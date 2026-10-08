@@ -91,7 +91,23 @@ pub(crate) fn auth_error(e: AuthError, data_is_safe: &str) -> AppError {
             "しばらくしてから、もう一度お試しください",
         ),
     };
+    let code = match &e {
+        AuthError::Unauthorized => "not_logged_in",
+        AuthError::Forbidden => "github_forbidden",
+        AuthError::RateLimited => "github_rate_limited",
+        AuthError::NetworkUnavailable => "network_unavailable",
+        AuthError::ServerUnavailable => "github_unavailable",
+        AuthError::MissingClientId | AuthError::DeviceFlowDisabled => "login_not_configured",
+        AuthError::KeyringError
+        | AuthError::FailedToSaveToken
+        | AuthError::FailedToLoadToken
+        | AuthError::FailedToDeleteToken => "keychain_error",
+        AuthError::NoPendingLogin | AuthError::LoginInProgress => "login_not_in_progress",
+        _ => "github_error",
+    };
     AppError {
+        code: code.to_string(),
+        params: Vec::new(),
         what_happened: what_happened.to_string(),
         data_is_safe: data_is_safe.to_string(),
         next_action: next_action.to_string(),
@@ -103,6 +119,8 @@ const FILES_SAFE: &str = "ファイルはこの PC に安全に残っていま�
 
 fn store_error(e: StoreError) -> AppError {
     AppError {
+        code: "database_error".to_string(),
+        params: Vec::new(),
         what_happened: "データベースアクセスに失敗しました".to_string(),
         data_is_safe: FILES_SAFE.to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -112,6 +130,8 @@ fn store_error(e: StoreError) -> AppError {
 
 fn lock_error() -> AppError {
     AppError {
+        code: "database_error".to_string(),
+        params: Vec::new(),
         what_happened: "データベースアクセスに失敗しました".to_string(),
         data_is_safe: FILES_SAFE.to_string(),
         next_action: "もう一度試してください".to_string(),
@@ -361,7 +381,9 @@ pub fn open_login_page(
 ) -> Result<(), AppError> {
     use tauri_plugin_opener::OpenerExt;
 
-    let fail = |what: &str, next: &str, technical: Option<String>| AppError {
+    let fail = |code: &str, what: &str, next: &str, technical: Option<String>| AppError {
+        code: code.to_string(),
+        params: Vec::new(),
         what_happened: what.to_string(),
         data_is_safe: FILES_SAFE.to_string(),
         next_action: next.to_string(),
@@ -369,6 +391,7 @@ pub fn open_login_page(
     };
     let Some(url) = state.login.verification_uri() else {
         return Err(fail(
+            "login_not_in_progress",
             "ログインの手続きが進行中ではありません。",
             "もう一度ログインを始めてください",
             None,
@@ -376,6 +399,7 @@ pub fn open_login_page(
     };
     if !core_github::is_login_page_url(&url) {
         return Err(fail(
+            "login_page_unexpected",
             "ログインのページを開けませんでした。",
             "表示されているページを、ブラウザで手動で開いてください",
             Some("unexpected verification url".to_string()),
@@ -385,6 +409,7 @@ pub fn open_login_page(
         .open_url(core_github::LOGIN_PAGE_URL, None::<&str>)
         .map_err(|e| {
             fail(
+                "browser_open_failed",
                 "ブラウザを開けませんでした。",
                 "表示されているページを、ブラウザで手動で開いてください",
                 Some(e.to_string()),
@@ -541,8 +566,10 @@ fn emit_clone(app: &tauri::AppHandle, project_id: &str, phase: ClonePhase) {
     .emit(app);
 }
 
-fn clone_input_error(what: &str, next: &str) -> AppError {
+fn clone_input_error(code: &str, what: &str, next: &str) -> AppError {
     AppError {
+        code: code.to_string(),
+        params: Vec::new(),
         what_happened: what.to_string(),
         data_is_safe: "ファイルは変更されていません。".to_string(),
         next_action: next.to_string(),
@@ -556,25 +583,31 @@ fn clone_failure(e: OpsError) -> AppError {
     if let OpsError::Git(GitError::Failed { stderr, .. }) = &e {
         let technical = Some(redact(stderr));
         let lower = stderr.to_ascii_lowercase();
-        let (what, next) = match core_watch::classify_failure(stderr) {
+        let (code, what, next) = match core_watch::classify_failure(stderr) {
             FailureKind::AuthFailed => (
+                "not_logged_in",
                 "GitHub との接続が切れました。",
                 "もう一度ログインしてください",
             ),
             FailureKind::Offline => (
+                "network_unavailable",
                 "インターネットに接続できません。",
                 "接続を確認してから、もう一度お試しください",
             ),
             _ if lower.contains("not found") => (
+                "remote_not_found",
                 "クラウドの保管場所が見つかりません。GitHub 上で削除または名前変更された可能性があります。",
                 "一覧から選び直してください",
             ),
             _ => (
+                "clone_failed",
                 "GitHub からの取得に失敗しました。",
                 "しばらくしてから、もう一度お試しください",
             ),
         };
         return AppError {
+            code: code.to_string(),
+            params: Vec::new(),
             what_happened: what.to_string(),
             data_is_safe: safe.to_string(),
             next_action: next.to_string(),
@@ -583,6 +616,8 @@ fn clone_failure(e: OpsError) -> AppError {
     }
     if matches!(e, OpsError::Git(GitError::Timeout { .. })) {
         return AppError {
+            code: "clone_timeout".to_string(),
+            params: Vec::new(),
             what_happened: "取得に時間がかかりすぎたため中断しました。".to_string(),
             data_is_safe: safe.to_string(),
             next_action: "接続を確認してから、もう一度お試しください".to_string(),
@@ -610,12 +645,14 @@ pub async fn clone_project(
 ) -> Result<ProjectInfo, AppError> {
     let Some(url) = clone_url_for(&repo) else {
         return Err(clone_input_error(
+            "clone_invalid_repo",
             "取得するプロジェクトの指定が正しくありません。",
             "一覧から選び直してください",
         ));
     };
     if !path.is_absolute() {
         return Err(clone_input_error(
+            "clone_invalid_destination",
             "取得先のフォルダの指定が正しくありません。",
             "フォルダを選び直してください",
         ));
@@ -664,6 +701,7 @@ pub async fn clone_project(
                 let guard = store.lock().map_err(|_| lock_error())?;
                 if guard.get_project(&task_id).is_ok() {
                     return Err(clone_input_error(
+                        "project_already_registered",
                         "このプロジェクトはすでに登録されています。",
                         "一覧から開いてください",
                     ));
@@ -671,6 +709,7 @@ pub async fn clone_project(
                 let registered = guard.list_projects().map_err(store_error)?;
                 if registered.iter().any(|p| p.path == path) {
                     return Err(clone_input_error(
+                        "folder_already_registered",
                         "このフォルダはすでに別のプロジェクトとして登録されています。",
                         "別のフォルダを選んでください",
                     ));
@@ -678,14 +717,25 @@ pub async fn clone_project(
             }
             // 取得先は存在しないか空であること
             if let Err(reason) = core_ops::check_clone_destination(&path) {
-                let what = match reason {
-                    CloneDestinationError::NotEmpty => {
-                        "選んだフォルダには、すでにファイルが入っています。"
-                    }
-                    CloneDestinationError::NotADirectory => "選んだ場所はフォルダではありません。",
-                    CloneDestinationError::Unreadable => "選んだフォルダの中身を確認できません。",
+                let (code, what) = match reason {
+                    CloneDestinationError::NotEmpty => (
+                        "destination_not_empty",
+                        "選んだフォルダには、すでにファイルが入っています。",
+                    ),
+                    CloneDestinationError::NotADirectory => (
+                        "destination_not_a_folder",
+                        "選んだ場所はフォルダではありません。",
+                    ),
+                    CloneDestinationError::Unreadable => (
+                        "destination_unreadable",
+                        "選んだフォルダの中身を確認できません。",
+                    ),
                 };
-                return Err(clone_input_error(what, "空のフォルダを選び直してください"));
+                return Err(clone_input_error(
+                    code,
+                    what,
+                    "空のフォルダを選び直してください",
+                ));
             }
 
             emit_clone(&task_app, &task_id, ClonePhase::Downloading);
@@ -708,6 +758,8 @@ pub async fn clone_project(
             guard
                 .add_project(&task_id, &display_name, &path, Some(&url), &owner, &branch)
                 .map_err(|e| AppError {
+                    code: "clone_register_failed".to_string(),
+                    params: Vec::new(),
                     what_happened: "取得はできましたが、プロジェクトの登録に失敗しました。"
                         .to_string(),
                     data_is_safe: "取得したファイルはフォルダに残っています。".to_string(),

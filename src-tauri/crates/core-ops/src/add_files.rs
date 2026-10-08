@@ -2,21 +2,21 @@
 //
 // - コピーのみ（元ファイルは動かさない）。保存（commit）は別操作
 // - 既存のファイルは上書きしない。同名があれば「名前 (2).ext」のように別名にする
-// - 100MB 超は追加しない（E07）。50MB 以上は追加するが `large` で知らせる（E08）
+// - 100MB 超は追加しない（E07）。50MB 超は追加するが `large` で知らせる（E08。サイズ検査と同じ「超」判定）
 // - 作業フォルダを変更するため、コピー前に復元点を作る（不変条件 3）
 
 use crate::models::*;
 use crate::open_path::{resolve_in_project, OpenPathError};
 use crate::operations::current_branch;
+use crate::pc_name::Meta;
 use crate::restore_file::normalize_project_path;
 use core_git::GitRunner;
-use core_safety::create_restore_point;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 
-/// この大きさ以上のファイルは警告する（設計書 7章の初期値 50MB）
+/// この大きさを超えるファイルは警告する（設計書 7章の初期値 50MB。ちょうどは警告しない）
 pub const LARGE_FILE_WARN_BYTES: u64 = 50 * 1024 * 1024;
 /// この大きさを超えるファイルは追加しない（GitHub の上限 100MB）
 pub const LARGE_FILE_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
@@ -100,6 +100,7 @@ pub(crate) fn add_files(
     sources: &[PathBuf],
     dest_subdir: &str,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<AddFilesOutcome, OpsError> {
     let (dest_dir, dest_rel) = resolve_dest_dir(repo, dest_subdir)?;
 
@@ -135,7 +136,7 @@ pub(crate) fn add_files(
 
     // 作業フォルダを変更する前に復元点を作る
     let branch = current_branch(runner, repo)?;
-    let _ = create_restore_point(runner, repo, &branch, "add-files", now)?;
+    let _ = meta.restore_point(runner, repo, &branch, "add-files", now)?;
 
     for (src, name, size) in planned {
         match copy_without_overwrite(src, &dest_dir, &name) {
@@ -148,7 +149,7 @@ pub(crate) fn add_files(
                 outcome.added.push(AddedFile {
                     path,
                     renamed,
-                    large: size >= LARGE_FILE_WARN_BYTES,
+                    large: size > LARGE_FILE_WARN_BYTES,
                 });
             }
             Err(_) => outcome.rejected.push(RejectedFile {

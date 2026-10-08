@@ -129,3 +129,31 @@ fn migration_from_v1_database_adds_journal_and_keeps_projects(
     assert_eq!(store.list_journal("p1", 10)?.len(), 1);
     Ok(())
 }
+
+#[test]
+fn interrupted_operation_exposes_its_start_time_until_resolved(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let store = Store::open(&tmp.path().join("t.db"))?;
+    store.begin_journal(&core_store::RunningJournal {
+        project_id: "p1".to_string(),
+        operation: "pull".to_string(),
+        trigger: JournalTrigger::Manual,
+        started_at: "2026-10-07T14:30:45.700+00:00".to_string(),
+        target: None,
+    })?;
+
+    // 起動時に「実行中」のまま残っていた行が「中断」になる
+    let found = store.recover_interrupted("2026-10-08T00:00:00Z")?;
+    assert_eq!(found.len(), 1);
+    let entry = store.interrupted_operation("p1")?.ok_or("no interrupted")?;
+    assert_eq!(entry.operation, "pull");
+    assert_eq!(entry.outcome, JournalOutcome::Interrupted);
+    // 小数秒は切り捨てた Unix 秒（2026-10-07T14:30:45Z）
+    assert_eq!(entry.started_at_unix(), Some(1_791_383_445));
+
+    // 復旧が済んだら中断の印は消える
+    assert_eq!(store.resolve_interrupted("p1")?, 1);
+    assert!(store.interrupted_operation("p1")?.is_none());
+    Ok(())
+}

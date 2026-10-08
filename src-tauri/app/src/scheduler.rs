@@ -20,7 +20,8 @@ use tauri_specta::Event;
 
 use crate::events::{AttentionReason, NeedsAttention, OpTrigger, SyncStateChanged, SyncStateKind};
 use crate::ops_runner::{
-    failure_kind, run_op, summarize_pull, summarize_push, OpContext, OpFailure, OpSpec,
+    failure_kind, run_op, size_limits_for, summarize_pull, summarize_push, OpContext, OpFailure,
+    OpSpec,
 };
 use crate::AppState;
 
@@ -362,6 +363,7 @@ async fn execute(
                 .emit(&ctx.app);
                 return TaskResult::Ok;
             }
+            let limits = size_limits_for(&ctx.store, &project.id);
             let r = run_op(
                 ctx,
                 &project.id,
@@ -371,13 +373,18 @@ async fn execute(
                     target: None,
                     data_is_safe: "ファイルは安全です",
                 },
-                |ops, path| ops.pull(path),
+                move |ops, path| ops.pull_with(path, limits),
                 summarize_pull,
             )
             .await;
+            // 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った
+            if matches!(r, Ok(PullOutcome::NeedsSizeDecision(_))) {
+                notify_large_files(ctx, project);
+            }
             pull_task_result(&r)
         }
         SyncTask::Push => {
+            let limits = size_limits_for(&ctx.store, &project.id);
             let r = run_op(
                 ctx,
                 &project.id,
@@ -387,13 +394,25 @@ async fn execute(
                     target: None,
                     data_is_safe: "ファイルは安全です",
                 },
-                |ops, path| ops.upload(path),
+                move |ops, path| ops.upload_with(path, limits),
                 summarize_push,
             )
             .await;
+            if matches!(r, Ok(UploadOutcome::NeedsSizeDecision(_))) {
+                notify_large_files(ctx, project);
+            }
             push_task_result(&r)
         }
     }
+}
+
+/// 大きいファイルのため自動の取り込みを見送ったことを UI に知らせる
+fn notify_large_files(ctx: &OpContext, project: &Project) {
+    let _ = NeedsAttention {
+        project_id: project.id.clone(),
+        reason: AttentionReason::LargeFiles,
+    }
+    .emit(&ctx.app);
 }
 
 /// 未保存の変更があるか（読み取りのみ。キューは通さない）

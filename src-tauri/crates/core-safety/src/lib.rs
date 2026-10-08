@@ -16,6 +16,45 @@ use time::OffsetDateTime;
 pub const SNAPSHOT_REF_PREFIX: &str = "refs/hikae/snapshots/";
 pub const BACKUP_REF_PREFIX: &str = "refs/hikae/backup/";
 
+/// 未ログイン時に使う自動保存（スナップショット）の作者名
+pub const DEFAULT_SNAPSHOT_NAME: &str = "Hikae";
+/// 未ログイン時に使う自動保存（スナップショット）の作者メールアドレス
+pub const DEFAULT_SNAPSHOT_EMAIL: &str = "hikae@localhost";
+
+/// 自動保存（スナップショット）の作者。
+///
+/// ログイン済みなら GitHub のユーザー名と noreply アドレス（`<id>+<login>@users.noreply.github.com`）、
+/// 未ログインなら固定の `Hikae`。tauri や認証には依存せず、呼び出し側が引数で渡す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    pub name: String,
+    pub email: String,
+}
+
+impl Default for Signature {
+    fn default() -> Self {
+        Signature {
+            name: DEFAULT_SNAPSHOT_NAME.to_string(),
+            email: DEFAULT_SNAPSHOT_EMAIL.to_string(),
+        }
+    }
+}
+
+impl Signature {
+    /// 名前とメールアドレスから作る。どちらかが空、または制御文字を含む場合は
+    /// 固定の署名（`Hikae`）にする（`-c user.name=` に不正な値を渡さないため）。
+    pub fn new(name: &str, email: &str) -> Self {
+        let invalid = |s: &str| s.trim().is_empty() || s.chars().any(char::is_control);
+        if invalid(name) || invalid(email) {
+            return Signature::default();
+        }
+        Signature {
+            name: name.trim().to_string(),
+            email: email.trim().to_string(),
+        }
+    }
+}
+
 /// スナップショット ref と commit の情報
 #[derive(Debug, Clone)]
 pub struct SnapshotRef {
@@ -209,12 +248,24 @@ fn get_head_tree(runner: &GitRunner, repo: &Path) -> Result<Option<String>, Safe
     Ok(Some(tree))
 }
 
-/// 作業フォルダ全体のスナップショットを作成
+/// 作業フォルダ全体のスナップショットを作成（作者は固定の `Hikae`）
 pub fn create_snapshot(
     runner: &GitRunner,
     repo: &Path,
     branch: &str,
     now: OffsetDateTime,
+) -> Result<Option<SnapshotRef>, SafetyError> {
+    create_snapshot_as(runner, repo, branch, now, &Signature::default())
+}
+
+/// 作業フォルダ全体のスナップショットを作成し、commit の作者を `author` にする。
+/// 作業フォルダとインデックスは変更しない（一時インデックスで作る）。
+pub fn create_snapshot_as(
+    runner: &GitRunner,
+    repo: &Path,
+    branch: &str,
+    now: OffsetDateTime,
+    author: &Signature,
 ) -> Result<Option<SnapshotRef>, SafetyError> {
     // branch 名を検証
     validate_branch_name(branch)?;
@@ -323,12 +374,14 @@ pub fn create_snapshot(
     let timestamp = format_ref_timestamp(now);
     let commit_msg = format!("auto: {}", timestamp);
     let parent_arg;
+    let name_arg = format!("user.name={}", author.name);
+    let email_arg = format!("user.email={}", author.email);
 
     let mut args_vec: Vec<&str> = vec![
         "-c",
-        "user.name=Hikae",
+        &name_arg,
         "-c",
-        "user.email=hikae@localhost",
+        &email_arg,
         "commit-tree",
         &new_tree,
         "-m",
@@ -466,7 +519,7 @@ pub fn list_snapshots(
     Ok(snapshots)
 }
 
-/// 復元点（snapshot + backup ref）を作成
+/// 復元点（snapshot + backup ref）を作成（スナップショットの作者は固定の `Hikae`）
 pub fn create_restore_point(
     runner: &GitRunner,
     repo: &Path,
@@ -474,10 +527,22 @@ pub fn create_restore_point(
     operation: &str,
     now: OffsetDateTime,
 ) -> Result<RestorePoint, SafetyError> {
+    create_restore_point_as(runner, repo, branch, operation, now, &Signature::default())
+}
+
+/// 復元点（snapshot + backup ref）を作成し、スナップショットの作者を `author` にする。
+pub fn create_restore_point_as(
+    runner: &GitRunner,
+    repo: &Path,
+    branch: &str,
+    operation: &str,
+    now: OffsetDateTime,
+    author: &Signature,
+) -> Result<RestorePoint, SafetyError> {
     validate_branch_name(branch)?;
     validate_operation_name(operation)?;
 
-    let snapshot = create_snapshot(runner, repo, branch, now)?;
+    let snapshot = create_snapshot_as(runner, repo, branch, now, author)?;
     let backup_ref = create_backup_ref(runner, repo, operation, now)?;
 
     Ok(RestorePoint {
@@ -515,6 +580,16 @@ mod tests {
         assert!(validate_operation_name("").is_err());
         assert!(validate_operation_name("OP").is_err());
         assert!(validate_operation_name("op_test").is_err());
+    }
+
+    #[test]
+    fn signature_falls_back_to_the_fixed_one_for_unusable_values() {
+        assert_eq!(Signature::new("", "a@b"), Signature::default());
+        assert_eq!(Signature::new("n", "  "), Signature::default());
+        assert_eq!(Signature::new("n\nx", "a@b"), Signature::default());
+        let s = Signature::new("octocat", "1+octocat@users.noreply.github.com");
+        assert_eq!(s.name, "octocat");
+        assert_eq!(s.email, "1+octocat@users.noreply.github.com");
     }
 
     #[test]

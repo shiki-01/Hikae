@@ -1174,11 +1174,23 @@ fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
     let warn = src_dir.join("warn.bin");
     let f = std::fs::File::create(&warn)?;
     f.set_len(core_ops::LARGE_FILE_WARN_BYTES)?;
-    let sources = vec![src_dir.clone(), src_dir.join("missing.txt"), big, warn];
+    // 警告の境界は「超」（サイズ検査と同じ）。ちょうど 50MB は警告せず、1 バイトでも超えれば警告する
+    let over = src_dir.join("over.bin");
+    let f = std::fs::File::create(&over)?;
+    f.set_len(core_ops::LARGE_FILE_WARN_BYTES + 1)?;
+    let sources = vec![
+        src_dir.clone(),
+        src_dir.join("missing.txt"),
+        big,
+        warn,
+        over,
+    ];
     let out = ops.add_files(repo, &sources, "")?;
-    assert_eq!(out.added.len(), 1);
+    assert_eq!(out.added.len(), 2);
     assert_eq!(out.added[0].path, "warn.bin");
-    assert!(out.added[0].large);
+    assert!(!out.added[0].large, "ちょうど 50MB は警告しない");
+    assert_eq!(out.added[1].path, "over.bin");
+    assert!(out.added[1].large, "50MB を 1 バイトでも超えれば警告する");
     assert_eq!(out.rejected.len(), 3);
     assert!(out.rejected.iter().any(|r| matches!(
         r.reason,

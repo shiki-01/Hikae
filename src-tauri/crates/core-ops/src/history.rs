@@ -4,6 +4,7 @@
 // - 出力は `-z` と専用の区切り文字で解析する（メモに `|` や改行が入っても壊れない）
 // - ファイル数は親との `diff --numstat -z` で数える（ルートは全ファイルを追加として数える）
 // - 復元点のうち `refs/hikae/backup/` は履歴に出さない
+// - メモ末尾のトレーラー `Hikae-PC: <PC 名>` は `pc_name` に分け、`message` には含めない
 
 use crate::models::*;
 use crate::operations::current_branch;
@@ -196,13 +197,16 @@ pub(crate) fn history(
         } else {
             HistoryKind::Manual
         };
+        // メモ本文からは PC 名のトレーラーを除く
+        let (message, pc_name) = crate::pc_name::split_trailer(&record.message);
         entries.push(HistoryEntry {
             commit: record.oid.chars().take(7).collect(),
             timestamp: record.timestamp.clone(),
-            message: record.message.clone(),
+            message,
             snapshot_ref,
             changed_files_count,
             kind,
+            pc_name,
         });
     }
     Ok(entries)

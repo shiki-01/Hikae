@@ -2,9 +2,10 @@
 
 use crate::memo::{self, MemoChange, MemoChangeKind, MemoLabels};
 use crate::models::*;
-use crate::size_check::{self, SaveOptions};
+use crate::pc_name::{split_trailer, Meta};
+use crate::size_check::{self, SaveOptions, SizeLimits};
 use core_git::GitRunner;
-use core_safety::{create_backup_ref, create_restore_point};
+use core_safety::create_backup_ref;
 use std::path::Path;
 use time::OffsetDateTime;
 
@@ -104,6 +105,7 @@ pub(crate) fn save(
     memo: &str,
     options: &SaveOptions,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<SaveOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -133,7 +135,7 @@ pub(crate) fn save(
         .to_string();
 
     // 復元点を作成
-    let restore_point_internal = create_restore_point(runner, repo, &branch, "save", now)?;
+    let restore_point_internal = meta.restore_point(runner, repo, &branch, "save", now)?;
 
     // 「外す」と選ばれたファイルを保存対象から外す。作業フォルダのファイルは消さない
     // （追跡解除は `rm --cached` のみ。未追跡ファイルには何もしない）
@@ -158,7 +160,12 @@ pub(crate) fn save(
     }
 
     // commit
-    let _commit_output = runner.run_ok(repo, &["-c", "core.hooksPath=", "commit", "-m", memo])?;
+    // メモの末尾に、どの PC で保存したかを残す（履歴の表示時に取り除く）
+    let full_message = meta.message(memo);
+    let _commit_output = runner.run_ok(
+        repo,
+        &["-c", "core.hooksPath=", "commit", "-m", &full_message],
+    )?;
 
     // commit ハッシュを抽出（出力から取得）
     let commit_hash = runner.run(repo, &["rev-parse", "HEAD"])?;
@@ -206,6 +213,8 @@ pub(crate) fn pull(
     repo: &Path,
     now: OffsetDateTime,
     labels: &Labels,
+    limits: SizeLimits,
+    meta: Meta,
 ) -> Result<PullOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -231,25 +240,29 @@ pub(crate) fn pull(
         return Ok(PullOutcome::UpToDate);
     }
 
+    // 取り込み前の自動保存にも保存前と同じサイズ検査を行う（設計書 4.1 手順 1）。
+    // 大きいファイルがあれば、何も変更せず（復元点も作らず）取り込みを見送る
+    if has_unsaved {
+        let findings = size_check::scan(runner, repo, limits)?;
+        if !findings.is_empty() {
+            return Ok(PullOutcome::NeedsSizeDecision(findings));
+        }
+    }
+
     // 作業フォルダ・履歴を変更する前に復元点を 1 回だけ作る（未保存の変更もここに含まれる）
     let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
     let branch = String::from_utf8_lossy(&branch_output.stdout)
         .trim()
         .to_string();
-    let _ = create_restore_point(runner, repo, &branch, "pull", now)?;
+    let _ = meta.restore_point(runner, repo, &branch, "pull", now)?;
 
     // 未保存の変更があれば先に保存する
     if has_unsaved {
         runner.run_ok(repo, &["add", "-A"])?;
+        let auto_message = meta.message(&labels.auto_save_memo);
         runner.run_ok(
             repo,
-            &[
-                "-c",
-                "core.hooksPath=",
-                "commit",
-                "-m",
-                &labels.auto_save_memo,
-            ],
+            &["-c", "core.hooksPath=", "commit", "-m", &auto_message],
         )?;
     }
 
@@ -377,28 +390,49 @@ pub(crate) fn conflicts(runner: &GitRunner, repo: &Path) -> Result<Vec<ConflictF
                 )))
             }
         };
+        // この PC 側は HEAD、クラウド側は取り込み中の MERGE_HEAD
+        let (this_saved_at, this_pc_name) = last_saved(runner, repo, "HEAD", &entry.path);
+        let (cloud_saved_at, cloud_pc_name) = last_saved(runner, repo, "MERGE_HEAD", &entry.path);
         conflicts.push(ConflictFile {
             path: entry.path.clone(),
             kind,
-            // この PC 側は HEAD、クラウド側は取り込み中の MERGE_HEAD
-            this_saved_at: last_saved_at(runner, repo, "HEAD", &entry.path),
-            cloud_saved_at: last_saved_at(runner, repo, "MERGE_HEAD", &entry.path),
+            this_saved_at,
+            cloud_saved_at,
+            this_pc_name,
+            cloud_pc_name,
         });
     }
 
     Ok(conflicts)
 }
 
-/// 指定の参照でそのパスを最後に変更したコミットの時刻（Unix 秒）を返す。
-/// 参照が無い・履歴が空・解析できない場合は None（表示側で日時を隠す）。
-fn last_saved_at(runner: &GitRunner, repo: &Path, rev: &str, path: &str) -> Option<i64> {
-    let out = runner
-        .run_ok(
-            repo,
-            &["log", "--max-count=1", "--format=%ct", rev, "--", path],
-        )
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+/// 指定の参照でそのパスを最後に変更したコミットの時刻（Unix 秒）と、その保存を作った PC の名前
+/// （メモ末尾のトレーラー）を返す。
+/// 参照が無い・履歴が空・解析できない場合は None（表示側で日時・PC 名を隠す）。
+fn last_saved(
+    runner: &GitRunner,
+    repo: &Path,
+    rev: &str,
+    path: &str,
+) -> (Option<i64>, Option<String>) {
+    let Ok(out) = runner.run_ok(
+        repo,
+        &[
+            "log",
+            "--max-count=1",
+            "--format=%ct%x1f%B",
+            rev,
+            "--",
+            path,
+        ],
+    ) else {
+        return (None, None);
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (ct, message) = text.split_once('\u{1f}').unwrap_or((text.trim(), ""));
+    let saved_at = ct.trim().parse().ok();
+    let (_, pc_name) = split_trailer(message);
+    (saved_at, pc_name)
 }
 
 /// `status --porcelain=v2 -z --branch` を実行して解析する
@@ -672,6 +706,7 @@ pub(crate) fn restore(
     repo: &Path,
     target_commit: &str,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<Option<String>, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -689,7 +724,7 @@ pub(crate) fn restore(
     let dirty_before = !read_status(runner, repo)?.entries.is_empty();
 
     // 復元点を作成
-    let point = create_restore_point(runner, repo, &branch, "restore", now)?;
+    let point = meta.restore_point(runner, repo, &branch, "restore", now)?;
 
     // restore --source で指定時点のファイル状態に復元（未追跡ファイルは消さない）
     // 注意: restore --source は reset と異なり、staged / worktree の両方を復元する
@@ -710,6 +745,8 @@ pub(crate) fn restore(
 }
 
 /// 競合を解消
+// 引数は呼び出し口（Ops::resolve）の引数に付帯情報（時刻・文言・署名）を足したもの
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve(
     runner: &GitRunner,
     repo: &Path,
@@ -718,6 +755,7 @@ pub(crate) fn resolve(
     message: &str,
     now: OffsetDateTime,
     labels: &Labels,
+    meta: Meta,
 ) -> Result<ResolveOutcome, OpsError> {
     // 現在の競合ファイルを確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -739,7 +777,14 @@ pub(crate) fn resolve(
         .to_string();
 
     // 復元点を作成
-    let _ = create_restore_point(runner, repo, &branch, "resolve", now)?;
+    let _ = meta.restore_point(runner, repo, &branch, "resolve", now)?;
+
+    // 取り込み前の HEAD（競合中も HEAD は動かない）。解消後に、相手が保存対象から外したファイルを
+    // 書き戻す元になる（設計書 4.3 手順 8）
+    let pre_merge_head =
+        String::from_utf8_lossy(&runner.run_ok(repo, &["rev-parse", "HEAD"])?.stdout)
+            .trim()
+            .to_string();
 
     let mut copies = Vec::new();
 
@@ -817,8 +862,12 @@ pub(crate) fn resolve(
         }
     }
 
-    // commit
-    runner.run_ok(repo, &["-c", "core.hooksPath=", "commit", "-m", message])?;
+    // commit（メモの末尾に PC 名を残す）
+    let full_message = meta.message(message);
+    runner.run_ok(
+        repo,
+        &["-c", "core.hooksPath=", "commit", "-m", &full_message],
+    )?;
 
     // 確認
     let remaining_conflicts = conflicts(runner, repo)?;
@@ -827,6 +876,10 @@ pub(crate) fn resolve(
             "conflicts remain after resolution".to_string(),
         ));
     }
+
+    // 競合で止まった取り込みにも、通常の取り込みと同じ手順 8 を行う。
+    // 相手が追跡を外したファイルが取り込みで消えていれば、取り込み前の内容を書き戻す
+    restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
 
     let commit_output = runner.run(repo, &["rev-parse", "HEAD"])?;
     let commit = String::from_utf8_lossy(&commit_output.stdout)
@@ -841,6 +894,7 @@ pub(crate) fn abort_merge(
     runner: &GitRunner,
     repo: &Path,
     now: OffsetDateTime,
+    meta: Meta,
 ) -> Result<(), OpsError> {
     // ブランチ名を取得
     let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
@@ -849,7 +903,7 @@ pub(crate) fn abort_merge(
         .to_string();
 
     // 復元点を作成
-    let _ = create_restore_point(runner, repo, &branch, "abort-merge", now)?;
+    let _ = meta.restore_point(runner, repo, &branch, "abort-merge", now)?;
 
     // merge --abort
     runner.run_ok(repo, &["merge", "--abort"])?;
@@ -863,6 +917,8 @@ pub(crate) fn upload(
     repo: &Path,
     now: OffsetDateTime,
     labels: &Labels,
+    limits: SizeLimits,
+    meta: Meta,
 ) -> Result<UploadOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -897,11 +953,15 @@ pub(crate) fn upload(
         || stderr.contains("fetch first")
     {
         // pull を実行
-        let pull_result = pull(runner, repo, now, labels)?;
+        let pull_result = pull(runner, repo, now, labels, limits, meta)?;
 
         match &pull_result {
             PullOutcome::Conflicted { files } => {
                 return Ok(UploadOutcome::NeedsResolve(files.clone()));
+            }
+            PullOutcome::NeedsSizeDecision(found) => {
+                // 取り込みを見送ったので、アップロードもしない（何も変更していない）
+                return Ok(UploadOutcome::NeedsSizeDecision(found.clone()));
             }
             PullOutcome::NoUpstream => {
                 return Err(OpsError::Unexpected("upstream lost after pull".to_string()));

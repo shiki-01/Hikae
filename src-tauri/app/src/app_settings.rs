@@ -18,18 +18,24 @@ pub struct SettingsView {
 fn settings_error(e: StoreError) -> AppError {
     match e {
         StoreError::InvalidData(detail) => AppError {
+            code: "invalid_settings".to_string(),
+            params: Vec::new(),
             what_happened: "設定の値が正しくありません。".to_string(),
             data_is_safe: "設定は変更されていません。".to_string(),
             next_action: "選択肢から選び直してください".to_string(),
             technical_info: Some(detail),
         },
         StoreError::ProjectNotFound(id) => AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
             what_happened: "プロジェクトが見つかりません。".to_string(),
             data_is_safe: "設定は変更されていません。".to_string(),
             next_action: "プロジェクト一覧から確認してください".to_string(),
             technical_info: Some(id),
         },
         other => AppError {
+            code: "settings_io_failed".to_string(),
+            params: Vec::new(),
             what_happened: "設定を読み書きできませんでした。".to_string(),
             data_is_safe: "ファイルは安全です。設定は変更されていない可能性があります。"
                 .to_string(),
@@ -41,6 +47,8 @@ fn settings_error(e: StoreError) -> AppError {
 
 fn lock_error() -> AppError {
     AppError {
+        code: "settings_io_failed".to_string(),
+        params: Vec::new(),
         what_happened: "設定を読み書きできませんでした。".to_string(),
         data_is_safe: "ファイルは安全です。".to_string(),
         next_action: "もう一度試してください".to_string(),
