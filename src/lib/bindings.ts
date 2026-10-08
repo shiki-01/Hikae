@@ -28,7 +28,7 @@ export const commands = {
 	/**  元に戻す操作のプレビュー（影響ファイル一覧）。 */
 	restorePreview: (id: string, commit: string) => typedError<RestorePreviewData, AppError>(__TAURI_INVOKE("restore_preview", { id, commit })),
 	/**  元に戻す実行。 */
-	restore: (id: string, commit: string) => typedError<null, AppError>(__TAURI_INVOKE("restore", { id, commit })),
+	restore: (id: string, commit: string) => typedError<RestoreAllResult, AppError>(__TAURI_INVOKE("restore", { id, commit })),
 	/**  現在の競合ファイルを取得。 */
 	listConflicts: (id: string) => typedError<ConflictItem[], AppError>(__TAURI_INVOKE("list_conflicts", { id })),
 	/**  競合を解消。 */
@@ -46,6 +46,23 @@ export const commands = {
 	 *  読み取りのみのため直列キューは通さない。
 	 */
 	openProjectFile: (id: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_project_file", { id, relativePath })),
+	/**  1 ファイルだけを戻した場合の影響（読み取りのみのため直列キューは通さない）。 */
+	restoreFilePreview: (id: string, commit: string, path: string) => typedError<RestoreFilePreviewData, AppError>(__TAURI_INVOKE("restore_file_preview", { id, commit, path })),
+	/**  指定した保存時点の 1 ファイルだけを戻す。復元点は core-ops が作る。 */
+	restoreFile: (id: string, commit: string, path: string) => typedError<RestoreFileResult, AppError>(__TAURI_INVOKE("restore_file", { id, commit, path })),
+	/**  元に戻すの取り消し。`restore_point` は復元点の ref 名（`refs/hikae/` 配下）または完全な OID。 */
+	undoRestore: (id: string, restorePoint: string) => typedError<null, AppError>(__TAURI_INVOKE("undo_restore", { id, restorePoint })),
+	/**  変更のぶつかり解消を中断し、取り込む前の状態に戻す。 */
+	abortMerge: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("abort_merge", { id })),
+	/**  外部のファイルをプロジェクトへコピーする（上書きせず、保存もしない）。 */
+	addFiles: (id: string, sourcePaths: string[], destSubdir: string) => typedError<AddFilesResult, AppError>(__TAURI_INVOKE("add_files", { id, sourcePaths, destSubdir })),
+	/**
+	 *  フォルダが見つからないプロジェクトの登録パスを付け替える。
+	 *  付け替え先が同じプロジェクトと確認できた場合のみ更新し、ファイルは一切変更しない。
+	 */
+	relocateProject: (id: string, newPath: string) => typedError<ProjectInfo, AppError>(__TAURI_INVOKE("relocate_project", { id, newPath })),
+	/**  保存時点で変更されたファイルの一覧（変更の種類つき、読み取りのみ）。 */
+	listPointChanges: (id: string, commit: string) => typedError<PointChangeItem[], AppError>(__TAURI_INVOKE("list_point_changes", { id, commit })),
 };
 
 /** Events */
@@ -58,6 +75,31 @@ export const events = {
 };
 
 /* Types */
+/**  ファイル追加の結果 */
+export type AddFilesResult = {
+	added: AddedFileItem[],
+	rejected: RejectedFileItem[],
+};
+
+/**  追加しなかった理由 */
+export type AddRejectKind = 
+/**  100MB を超えるため追加できない */
+"too-large" | 
+/**  フォルダなど、ファイルではない */
+"not-a-file" | 
+/**  読み取れない、またはコピーに失敗した */
+"unreadable";
+
+/**  追加できたファイル */
+export type AddedFileItem = {
+	/**  プロジェクトからの相対パス */
+	path: string,
+	/**  同名があったため別名にした */
+	renamed: boolean,
+	/**  大きいファイル（50MB 以上）。アップロードに時間がかかることを知らせる */
+	large: boolean,
+};
+
 /**  何が起きたか、データは無事か、次の行動を含むエラー型 */
 export type AppError = {
 	/**  何が起きたか（ユーザー向けの平易な説明） */
@@ -157,6 +199,17 @@ export type OpTrigger =
 /**  スケジューラによる自動実行 */
 "auto";
 
+/**  保存時点で変更されたファイル */
+export type PointChangeItem = {
+	path: string,
+	/**  名前変更の場合の元のパス */
+	old_path: string | null,
+	kind: PointChangeKindData,
+};
+
+/**  保存時点で変更されたファイルの種類 */
+export type PointChangeKindData = "added" | "modified" | "deleted" | "renamed";
+
 /**  プロジェクト情報 */
 export type ProjectInfo = {
 	id: string,
@@ -177,6 +230,57 @@ export type PullResult = {
 export type PushResult = {
 	outcome: string,
 };
+
+/**  追加しなかったファイル */
+export type RejectedFileItem = {
+	/**  元のファイル名 */
+	name: string,
+	reason: AddRejectKind,
+	/**  `too-large` のときの元のサイズ（バイト） */
+	size: number | null,
+};
+
+/**  全体を元に戻した結果 */
+export type RestoreAllResult = {
+	/**  取り消しに使う復元点（`undo_restore` の `restore_point` に渡す） */
+	undo_token: string | null,
+};
+
+/**  1 ファイルを戻す影響の種類 */
+export type RestoreFileKindData = 
+/**  いまのファイルを指定時点の内容で置き換える */
+"overwrite" | 
+/**  いまは無いファイルを作り直す */
+"recreate" | 
+/**  すでに同じ内容 */
+"unchanged" | 
+/**  指定時点には存在しない（戻せない） */
+"not-in-that-point";
+
+/**  1 ファイルを戻す操作のプレビュー */
+export type RestoreFilePreviewData = {
+	kind: RestoreFileKindData,
+	/**  いまのファイルのサイズ（バイト）。無ければ null */
+	size_now: number | null,
+	/**  指定時点のファイルのサイズ（バイト）。存在しなければ null */
+	size_then: number | null,
+};
+
+/**  1 ファイルを戻した結果 */
+export type RestoreFileResult = {
+	outcome: RestoreFileResultKind,
+	/**  取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）。戻していなければ null */
+	undo_token: string | null,
+};
+
+/**  1 ファイルを戻した結果の種類 */
+export type RestoreFileResultKind = 
+/**  戻した */
+"restored" | 
+/**  指定時点に無いため何も変更しなかった */
+"not-in-that-point" | 
+/**  同名の保存対象外ファイルを上書きしてしまうため何も変更しなかった */
+"ignored-file-in-the-way";
 
 /**  元に戻すプレビュー */
 export type RestorePreviewData = {

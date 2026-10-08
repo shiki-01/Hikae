@@ -119,21 +119,32 @@ pub struct SyncState {
 /// 高層操作のエラー型
 #[derive(Error, Debug)]
 pub enum OpsError {
-    /// git エラー
+    /// git エラー（共有違反は `FileInUse` に分類されるため、ここには来ない）
     #[error("git error: {0}")]
-    Git(#[from] core_git::GitError),
+    Git(core_git::GitError),
 
     /// safety エラー
     #[error("safety error: {0}")]
-    Safety(#[from] core_safety::SafetyError),
+    Safety(core_safety::SafetyError),
 
     /// I/O エラー
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
+
+    /// ファイルが他のアプリで使用中のため、書き換え・削除できなかった（設計書 5章 E12）
+    #[error("file is in use by another application")]
+    FileInUse {
+        /// 特定できたファイル名（パスは含めない）
+        file: Option<String>,
+    },
 
     /// 競合が未解決のまま操作しようとした
     #[error("merge conflict needs resolution")]
     Conflict(Vec<ConflictFile>),
+
+    /// 呼び出し側が渡した値（パス・コミット・復元点など）が不正
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
@@ -162,6 +173,15 @@ impl Default for Labels {
     }
 }
 
+/// 履歴エントリの種別
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HistoryKind {
+    /// 利用者が保存した時点
+    Manual,
+    /// アプリが自動で控えた時点（`refs/hikae/snapshots/` の復元点）
+    Auto,
+}
+
 /// 履歴の1つのエントリ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -175,6 +195,8 @@ pub struct HistoryEntry {
     pub snapshot_ref: Option<String>,
     /// このコミットで変更されたファイル数
     pub changed_files_count: u32,
+    /// 手動の保存か自動保存か（`snapshot_ref` の有無と常に対応する）
+    pub kind: HistoryKind,
 }
 
 /// 特定時点のファイル情報
@@ -205,6 +227,108 @@ pub struct RestoreFileChange {
     pub size_to: u64,
 }
 
+/// 1 ファイルを戻すときの影響の種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RestoreFileKind {
+    /// いまのファイルを指定時点の内容で置き換える
+    Overwrite,
+    /// いまは無いファイルを指定時点の内容で作り直す
+    Recreate,
+    /// すでに指定時点と同じ内容（変更なし）
+    Unchanged,
+    /// 指定時点には存在しないため戻せない
+    NotInThatPoint,
+}
+
+/// 1 ファイルを戻す操作のプレビュー
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreFilePreview {
+    pub kind: RestoreFileKind,
+    /// いまのファイルのサイズ（無ければ None）
+    pub size_now: Option<u64>,
+    /// 指定時点のファイルのサイズ（存在しなければ None）
+    pub size_then: Option<u64>,
+}
+
+/// 1 ファイルを戻した結果
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RestoreFileOutcome {
+    /// 戻した。`undo_ref` は取り消し用の復元点（`refs/hikae/` 配下の ref 名）
+    Restored { undo_ref: Option<String> },
+    /// 指定時点にそのファイルが無いため、何も変更しなかった
+    NotInThatPoint,
+    /// 同名の「保存対象外」ファイルが作業フォルダにあり、上書きすると失われるため何も変更しなかった
+    IgnoredFileInTheWay,
+}
+
+/// 保存時点で変更されたファイルの種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PointChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+/// 保存時点で変更されたファイル（直前の保存との差）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PointChange {
+    pub path: String,
+    /// 名前変更の場合の元のパス
+    pub old_path: Option<String>,
+    pub kind: PointChangeKind,
+}
+
+/// 追加（コピー）できたファイル
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddedFile {
+    /// プロジェクトからの相対パス（`/` 区切り）
+    pub path: String,
+    /// 同名ファイルがあったため別名にした
+    pub renamed: bool,
+    /// 警告閾値（50MB）以上の大きいファイル
+    pub large: bool,
+}
+
+/// 追加しなかった理由
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AddRejectReason {
+    /// 100MB を超えるため追加できない（`size` は元のサイズ）
+    TooLarge { size: u64 },
+    /// 通常のファイルではない（フォルダなど）
+    NotAFile,
+    /// 読み取れない、またはコピーに失敗した
+    Unreadable,
+}
+
+/// 追加しなかったファイル
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RejectedFile {
+    /// 元のファイル名（パスは含めない）
+    pub name: String,
+    pub reason: AddRejectReason,
+}
+
+/// ファイル追加の結果
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddFilesOutcome {
+    pub added: Vec<AddedFile>,
+    pub rejected: Vec<RejectedFile>,
+}
+
+/// フォルダの付け替え先の確認結果
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RelocateCheck {
+    /// 同じプロジェクトと確認できた
+    Same,
+    /// フォルダが無い、またはプロジェクトのフォルダ直下ではない
+    NotARepository,
+    /// 別のプロジェクトのフォルダ
+    DifferentRepository,
+    /// 照合できる情報（保存先の URL も初期の保存の記録も）が登録されていないため確認できない
+    CannotVerify,
+}
+
 /// 差分の行
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffLine {
@@ -225,6 +349,45 @@ pub enum DiffLineKind {
     Removed,
 }
 
+impl From<core_git::GitError> for OpsError {
+    fn from(e: core_git::GitError) -> Self {
+        classify_git_error(e)
+    }
+}
+
+impl From<core_safety::SafetyError> for OpsError {
+    fn from(e: core_safety::SafetyError) -> Self {
+        match e {
+            // 復元点の作成中に起きた共有違反も、同じ種別にそろえる
+            core_safety::SafetyError::Git(g) => classify_git_error(g),
+            core_safety::SafetyError::Io(io) => OpsError::from(io),
+            other => OpsError::Safety(other),
+        }
+    }
+}
+
+impl From<std::io::Error> for OpsError {
+    fn from(e: std::io::Error) -> Self {
+        if crate::file_in_use::is_sharing_violation(&e) {
+            OpsError::FileInUse { file: None }
+        } else {
+            OpsError::Io(e)
+        }
+    }
+}
+
+/// git の失敗のうち、他のアプリがファイルを使用中のものを `FileInUse` に分類する。
+fn classify_git_error(e: core_git::GitError) -> OpsError {
+    if let core_git::GitError::Failed { stderr, .. } = &e {
+        if crate::file_in_use::is_file_in_use_message(stderr) {
+            return OpsError::FileInUse {
+                file: crate::file_in_use::file_name_in_message(stderr),
+            };
+        }
+    }
+    OpsError::Git(e)
+}
+
 impl OpsError {
     /// ジャーナルに記録するための分類名。エラー本文（git の stderr など）は含めない。
     /// stderr にはリモート URL などが含まれうるため、記録には種類だけを使う。
@@ -234,7 +397,9 @@ impl OpsError {
             OpsError::Git(_) => "git",
             OpsError::Safety(_) => "safety",
             OpsError::Io(_) => "io",
+            OpsError::FileInUse { .. } => "file-in-use",
             OpsError::Conflict(_) => "conflict",
+            OpsError::InvalidInput(_) => "invalid-input",
             OpsError::Unexpected(_) => "unexpected",
         }
     }

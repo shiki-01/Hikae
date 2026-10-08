@@ -33,12 +33,7 @@ pub enum OpenPathError {
 /// 2. 実体検査: root と結合後のパスをそれぞれ canonicalize し、後者が前者の配下であることを確認
 ///    （シンボリックリンクやジャンクションによる脱出はここで拒否される）
 pub fn resolve_in_project(root: &Path, relative: &str) -> Result<PathBuf, OpenPathError> {
-    if relative.is_empty() || relative.contains('\0') {
-        return Err(OpenPathError::Invalid);
-    }
-    if !is_plain_relative(relative) {
-        return Err(OpenPathError::NotRelative);
-    }
+    validate_relative(relative)?;
 
     let root_real = root
         .canonicalize()
@@ -57,6 +52,17 @@ pub fn resolve_in_project(root: &Path, relative: &str) -> Result<PathBuf, OpenPa
         return Err(OpenPathError::Outside);
     }
     Ok(target)
+}
+
+/// 字句検査のみ行う（実体は見ない）。まだ存在しないパスの入力検査にも使う。
+pub(crate) fn validate_relative(relative: &str) -> Result<(), OpenPathError> {
+    if relative.is_empty() || relative.contains('\0') {
+        return Err(OpenPathError::Invalid);
+    }
+    if !is_plain_relative(relative) {
+        return Err(OpenPathError::NotRelative);
+    }
+    Ok(())
 }
 
 /// 字句だけで見て、プロジェクト内に留まる単純な相対パスか。

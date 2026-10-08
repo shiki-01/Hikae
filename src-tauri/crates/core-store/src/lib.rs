@@ -58,7 +58,7 @@ impl Store {
     /// プロジェクト一覧を取得。最終表示日時でソート。
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config
+            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config, initial_commit
              FROM projects
              ORDER BY last_viewed_at DESC"
         )?;
@@ -74,6 +74,7 @@ impl Store {
                     default_branch: row.get(5)?,
                     last_viewed_at: row.get(6)?,
                     config: row.get(7)?,
+                    initial_commit: row.get(8)?,
                 })
             })?
             .collect::<SqliteResult<Vec<_>>>()?;
@@ -84,7 +85,7 @@ impl Store {
     /// ID でプロジェクトを取得。
     pub fn get_project(&self, id: &str) -> Result<Project, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config
+            "SELECT id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config, initial_commit
              FROM projects WHERE id = ?"
         )?;
 
@@ -99,6 +100,7 @@ impl Store {
                     default_branch: row.get(5)?,
                     last_viewed_at: row.get(6)?,
                     config: row.get(7)?,
+                    initial_commit: row.get(8)?,
                 })
             })
             .map_err(|_| StoreError::ProjectNotFound(id.to_string()))?;
@@ -239,6 +241,32 @@ impl Store {
         Ok(rows)
     }
 
+    /// 登録パスだけを更新する（フォルダの付け替え用）。他の項目は変えない。
+    pub fn update_project_path(&self, id: &str, path: &Path) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE projects SET path = ? WHERE id = ?",
+            params![path.to_string_lossy().to_string(), id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::ProjectNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// 最初の保存（初期 commit）の OID を記録する。付け替え時の照合用。
+    /// 同じ値を何度書いても変わらない。別の値が記録済みなら上書きしない（履歴は変わらないため）。
+    pub fn set_initial_commit(&self, id: &str, oid: &str) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE projects SET initial_commit = ? WHERE id = ? AND initial_commit IS NULL",
+            params![oid, id],
+        )?;
+        if changed == 0 {
+            // 記録済み、またはプロジェクトが無い。後者だけをエラーにする
+            self.get_project(id)?;
+        }
+        Ok(())
+    }
+
     /// 最終表示日時を更新。
     pub fn touch_project(&self, id: &str) -> Result<(), StoreError> {
         let now = chrono::Utc::now().to_rfc3339();
@@ -317,6 +345,76 @@ mod tests {
         let db_path = tmpdir.path().join("test.db");
         let store = Store::open(&db_path).expect("failed to open store");
         (store, tmpdir)
+    }
+
+    #[test]
+    fn test_update_project_path_changes_only_path() {
+        let (store, _tmpdir) = setup_test_db();
+        store
+            .add_project(
+                "proj-1",
+                "My Project",
+                Path::new("/old/path"),
+                Some("https://github.com/user/repo"),
+                "myuser",
+                "main",
+            )
+            .expect("failed to add project");
+        store
+            .update_project_path("proj-1", Path::new("/new/path"))
+            .expect("failed to update path");
+        let proj = store.get_project("proj-1").expect("failed to get project");
+        assert_eq!(proj.path, Path::new("/new/path"));
+        assert_eq!(proj.display_name, "My Project");
+        assert_eq!(
+            proj.remote_url.as_deref(),
+            Some("https://github.com/user/repo")
+        );
+        assert!(store
+            .update_project_path("missing", Path::new("/x"))
+            .is_err());
+    }
+
+    #[test]
+    fn test_set_initial_commit_records_once() {
+        let (store, _tmpdir) = setup_test_db();
+        store
+            .add_project("p", "P", Path::new("/p"), None, "me", "main")
+            .expect("add");
+        assert_eq!(store.get_project("p").expect("get").initial_commit, None);
+
+        store.set_initial_commit("p", "aaa111").expect("set");
+        assert_eq!(
+            store
+                .get_project("p")
+                .expect("get")
+                .initial_commit
+                .as_deref(),
+            Some("aaa111")
+        );
+        // 履歴の最初の保存は変わらないので、記録済みなら上書きしない
+        store.set_initial_commit("p", "bbb222").expect("set again");
+        assert_eq!(
+            store
+                .get_project("p")
+                .expect("get")
+                .initial_commit
+                .as_deref(),
+            Some("aaa111")
+        );
+        // 付け替え（パス変更）では消えない
+        store
+            .update_project_path("p", Path::new("/q"))
+            .expect("path");
+        assert_eq!(
+            store
+                .get_project("p")
+                .expect("get")
+                .initial_commit
+                .as_deref(),
+            Some("aaa111")
+        );
+        assert!(store.set_initial_commit("missing", "x").is_err());
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
-use tauri_specta::{collect_commands, collect_events, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use core_git::GitRunner;
 use core_ops::{Ops, OpsError};
@@ -16,7 +16,7 @@ mod events;
 mod ops_runner;
 mod scheduler;
 
-use events::OpTrigger;
+use events::{OpTrigger, StatusChanged};
 use ops_runner::{
     memo_labels, pull_outcome_name, push_outcome_name, run_op, summarize_pull, summarize_push,
     OpContext, OpSpec, OpSummary,
@@ -71,6 +71,30 @@ impl AppError {
                 "ディスク容量や権限を確認してください".to_string(),
                 "詳細を確認してください".to_string(),
                 Some(e.to_string()),
+            ),
+            // 設計書 5章 E12: ファイルが他のアプリで使用中（Windows の共有違反）
+            OpsError::FileInUse { file } => (
+                match file {
+                    Some(name) => {
+                        format!(
+                            "「{name}」が他のアプリで開かれているため、操作を完了できませんでした"
+                        )
+                    }
+                    None => {
+                        "他のアプリで開かれているファイルがあるため、操作を完了できませんでした"
+                            .to_string()
+                    }
+                },
+                "ファイルは失われていません。".to_string(),
+                "そのファイルを開いているアプリ（Word など）を閉じてから、もう一度お試しください"
+                    .to_string(),
+                Some("file-in-use".to_string()),
+            ),
+            OpsError::InvalidInput(msg) => (
+                "指定された場所またはファイルを扱えませんでした".to_string(),
+                "ファイルは変更されていません。".to_string(),
+                "選び直してからもう一度試してください".to_string(),
+                Some(msg),
             ),
             OpsError::Unexpected(msg) => (
                 "予期しないエラーが発生しました".to_string(),
@@ -184,6 +208,25 @@ fn load_project(store: &Arc<Mutex<Store>>, id: &str) -> Result<Project, AppError
     })
 }
 
+/// 最初の保存の OID を、未記録のプロジェクトに限って記録する（付け替え時の照合用）。
+/// 記録に失敗しても操作の結果には影響させない。
+fn record_initial_commit(store: &Arc<Mutex<Store>>, id: &str, path: &std::path::Path, ops: &Ops) {
+    let recorded = store
+        .lock()
+        .ok()
+        .and_then(|g| g.get_project(id).ok())
+        .is_some_and(|p| p.initial_commit.is_some());
+    if recorded {
+        return;
+    }
+    let Ok(Some(oid)) = ops.initial_commit(path) else {
+        return;
+    };
+    if let Ok(guard) = store.lock() {
+        let _ = guard.set_initial_commit(id, &oid);
+    }
+}
+
 // ========== Tauri コマンド（全て async/spawn_blocking） ==========
 
 /// プロジェクト一覧を取得。
@@ -256,6 +299,8 @@ async fn add_project(
             ops.init_project(&path, remote_url.as_deref(), &identity)
                 .map_err(AppError::from_ops_error)?;
 
+            // 既存のリポジトリを登録する場合に備えて、最初の保存の OID を先に調べておく
+            let initial_commit = ops.initial_commit(&path).ok().flatten();
             let store_guard = store.lock().map_err(|e| AppError {
                 what_happened: "データベースアクセスに失敗しました".to_string(),
                 data_is_safe: "ファイルは安全です".to_string(),
@@ -278,6 +323,12 @@ async fn add_project(
                     next_action: "もう一度試してください".to_string(),
                     technical_info: Some(format!("{:?}", e)),
                 })?;
+
+            // 最初の保存の OID を記録する（保存先 URL が無いプロジェクトの付け替え照合用）。
+            // まだ保存が無い場合は None のままで、最初の保存のときに記録する
+            if let Some(oid) = initial_commit {
+                let _ = store_guard.set_initial_commit(&id_clone, &oid);
+            }
 
             Ok(())
         },
@@ -475,6 +526,8 @@ async fn save(
             if let Ok(guard) = store.lock() {
                 let _ = guard.touch_project(&touch_id);
             }
+            // 最初の保存だった場合に、付け替え照合用の OID を記録する
+            record_initial_commit(&store, &touch_id, path, ops);
             Ok(outcome)
         },
         |o| OpSummary {
@@ -852,10 +905,10 @@ async fn restore(
     state: tauri::State<'_, AppState>,
     id: String,
     commit: String,
-) -> Result<(), AppError> {
+) -> Result<RestoreAllResult, AppError> {
     let ctx = OpContext::new(app, &state);
     let target = commit.clone();
-    run_op(
+    let undo_token = run_op(
         &ctx,
         &id,
         OpSpec {
@@ -871,7 +924,7 @@ async fn restore(
         },
     )
     .await?;
-    Ok(())
+    Ok(RestoreAllResult { undo_token })
 }
 
 /// 現在の競合ファイルを取得。
@@ -975,6 +1028,334 @@ async fn resolve_conflicts(
     state.scheduler.request_pull(&id);
     state.scheduler.request_push(&id);
     Ok(())
+}
+
+/// 1 ファイルだけを戻した場合の影響（読み取りのみのため直列キューは通さない）。
+#[tauri::command]
+#[specta::specta]
+async fn restore_file_preview(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    commit: String,
+    path: String,
+) -> Result<RestoreFilePreviewData, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(GitRunner::from_path_env());
+        let p = ops
+            .restore_file_preview(&project.path, &commit, &path)
+            .map_err(AppError::from_ops_error)?;
+        Ok(RestoreFilePreviewData {
+            kind: match p.kind {
+                core_ops::RestoreFileKind::Overwrite => RestoreFileKindData::Overwrite,
+                core_ops::RestoreFileKind::Recreate => RestoreFileKindData::Recreate,
+                core_ops::RestoreFileKind::Unchanged => RestoreFileKindData::Unchanged,
+                core_ops::RestoreFileKind::NotInThatPoint => RestoreFileKindData::NotInThatPoint,
+            },
+            size_now: p.size_now.map(|s| s as f64),
+            size_then: p.size_then.map(|s| s as f64),
+        })
+    })
+    .await
+}
+
+/// 指定した保存時点の 1 ファイルだけを戻す。復元点は core-ops が作る。
+#[tauri::command]
+#[specta::specta]
+async fn restore_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    commit: String,
+    path: String,
+) -> Result<RestoreFileResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let target = format!("{commit}:{path}");
+    let outcome = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "restore-file",
+            trigger: OpTrigger::Manual,
+            target: Some(target),
+            data_is_safe: "ファイルは変更されていません",
+        },
+        move |ops, project_path| ops.restore_file(project_path, &commit, &path),
+        |o| OpSummary {
+            detail: match o {
+                core_ops::RestoreFileOutcome::Restored { .. } => "restored",
+                core_ops::RestoreFileOutcome::NotInThatPoint => "not-in-that-point",
+                core_ops::RestoreFileOutcome::IgnoredFileInTheWay => "ignored-file-in-the-way",
+            }
+            .to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+
+    Ok(match outcome {
+        core_ops::RestoreFileOutcome::Restored { undo_ref } => RestoreFileResult {
+            outcome: RestoreFileResultKind::Restored,
+            undo_token: undo_ref,
+        },
+        core_ops::RestoreFileOutcome::NotInThatPoint => RestoreFileResult {
+            outcome: RestoreFileResultKind::NotInThatPoint,
+            undo_token: None,
+        },
+        core_ops::RestoreFileOutcome::IgnoredFileInTheWay => RestoreFileResult {
+            outcome: RestoreFileResultKind::IgnoredFileInTheWay,
+            undo_token: None,
+        },
+    })
+}
+
+/// 元に戻すの取り消し。`restore_point` は復元点の ref 名（`refs/hikae/` 配下）または完全な OID。
+#[tauri::command]
+#[specta::specta]
+async fn undo_restore(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    restore_point: String,
+) -> Result<(), AppError> {
+    let ctx = OpContext::new(app, &state);
+    let target = restore_point.clone();
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "undo-restore",
+            trigger: OpTrigger::Manual,
+            target: Some(target),
+            data_is_safe: "ファイルは変更されていません",
+        },
+        move |ops, path| ops.undo_restore(path, &restore_point),
+        |_| OpSummary {
+            detail: "undone".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// 変更のぶつかり解消を中断し、取り込む前の状態に戻す。
+#[tauri::command]
+#[specta::specta]
+async fn abort_merge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    let ctx = OpContext::new(app, &state);
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "abort-merge",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは変更されていません",
+        },
+        |ops, path| ops.abort_merge(path),
+        |_| OpSummary {
+            detail: "aborted".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// 外部のファイルをプロジェクトへコピーする（上書きせず、保存もしない）。
+#[tauri::command]
+#[specta::specta]
+async fn add_files(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    source_paths: Vec<PathBuf>,
+    dest_subdir: String,
+) -> Result<AddFilesResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let target = if dest_subdir.is_empty() {
+        None
+    } else {
+        Some(dest_subdir.clone())
+    };
+    let outcome = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "add-files",
+            trigger: OpTrigger::Manual,
+            target,
+            data_is_safe: "元のファイルは変更されていません",
+        },
+        move |ops, path| ops.add_files(path, &source_paths, &dest_subdir),
+        |o| OpSummary {
+            detail: if o.added.is_empty() {
+                "nothing-added"
+            } else {
+                "added"
+            }
+            .to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+
+    Ok(AddFilesResult {
+        added: outcome
+            .added
+            .into_iter()
+            .map(|f| AddedFileItem {
+                path: f.path,
+                renamed: f.renamed,
+                large: f.large,
+            })
+            .collect(),
+        rejected: outcome
+            .rejected
+            .into_iter()
+            .map(|r| {
+                let (reason, size) = match r.reason {
+                    core_ops::AddRejectReason::TooLarge { size } => {
+                        (AddRejectKind::TooLarge, Some(size as f64))
+                    }
+                    core_ops::AddRejectReason::NotAFile => (AddRejectKind::NotAFile, None),
+                    core_ops::AddRejectReason::Unreadable => (AddRejectKind::Unreadable, None),
+                };
+                RejectedFileItem {
+                    name: r.name,
+                    reason,
+                    size,
+                }
+            })
+            .collect(),
+    })
+}
+
+/// フォルダが見つからないプロジェクトの登録パスを付け替える。
+/// 付け替え先が同じプロジェクトと確認できた場合のみ更新し、ファイルは一切変更しない。
+#[tauri::command]
+#[specta::specta]
+async fn relocate_project(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    new_path: PathBuf,
+) -> Result<ProjectInfo, AppError> {
+    let store = state.store_clone();
+    let locks = state.locks_clone();
+    let info = run_exclusive(
+        locks,
+        id.clone(),
+        "ファイルは変更されていません",
+        move || {
+            let project = load_project(&store, &id)?;
+            let ops = Ops::new(GitRunner::from_path_env());
+            let check = ops
+                .check_relocation_with(
+                    &new_path,
+                    project.remote_url.as_deref(),
+                    project.initial_commit.as_deref(),
+                )
+                .map_err(AppError::from_ops_error)?;
+            let (what_happened, next_action) = match check {
+                core_ops::RelocateCheck::Same => ("", ""),
+                core_ops::RelocateCheck::NotARepository => (
+                    "選んだフォルダはプロジェクトのフォルダではありません",
+                    "プロジェクトのフォルダそのものを選び直してください",
+                ),
+                core_ops::RelocateCheck::DifferentRepository => (
+                    "選んだフォルダは、このプロジェクトのものではありません",
+                    "移動したプロジェクトのフォルダを選び直してください",
+                ),
+                core_ops::RelocateCheck::CannotVerify => (
+                    "このプロジェクトは保存先も最初の保存の記録も登録されていないため、同じフォルダか確認できません",
+                    "一覧から外して、フォルダを登録し直してください",
+                ),
+            };
+            if check != core_ops::RelocateCheck::Same {
+                return Err(AppError {
+                    what_happened: what_happened.to_string(),
+                    data_is_safe: "ファイルは変更されていません。".to_string(),
+                    next_action: next_action.to_string(),
+                    technical_info: Some(format!("{check:?}")),
+                });
+            }
+
+            let guard = store.lock().map_err(|e| AppError {
+                what_happened: "データベースアクセスに失敗しました".to_string(),
+                data_is_safe: "ファイルは変更されていません。".to_string(),
+                next_action: "もう一度試してください".to_string(),
+                technical_info: Some(e.to_string()),
+            })?;
+            guard
+                .update_project_path(&id, &new_path)
+                .map_err(|e| AppError {
+                    what_happened: "フォルダの場所を更新できませんでした".to_string(),
+                    data_is_safe: "ファイルは変更されていません。".to_string(),
+                    next_action: "もう一度試してください".to_string(),
+                    technical_info: Some(format!("{e:?}")),
+                })?;
+            let updated = guard.get_project(&id).map_err(|e| AppError {
+                what_happened: "プロジェクトが見つかりません".to_string(),
+                data_is_safe: "ファイルは変更されていません。".to_string(),
+                next_action: "プロジェクト一覧から確認してください".to_string(),
+                technical_info: Some(format!("{e:?}")),
+            })?;
+            Ok(ProjectInfo {
+                id: updated.id,
+                display_name: updated.display_name,
+                path: updated.path,
+                remote_url: updated.remote_url,
+                owner: updated.owner,
+                last_viewed_at: updated.last_viewed_at,
+            })
+        },
+    )
+    .await?;
+
+    let _ = StatusChanged {
+        project_id: info.id.clone(),
+    }
+    .emit(&app);
+    Ok(info)
+}
+
+/// 保存時点で変更されたファイルの一覧（変更の種類つき、読み取りのみ）。
+#[tauri::command]
+#[specta::specta]
+async fn list_point_changes(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    commit: String,
+) -> Result<Vec<PointChangeItem>, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(GitRunner::from_path_env());
+        let changes = ops
+            .list_point_changes(&project.path, &commit)
+            .map_err(AppError::from_ops_error)?;
+        Ok(changes
+            .into_iter()
+            .map(|c| PointChangeItem {
+                path: c.path,
+                old_path: c.old_path,
+                kind: match c.kind {
+                    core_ops::PointChangeKind::Added => PointChangeKindData::Added,
+                    core_ops::PointChangeKind::Modified => PointChangeKindData::Modified,
+                    core_ops::PointChangeKind::Deleted => PointChangeKindData::Deleted,
+                    core_ops::PointChangeKind::Renamed => PointChangeKindData::Renamed,
+                },
+            })
+            .collect())
+    })
+    .await
 }
 
 // ========== Data Types (Tauri-Specta 用) ==========
@@ -1116,6 +1497,116 @@ pub struct SyncStatus {
     pub is_syncing: bool,
 }
 
+/// 1 ファイルを戻す影響の種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestoreFileKindData {
+    /// いまのファイルを指定時点の内容で置き換える
+    Overwrite,
+    /// いまは無いファイルを作り直す
+    Recreate,
+    /// すでに同じ内容
+    Unchanged,
+    /// 指定時点には存在しない（戻せない）
+    NotInThatPoint,
+}
+
+/// 1 ファイルを戻す操作のプレビュー
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RestoreFilePreviewData {
+    pub kind: RestoreFileKindData,
+    /// いまのファイルのサイズ（バイト）。無ければ null
+    pub size_now: Option<f64>,
+    /// 指定時点のファイルのサイズ（バイト）。存在しなければ null
+    pub size_then: Option<f64>,
+}
+
+/// 1 ファイルを戻した結果の種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestoreFileResultKind {
+    /// 戻した
+    Restored,
+    /// 指定時点に無いため何も変更しなかった
+    NotInThatPoint,
+    /// 同名の保存対象外ファイルを上書きしてしまうため何も変更しなかった
+    IgnoredFileInTheWay,
+}
+
+/// 1 ファイルを戻した結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RestoreFileResult {
+    pub outcome: RestoreFileResultKind,
+    /// 取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）。戻していなければ null
+    pub undo_token: Option<String>,
+}
+
+/// 全体を元に戻した結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RestoreAllResult {
+    /// 取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）
+    pub undo_token: Option<String>,
+}
+
+/// 保存時点で変更されたファイルの種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum PointChangeKindData {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+/// 保存時点で変更されたファイル
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct PointChangeItem {
+    pub path: String,
+    /// 名前変更の場合の元のパス
+    pub old_path: Option<String>,
+    pub kind: PointChangeKindData,
+}
+
+/// 追加できたファイル
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct AddedFileItem {
+    /// プロジェクトからの相対パス
+    pub path: String,
+    /// 同名があったため別名にした
+    pub renamed: bool,
+    /// 大きいファイル（50MB 以上）。アップロードに時間がかかることを知らせる
+    pub large: bool,
+}
+
+/// 追加しなかった理由
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AddRejectKind {
+    /// 100MB を超えるため追加できない
+    TooLarge,
+    /// フォルダなど、ファイルではない
+    NotAFile,
+    /// 読み取れない、またはコピーに失敗した
+    Unreadable,
+}
+
+/// 追加しなかったファイル
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RejectedFileItem {
+    /// 元のファイル名
+    pub name: String,
+    pub reason: AddRejectKind,
+    /// `too-large` のときの元のサイズ（バイト）
+    pub size: Option<f64>,
+}
+
+/// ファイル追加の結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct AddFilesResult {
+    pub added: Vec<AddedFileItem>,
+    pub rejected: Vec<RejectedFileItem>,
+}
+
 // ========== Tauri Setup ==========
 
 fn specta_builder() -> Builder<tauri::Wry> {
@@ -1138,6 +1629,13 @@ fn specta_builder() -> Builder<tauri::Wry> {
             suggest_memo,
             list_files_at,
             open_project_file,
+            restore_file_preview,
+            restore_file,
+            undo_restore,
+            abort_merge,
+            add_files,
+            relocate_project,
+            list_point_changes,
         ])
         .events(collect_events![
             events::StatusChanged,

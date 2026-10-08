@@ -1,14 +1,22 @@
 // 保存・取り込み・アップロード・ぶつかり解消などの高層操作 API。
 
+mod add_files;
+mod file_in_use;
+mod history;
 mod memo;
 mod models;
 mod open_path;
 mod operations;
+mod relocate;
+mod restore_file;
 
+pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
-    new_restore_points, Choice, ConflictFile, ConflictKind, DiffLine, DiffLineKind, FileInHistory,
-    HistoryEntry, Identity, Labels, OpsError, PullOutcome, ResolveOutcome, RestoreFileChange,
+    new_restore_points, AddFilesOutcome, AddRejectReason, AddedFile, Choice, ConflictFile,
+    ConflictKind, DiffLine, DiffLineKind, FileInHistory, HistoryEntry, HistoryKind, Identity,
+    Labels, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile, RelocateCheck,
+    ResolveOutcome, RestoreFileChange, RestoreFileKind, RestoreFileOutcome, RestoreFilePreview,
     RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
 };
 pub use open_path::{resolve_in_project, OpenPathError};
@@ -129,7 +137,7 @@ impl Ops {
 
     /// 履歴一覧を取得。最新順。refs/hikae/ の自動保存は区別される。
     pub fn history(&self, repo: &Path, max_count: usize) -> Result<Vec<HistoryEntry>, OpsError> {
-        operations::history(self.runner(), repo, max_count)
+        history::history(self.runner(), repo, max_count)
     }
 
     /// 特定時点のファイル一覧を取得。
@@ -168,8 +176,86 @@ impl Ops {
     }
 
     /// 指定の時点へ復元。復元前に復元点を作成し、指定時点のファイル状態に復元。
-    pub fn restore(&self, repo: &Path, target_commit: &str) -> Result<(), OpsError> {
+    /// 戻り値は取り消し用の復元点（`refs/hikae/` 配下の ref 名）。`undo_restore` にそのまま渡せる。
+    pub fn restore(&self, repo: &Path, target_commit: &str) -> Result<Option<String>, OpsError> {
         operations::restore(self.runner(), repo, target_commit, self.now())
+    }
+
+    /// 1 ファイルだけを戻した場合の影響（読み取りのみ）。
+    pub fn restore_file_preview(
+        &self,
+        repo: &Path,
+        commit: &str,
+        path: &str,
+    ) -> Result<RestoreFilePreview, OpsError> {
+        restore_file::restore_file_preview(self.runner(), repo, commit, path)
+    }
+
+    /// 指定時点の 1 ファイルだけを作業フォルダに戻す。他のファイルは変更しない。
+    /// 戻す前に復元点を作る。その時点に無いファイルは何も変更せず `NotInThatPoint` を返す。
+    pub fn restore_file(
+        &self,
+        repo: &Path,
+        commit: &str,
+        path: &str,
+    ) -> Result<RestoreFileOutcome, OpsError> {
+        restore_file::restore_file(self.runner(), repo, commit, path, self.now())
+    }
+
+    /// 復元点（`refs/hikae/` 配下の ref 名、または完全な OID）の内容に戻す。
+    /// 戻す前に、いまの状態の復元点を作る。
+    pub fn undo_restore(&self, repo: &Path, restore_point: &str) -> Result<(), OpsError> {
+        restore_file::undo_restore(self.runner(), repo, restore_point, self.now())
+    }
+
+    /// その保存で変更されたファイルの一覧（変更の種類つき）。
+    pub fn list_point_changes(
+        &self,
+        repo: &Path,
+        commit: &str,
+    ) -> Result<Vec<PointChange>, OpsError> {
+        restore_file::list_point_changes(self.runner(), repo, commit)
+    }
+
+    /// 外部のファイルをプロジェクト配下へコピーする（上書きしない・保存はしない）。
+    /// `dest_subdir` はプロジェクトからの相対パス。空ならプロジェクト直下。
+    pub fn add_files(
+        &self,
+        repo: &Path,
+        sources: &[std::path::PathBuf],
+        dest_subdir: &str,
+    ) -> Result<AddFilesOutcome, OpsError> {
+        add_files::add_files(self.runner(), repo, sources, dest_subdir, self.now())
+    }
+
+    /// 付け替え先のフォルダが登録済みプロジェクトと同じリポジトリか確認する（ファイルは変更しない）。
+    pub fn check_relocation(
+        &self,
+        new_path: &Path,
+        expected_remote: Option<&str>,
+    ) -> Result<RelocateCheck, OpsError> {
+        self.check_relocation_with(new_path, expected_remote, None)
+    }
+
+    /// `check_relocation` に、保存先 URL が無い場合の照合用として初期の保存（最初の commit）の OID を加えた版。
+    pub fn check_relocation_with(
+        &self,
+        new_path: &Path,
+        expected_remote: Option<&str>,
+        expected_initial_commit: Option<&str>,
+    ) -> Result<RelocateCheck, OpsError> {
+        relocate::check_relocation(
+            self.runner(),
+            new_path,
+            expected_remote,
+            expected_initial_commit,
+        )
+    }
+
+    /// 最初の保存（親を持たない commit）の OID。まだ保存が無ければ None。
+    /// プロジェクト登録時に記録し、保存先 URL の無いプロジェクトの付け替え照合に使う。
+    pub fn initial_commit(&self, repo: &Path) -> Result<Option<String>, OpsError> {
+        relocate::initial_commit(self.runner(), repo)
     }
 }
 

@@ -891,3 +891,708 @@ fn test_18_pull_with_updates_creates_one_restore_point() -> Result<(), Box<dyn s
     setup.cleanup()?;
     Ok(())
 }
+
+/// 保存して、その commit を返す
+fn save_commit(
+    ops: &Ops,
+    repo: &std::path::Path,
+    memo: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match ops.save(repo, memo)? {
+        core_ops::SaveOutcome::Saved { commit, .. } => Ok(commit),
+        other => Err(format!("expected Saved, got {other:?}").into()),
+    }
+}
+
+fn read(repo: &std::path::Path, rel: &str) -> String {
+    std::fs::read_to_string(repo.join(rel)).unwrap_or_else(|e| format!("<{e}>"))
+}
+
+#[test]
+fn test_19_restore_file_touches_only_that_file_and_can_be_undone(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-19")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "a.txt", "a1")?;
+    common::write_test_file(repo, "b.txt", "b1")?;
+    let c1 = save_commit(&ops, repo, "c1")?;
+    common::write_test_file(repo, "a.txt", "a2")?;
+    common::write_test_file(repo, "b.txt", "b2")?;
+    save_commit(&ops, repo, "c2")?;
+    // 未保存の変更と未追跡ファイル
+    common::write_test_file(repo, "a.txt", "a3-unsaved")?;
+    common::write_test_file(repo, "untracked.txt", "keep me")?;
+    let head_before = get_head_commit(repo);
+
+    // プレビュー
+    let preview = ops.restore_file_preview(repo, &c1, "a.txt")?;
+    assert_eq!(preview.kind, core_ops::RestoreFileKind::Overwrite);
+    assert_eq!(preview.size_then, Some(2));
+
+    let refs_before = ops.restore_point_refs(repo)?;
+    let outcome = ops.restore_file(repo, &c1, "a.txt")?;
+    let core_ops::RestoreFileOutcome::Restored { undo_ref } = outcome else {
+        panic!("expected Restored, got {outcome:?}");
+    };
+
+    // 対象だけが戻り、他は変わらない
+    assert_eq!(read(repo, "a.txt"), "a1");
+    assert_eq!(read(repo, "b.txt"), "b2");
+    assert_eq!(read(repo, "file.txt"), "initial content");
+    assert_eq!(read(repo, "untracked.txt"), "keep me");
+    assert_eq!(get_head_commit(repo), head_before, "履歴は変わらない");
+
+    // 復元点が作られ、取り消し先がその 1 つを指す
+    let refs_after = ops.restore_point_refs(repo)?;
+    assert!(refs_after.len() > refs_before.len());
+    let undo_ref = undo_ref.ok_or("undo_ref expected")?;
+    assert!(undo_ref.starts_with("refs/hikae/"));
+    assert!(refs_after.contains(&undo_ref));
+
+    // 戻した後に作った未追跡ファイルは、取り消しでも消えない
+    common::write_test_file(repo, "late.txt", "created after restore")?;
+    // 取り消すと、戻す直前の未保存の内容に戻る。未追跡ファイルは残る
+    ops.undo_restore(repo, &undo_ref)?;
+    assert_eq!(read(repo, "a.txt"), "a3-unsaved");
+    assert_eq!(read(repo, "b.txt"), "b2");
+    assert_eq!(read(repo, "late.txt"), "created after restore");
+    assert_eq!(read(repo, "untracked.txt"), "keep me");
+    assert!(ops.restore_point_refs(repo)?.len() > refs_after.len());
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_20_restore_file_missing_at_that_point_deletes_nothing(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-20")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    let base = get_head_commit(repo).ok_or("no head")?;
+    common::write_test_file(repo, "later.txt", "later")?;
+    save_commit(&ops, repo, "add later")?;
+    common::write_test_file(repo, "later.txt", "later-edited")?;
+
+    let refs_before = ops.restore_point_refs(repo)?;
+    let preview = ops.restore_file_preview(repo, &base, "later.txt")?;
+    assert_eq!(preview.kind, core_ops::RestoreFileKind::NotInThatPoint);
+    assert_eq!(
+        ops.restore_file(repo, &base, "later.txt")?,
+        core_ops::RestoreFileOutcome::NotInThatPoint
+    );
+    assert_eq!(
+        read(repo, "later.txt"),
+        "later-edited",
+        "現在のファイルは消さない"
+    );
+    assert_eq!(
+        ops.restore_point_refs(repo)?,
+        refs_before,
+        "何も変更しないので復元点も作らない"
+    );
+
+    // 消えているファイルは作り直せる
+    std::fs::remove_file(repo.join("file.txt"))?;
+    let preview = ops.restore_file_preview(repo, &base, "file.txt")?;
+    assert_eq!(preview.kind, core_ops::RestoreFileKind::Recreate);
+    ops.restore_file(repo, &base, "file.txt")?;
+    assert_eq!(read(repo, "file.txt"), "initial content");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_21_restore_file_and_undo_reject_unsafe_input() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-21")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+    let head = get_head_commit(repo).ok_or("no head")?;
+
+    for bad in [
+        "../outside.txt",
+        "/etc/passwd",
+        ".git/config",
+        ":(top)file.txt",
+        "",
+    ] {
+        assert!(ops.restore_file(repo, &head, bad).is_err(), "{bad:?}");
+        assert!(
+            ops.restore_file_preview(repo, &head, bad).is_err(),
+            "{bad:?}"
+        );
+    }
+    assert!(ops.restore_file(repo, "--hard", "file.txt").is_err());
+    assert!(ops.restore_file(repo, "", "file.txt").is_err());
+
+    // 復元点以外の ref・存在しない復元点・OID でないものは拒否する
+    for bad in [
+        "refs/heads/main",
+        "main",
+        "HEAD",
+        "--hard",
+        "refs/hikae/snapshots/main/not-there",
+        "refs/hikae/../heads/main",
+        head.get(..7).unwrap_or("abc"),
+    ] {
+        assert!(ops.undo_restore(repo, bad).is_err(), "{bad:?}");
+    }
+    // 復元点でない完全な OID（HEAD のコミット）も拒否する
+    assert!(ops.undo_restore(repo, &head).is_err());
+
+    // 復元点の完全な OID は受け付ける
+    common::write_test_file(repo, "file.txt", "edited")?;
+    ops.save(repo, "edit")?;
+    let refs = ops.restore_point_refs(repo)?;
+    let backup = refs
+        .iter()
+        .find(|r| r.starts_with("refs/hikae/backup/"))
+        .ok_or("no backup")?;
+    let (_, oid, _) = run_git(repo, &["rev-parse", backup]);
+    ops.undo_restore(repo, oid.trim())?;
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_22_list_point_changes_reports_kinds() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-22")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    let long = "line of text that is long enough to be detected as a rename\n".repeat(20);
+    common::write_test_file(repo, "old-name.txt", &long)?;
+    common::write_test_file(repo, "gone.txt", "bye")?;
+    common::write_test_file(repo, "edit.txt", "v1")?;
+    save_commit(&ops, repo, "base")?;
+    std::fs::rename(repo.join("old-name.txt"), repo.join("new-name.txt"))?;
+    std::fs::remove_file(repo.join("gone.txt"))?;
+    common::write_test_file(repo, "edit.txt", "v2")?;
+    common::write_test_file(repo, "資料/追加 1.txt", "new")?;
+    let c = save_commit(&ops, repo, "mix")?;
+
+    let changes = ops.list_point_changes(repo, &c)?;
+    let find = |p: &str| changes.iter().find(|c| c.path == p);
+    assert_eq!(
+        find("gone.txt").map(|c| c.kind),
+        Some(core_ops::PointChangeKind::Deleted)
+    );
+    assert_eq!(
+        find("edit.txt").map(|c| c.kind),
+        Some(core_ops::PointChangeKind::Modified)
+    );
+    assert_eq!(
+        find("資料/追加 1.txt").map(|c| c.kind),
+        Some(core_ops::PointChangeKind::Added)
+    );
+    let renamed = find("new-name.txt").ok_or("rename missing")?;
+    assert_eq!(renamed.kind, core_ops::PointChangeKind::Renamed);
+    assert_eq!(renamed.old_path.as_deref(), Some("old-name.txt"));
+
+    // 最初の保存は全ファイルが追加
+    let (_, first, _) = run_git(repo, &["rev-list", "--max-parents=0", "HEAD"]);
+    let root = ops.list_point_changes(repo, first.trim())?;
+    assert!(root
+        .iter()
+        .all(|c| c.kind == core_ops::PointChangeKind::Added));
+    assert!(root.iter().any(|c| c.path == "file.txt"));
+    assert!(ops.list_point_changes(repo, "--help").is_err());
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-23")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+    let src_dir = setup.pc_a.parent().ok_or("no parent")?.join("outside-src");
+    std::fs::create_dir_all(&src_dir)?;
+    let src = src_dir.join("x.txt");
+    std::fs::write(&src, "from outside")?;
+    std::fs::create_dir_all(repo.join("docs"))?;
+    let head_before = get_head_commit(repo);
+
+    // 直下へ追加。2回目は別名になり、1回目のファイルは上書きされない
+    let first = ops.add_files(repo, std::slice::from_ref(&src), "")?;
+    assert_eq!(first.added.len(), 1);
+    assert_eq!(first.added[0].path, "x.txt");
+    assert!(!first.added[0].renamed);
+    std::fs::write(repo.join("x.txt"), "edited in project")?;
+    let second = ops.add_files(repo, std::slice::from_ref(&src), "")?;
+    assert_eq!(second.added[0].path, "x (2).txt");
+    assert!(second.added[0].renamed);
+    assert_eq!(read(repo, "x.txt"), "edited in project");
+    assert_eq!(read(repo, "x (2).txt"), "from outside");
+    assert!(src.exists(), "コピー元は動かさない");
+
+    // サブフォルダへ
+    let sub = ops.add_files(repo, std::slice::from_ref(&src), "docs")?;
+    assert_eq!(sub.added[0].path, "docs/x.txt");
+    assert_eq!(read(repo, "docs/x.txt"), "from outside");
+
+    // 保存はしない（履歴は変わらず、未保存の変更として残る）
+    assert_eq!(get_head_commit(repo), head_before);
+    assert!(ops.sync_state(repo)?.dirty);
+
+    // 復元点が作られる
+    assert!(!ops.restore_point_refs(repo)?.is_empty());
+
+    // 不正な追加先
+    for bad in [
+        "..",
+        "../outside-src",
+        "docs/../..",
+        "/tmp",
+        "C:\\Windows",
+        ".git",
+        ".git/hooks",
+        "no-such-dir",
+    ] {
+        assert!(
+            ops.add_files(repo, std::slice::from_ref(&src), bad)
+                .is_err(),
+            "{bad:?}"
+        );
+    }
+    // 追加先がファイルの場合も拒否する
+    assert!(ops
+        .add_files(repo, std::slice::from_ref(&src), "x.txt")
+        .is_err());
+
+    // フォルダ・存在しないもの・100MB 超は追加せず理由を返す
+    let big = src_dir.join("big.bin");
+    let f = std::fs::File::create(&big)?;
+    f.set_len(core_ops::LARGE_FILE_LIMIT_BYTES + 1)?;
+    let warn = src_dir.join("warn.bin");
+    let f = std::fs::File::create(&warn)?;
+    f.set_len(core_ops::LARGE_FILE_WARN_BYTES)?;
+    let sources = vec![src_dir.clone(), src_dir.join("missing.txt"), big, warn];
+    let out = ops.add_files(repo, &sources, "")?;
+    assert_eq!(out.added.len(), 1);
+    assert_eq!(out.added[0].path, "warn.bin");
+    assert!(out.added[0].large);
+    assert_eq!(out.rejected.len(), 3);
+    assert!(out.rejected.iter().any(|r| matches!(
+        r.reason,
+        core_ops::AddRejectReason::TooLarge { size } if size == core_ops::LARGE_FILE_LIMIT_BYTES + 1
+    )));
+    assert!(out
+        .rejected
+        .iter()
+        .any(|r| r.reason == core_ops::AddRejectReason::NotAFile));
+    assert!(out
+        .rejected
+        .iter()
+        .any(|r| r.reason == core_ops::AddRejectReason::Unreadable));
+    assert!(!repo.join("big.bin").exists());
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_24_check_relocation_requires_same_repository() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-24")?;
+    let ops = Ops::new(new_runner());
+    let url = setup.bare_repo.to_string_lossy().to_string();
+    let identity = core_ops::Identity {
+        name: "x".to_string(),
+        email: "x@users.noreply.github.com".to_string(),
+    };
+
+    // 同じ保存先を持つ別の場所（PC-B）は同一とみなす
+    assert_eq!(
+        ops.check_relocation(&setup.pc_b, Some(&url))?,
+        core_ops::RelocateCheck::Same
+    );
+
+    // 別のリポジトリ（保存先が違う）は拒否
+    let parent = setup.pc_a.parent().ok_or("no parent")?;
+    let other = parent.join("other-project");
+    ops.init_project(
+        &other,
+        Some("https://example.com/someone/else.git"),
+        &identity,
+    )?;
+    assert_eq!(
+        ops.check_relocation(&other, Some(&url))?,
+        core_ops::RelocateCheck::DifferentRepository
+    );
+
+    // 保存先が無いリポジトリも別物として拒否
+    let no_remote = parent.join("no-remote");
+    ops.init_project(&no_remote, None, &identity)?;
+    assert_eq!(
+        ops.check_relocation(&no_remote, Some(&url))?,
+        core_ops::RelocateCheck::DifferentRepository
+    );
+
+    // 照合できる登録情報が無ければ確認不能
+    assert_eq!(
+        ops.check_relocation(&setup.pc_b, None)?,
+        core_ops::RelocateCheck::CannotVerify
+    );
+
+    // リポジトリの最上位でない（サブフォルダ）・存在しない
+    std::fs::create_dir_all(setup.pc_b.join("sub"))?;
+    assert_eq!(
+        ops.check_relocation(&setup.pc_b.join("sub"), Some(&url))?,
+        core_ops::RelocateCheck::NotARepository
+    );
+    assert_eq!(
+        ops.check_relocation(&setup.pc_b.join("nope"), Some(&url))?,
+        core_ops::RelocateCheck::NotARepository
+    );
+
+    // 確認だけでファイルは変わらない
+    assert_eq!(read(&setup.pc_b, "file.txt"), "initial content");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+/// 履歴のうち、手動の保存だけを取り出す（自動保存は `snapshot_ref` を持つ）
+fn manual_entries(entries: &[core_ops::HistoryEntry]) -> Vec<&core_ops::HistoryEntry> {
+    entries
+        .iter()
+        .filter(|e| e.snapshot_ref.is_none())
+        .collect()
+}
+
+#[test]
+fn test_25_history_lists_multiple_saves_with_file_counts() -> Result<(), Box<dyn std::error::Error>>
+{
+    let setup = TestSetup::new("test-25")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "a.txt", "a1")?;
+    common::write_test_file(repo, "b.txt", "b1")?;
+    let c1 = save_commit(&ops, repo, "first")?;
+    common::write_test_file(repo, "a.txt", "a2")?;
+    let c2 = save_commit(&ops, repo, "second")?;
+    std::fs::remove_file(repo.join("b.txt"))?;
+    common::write_test_file(repo, "c.txt", "c1")?;
+    let c3 = save_commit(&ops, repo, "third")?;
+
+    let entries = ops.history(repo, 50)?;
+    // 保存の直前に作られる復元点（スナップショット）は、直後の保存と同じ内容なので出さない
+    assert!(
+        entries.iter().all(|e| e.snapshot_ref.is_none()),
+        "手動の保存だけが並ぶ: {entries:?}"
+    );
+    let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["third", "second", "first", "initial commit"]);
+    assert!(c3.starts_with(&entries[0].commit));
+    assert!(c2.starts_with(&entries[1].commit));
+    assert!(c1.starts_with(&entries[2].commit));
+    let counts: Vec<u32> = entries.iter().map(|e| e.changed_files_count).collect();
+    // third は b.txt の削除と c.txt の追加、initial commit は file.txt の追加
+    assert_eq!(counts, [2, 1, 2, 1]);
+
+    // 件数の上限が効く
+    assert_eq!(ops.history(repo, 2)?.len(), 2);
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_26_history_keeps_memo_with_pipe_and_newline() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-26")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    let memo = "見積 | 請求 | 納品\n2行目 | 補足\n\n3段落目";
+    common::write_test_file(repo, "a.txt", "a")?;
+    save_commit(&ops, repo, memo)?;
+    common::write_test_file(repo, "a.txt", "b")?;
+    save_commit(&ops, repo, "||")?;
+
+    let entries = ops.history(repo, 10)?;
+    assert_eq!(entries[0].message, "||");
+    assert_eq!(
+        entries[1].message, memo,
+        "メモは区切り文字や改行を含んでも欠けない"
+    );
+    assert_eq!(entries[0].changed_files_count, 1);
+    assert_eq!(entries.len(), 3);
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_27_history_handles_root_commit() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::Builder::new().prefix("test-27").tempdir()?;
+    let repo = tmp.path().join("fresh");
+    let ops = Ops::new(new_runner());
+    ops.init_project(
+        &repo,
+        None,
+        &core_ops::Identity {
+            name: "x".to_string(),
+            email: "x@users.noreply.github.com".to_string(),
+        },
+    )?;
+    // まだ保存が無い（HEAD が無い）プロジェクトは空の履歴
+    assert!(ops.history(&repo, 10)?.is_empty());
+
+    common::write_test_file(&repo, "a.txt", "a")?;
+    common::write_test_file(&repo, "dir/b.txt", "b")?;
+    common::write_test_file(&repo, "dir/c.txt", "c")?;
+    save_commit(&ops, &repo, "root")?;
+
+    let entries = ops.history(&repo, 10)?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].message, "root");
+    assert_eq!(
+        entries[0].changed_files_count, 3,
+        "ルートは全ファイルが追加扱い"
+    );
+    assert!(entries[0].snapshot_ref.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_28_history_marks_snapshots_as_auto_saves() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-28")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "a.txt", "a1")?;
+    let c1 = save_commit(&ops, repo, "c1")?;
+    common::write_test_file(repo, "a.txt", "a2")?;
+    save_commit(&ops, repo, "c2")?;
+
+    // 未保存の変更がある状態で 1 ファイルを戻す → 復元点として自動保存が作られる
+    common::write_test_file(repo, "a.txt", "a3-unsaved")?;
+    common::write_test_file(repo, "new.txt", "unsaved new file")?;
+    ops.restore_file(repo, &c1, "a.txt")?;
+
+    let entries = ops.history(repo, 50)?;
+    let autos: Vec<_> = entries
+        .iter()
+        .filter(|e| e.snapshot_ref.is_some())
+        .collect();
+    assert_eq!(autos.len(), 1, "自動保存は 1 件だけ: {entries:?}");
+    let auto = autos[0];
+    let snapshot_ref = auto.snapshot_ref.as_deref().ok_or("snapshot_ref")?;
+    assert!(
+        snapshot_ref.starts_with("refs/hikae/snapshots/"),
+        "{snapshot_ref}"
+    );
+    assert!(auto.message.starts_with("auto:"), "{}", auto.message);
+    assert_eq!(auto.changed_files_count, 2, "a.txt の更新と new.txt の追加");
+
+    // 手動の保存は区別されたまま、復元点（backup）は履歴に出ない
+    let manual = manual_entries(&entries);
+    let messages: Vec<&str> = manual.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["c2", "c1", "initial commit"]);
+    assert!(entries.iter().all(|e| !e.message.starts_with("backup")));
+
+    // 自動保存の commit は公開側の履歴（HEAD）には入っていない
+    let (_, head_log, _) = run_git(repo, &["log", "--format=%s", "HEAD"]);
+    assert!(!head_log.contains("auto:"), "{head_log}");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_29_history_counts_japanese_file_names() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-29")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "資料/第3章 報告書.txt", "本文")?;
+    common::write_test_file(repo, "資料/図表①.txt", "図")?;
+    save_commit(&ops, repo, "日本語のファイルを追加")?;
+    common::write_test_file(repo, "資料/第3章 報告書.txt", "本文を更新")?;
+    save_commit(&ops, repo, "更新")?;
+
+    let entries = ops.history(repo, 10)?;
+    assert_eq!(entries[0].message, "更新");
+    assert_eq!(entries[0].changed_files_count, 1);
+    assert_eq!(entries[1].message, "日本語のファイルを追加");
+    assert_eq!(entries[1].changed_files_count, 2);
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_30_restore_returns_a_token_that_undoes_it() -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-30")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "a.txt", "a1")?;
+    let c1 = save_commit(&ops, repo, "c1")?;
+    common::write_test_file(repo, "a.txt", "a2")?;
+    common::write_test_file(repo, "b.txt", "b2")?;
+    save_commit(&ops, repo, "c2")?;
+
+    // 未保存の変更がある状態で全体を戻す → 取り消し先は戻す直前の作業状態（スナップショット）
+    common::write_test_file(repo, "a.txt", "a3-unsaved")?;
+    common::write_test_file(repo, "untracked.txt", "keep me")?;
+    let refs_before = ops.restore_point_refs(repo)?;
+    let token = ops
+        .restore(repo, &c1)?
+        .ok_or("restore must return an undo token")?;
+    assert!(token.starts_with("refs/hikae/snapshots/"), "{token}");
+    assert!(ops.restore_point_refs(repo)?.contains(&token));
+    assert!(ops.restore_point_refs(repo)?.len() > refs_before.len());
+    assert_eq!(read(repo, "a.txt"), "a1");
+    assert!(
+        !repo.join("b.txt").exists(),
+        "その時点に無い追跡ファイルは戻る"
+    );
+    assert_eq!(read(repo, "untracked.txt"), "keep me");
+
+    ops.undo_restore(repo, &token)?;
+    assert_eq!(read(repo, "a.txt"), "a3-unsaved");
+    assert_eq!(read(repo, "b.txt"), "b2");
+    assert_eq!(read(repo, "untracked.txt"), "keep me");
+
+    // 未保存の変更が無い状態では、取り消し先は HEAD の控え（backup）
+    save_commit(&ops, repo, "c3")?;
+    let token = ops
+        .restore(repo, &c1)?
+        .ok_or("restore must return an undo token")?;
+    assert!(token.starts_with("refs/hikae/backup/restore/"), "{token}");
+    assert_eq!(read(repo, "a.txt"), "a1");
+    ops.undo_restore(repo, &token)?;
+    assert_eq!(read(repo, "a.txt"), "a3-unsaved");
+    assert_eq!(read(repo, "b.txt"), "b2");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
+fn test_31_relocation_without_remote_uses_initial_commit() -> Result<(), Box<dyn std::error::Error>>
+{
+    let setup = TestSetup::new("test-31")?;
+    let ops = Ops::new(new_runner());
+    let identity = core_ops::Identity {
+        name: "x".to_string(),
+        email: "x@users.noreply.github.com".to_string(),
+    };
+    let parent = setup.pc_a.parent().ok_or("no parent")?;
+
+    // 保存先の無いプロジェクト
+    let project = parent.join("local-only");
+    ops.init_project(&project, None, &identity)?;
+    assert_eq!(ops.initial_commit(&project)?, None, "保存前は記録できない");
+    common::write_test_file(&project, "a.txt", "a")?;
+    let first = save_commit(&ops, &project, "first")?;
+    common::write_test_file(&project, "a.txt", "b")?;
+    save_commit(&ops, &project, "second")?;
+    let initial = ops
+        .initial_commit(&project)?
+        .ok_or("initial commit expected")?;
+    assert_eq!(initial, first, "最初の保存の OID");
+
+    // フォルダを移動した想定（コピー）。履歴が同じなら同一とみなす
+    let moved = parent.join("moved");
+    let (code, _, err) = common::run_git(
+        parent,
+        &[
+            "clone",
+            &project.to_string_lossy(),
+            &moved.to_string_lossy(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        ops.check_relocation_with(&moved, None, Some(&initial))?,
+        core_ops::RelocateCheck::Same
+    );
+
+    // 別のプロジェクト（初期の保存が違う）は拒否
+    let other = parent.join("other-local");
+    ops.init_project(&other, None, &identity)?;
+    common::write_test_file(&other, "a.txt", "a")?;
+    save_commit(&ops, &other, "first")?;
+    assert_eq!(
+        ops.check_relocation_with(&other, None, Some(&initial))?,
+        core_ops::RelocateCheck::DifferentRepository
+    );
+
+    // 保存が 1 つも無いフォルダも別物
+    let empty = parent.join("empty-repo");
+    ops.init_project(&empty, None, &identity)?;
+    assert_eq!(
+        ops.check_relocation_with(&empty, None, Some(&initial))?,
+        core_ops::RelocateCheck::DifferentRepository
+    );
+
+    // 保存先も初期の保存も未登録なら、従来どおり確認不能
+    assert_eq!(
+        ops.check_relocation_with(&moved, None, None)?,
+        core_ops::RelocateCheck::CannotVerify
+    );
+    assert_eq!(
+        ops.check_relocation_with(&moved, Some(""), Some(""))?,
+        core_ops::RelocateCheck::CannotVerify
+    );
+
+    // 保存先 URL がある場合は URL の照合が優先される（初期の保存が合っていても URL が違えば拒否）
+    let url = setup.bare_repo.to_string_lossy().to_string();
+    assert_eq!(
+        ops.check_relocation_with(&moved, Some(&url), Some(&initial))?,
+        core_ops::RelocateCheck::DifferentRepository
+    );
+
+    // 確認だけでファイルは変わらない
+    assert_eq!(read(&moved, "a.txt"), "b");
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+/// Windows で、他のアプリがファイルを排他で開いている状態を再現して E12 を確認する
+#[cfg(windows)]
+#[test]
+fn test_32_file_held_open_by_another_app_is_reported_as_in_use(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let setup = TestSetup::new("test-32")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+
+    common::write_test_file(repo, "第3章.docx", "v1")?;
+    let c1 = save_commit(&ops, repo, "v1")?;
+    common::write_test_file(repo, "第3章.docx", "v2")?;
+    save_commit(&ops, repo, "v2")?;
+
+    // 共有を許可しない（share_mode 0）で開いたままにする
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(repo.join("第3章.docx"))?;
+
+    let result = ops.restore(repo, &c1);
+    match &result {
+        Err(core_ops::OpsError::FileInUse { .. }) => {}
+        other => panic!("expected FileInUse, got {other:?}"),
+    }
+    drop(held);
+    // 閉じれば同じ操作が成功する
+    ops.restore(repo, &c1)?;
+    assert_eq!(read(repo, "第3章.docx"), "v1");
+
+    setup.cleanup()?;
+    Ok(())
+}

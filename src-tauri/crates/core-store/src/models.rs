@@ -14,6 +14,9 @@ pub struct Project {
     pub default_branch: String,
     pub last_viewed_at: String, // RFC3339 形式
     pub config: String,         // JSON 形式のプロジェクト別設定
+    /// 最初の保存（親を持たない commit）の OID。保存先 URL が無いプロジェクトの付け替え照合に使う。
+    /// まだ保存が無い、または古い登録では None
+    pub initial_commit: Option<String>,
 }
 
 /// プロジェクト別設定（7章）。JSON で保存される。
@@ -94,6 +97,7 @@ mod tests {
             default_branch: "main".to_string(),
             last_viewed_at: String::new(),
             config: config.to_string(),
+            initial_commit: None,
         }
     }
 

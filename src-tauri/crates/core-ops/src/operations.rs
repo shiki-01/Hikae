@@ -284,61 +284,15 @@ fn last_saved_at(runner: &GitRunner, repo: &Path, rev: &str, path: &str) -> Opti
 }
 
 /// `status --porcelain=v2 -z --branch` を実行して解析する
-fn read_status(runner: &GitRunner, repo: &Path) -> Result<core_git::StatusV2, OpsError> {
+pub(crate) fn read_status(runner: &GitRunner, repo: &Path) -> Result<core_git::StatusV2, OpsError> {
     let out = runner.run_ok(repo, &["status", "--porcelain=v2", "-z", "--branch"])?;
     core_git::parse_status_v2(&out.stdout).map_err(|e| OpsError::Unexpected(e.to_string()))
 }
 
-/// 履歴一覧を取得。最新順。refs/hikae/snapshots/ の自動保存は区別される。
-pub(crate) fn history(
-    runner: &GitRunner,
-    repo: &Path,
-    max_count: usize,
-) -> Result<Vec<HistoryEntry>, OpsError> {
-    // git log の出力形式: "%H %ai %s" （ハッシュ、タイムスタンプ、メッセージ）
-    let cmd = [
-        "log",
-        "--format=%H|%ai|%s",
-        "--max-count",
-        &max_count.to_string(),
-        "HEAD",
-    ];
-    let out = runner.run_ok(repo, &cmd)?;
-    let log_output = String::from_utf8_lossy(&out.stdout);
-
-    let mut entries = Vec::new();
-    for line in log_output.lines() {
-        let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-
-        let commit_full = parts[0];
-        let commit = commit_full.chars().take(7).collect::<String>();
-        let timestamp = parts[1].to_string();
-        let message = parts[2..].join("|");
-
-        // デフォルトでは手動の保存として扱う
-        let snapshot_ref = None;
-
-        // ファイル変更数を取得
-        let stat_out = runner.run_ok(
-            repo,
-            &["diff-tree", "--numstat", "-r", "--max-count=1", commit_full],
-        )?;
-        let stat_output = String::from_utf8_lossy(&stat_out.stdout);
-        let changed_files_count = stat_output.lines().count() as u32;
-
-        entries.push(HistoryEntry {
-            commit,
-            timestamp,
-            message,
-            snapshot_ref,
-            changed_files_count,
-        });
-    }
-
-    Ok(entries)
+/// 現在のブランチ名（detached HEAD では失敗する）
+pub(crate) fn current_branch(runner: &GitRunner, repo: &Path) -> Result<String, OpsError> {
+    let out = runner.run_ok(repo, &["symbolic-ref", "--short", "HEAD"])?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// 特定時点のファイル一覧を取得。
@@ -360,7 +314,7 @@ pub(crate) fn list_files_at(
 /// `ls-tree -r -z -l` の出力を解析する。
 /// 各エントリは `<mode> <type> <oid> <size>\t<path>` が NUL で区切られる。
 /// サブモジュール（commit）など blob 以外は一覧に含めない。
-fn parse_ls_tree_long(stdout: &[u8]) -> Vec<FileInHistory> {
+pub(crate) fn parse_ls_tree_long(stdout: &[u8]) -> Vec<FileInHistory> {
     let mut files = Vec::new();
     for entry in stdout.split(|b| *b == 0) {
         if entry.is_empty() {
@@ -594,12 +548,13 @@ pub(crate) fn restore_preview(
 }
 
 /// 指定の時点へ復元。復元前に復元点を作成し、指定時点のファイル状態に復元。
+/// 戻り値は取り消し用の復元点（`refs/hikae/` 配下の ref 名。`undo_restore` に渡せる）。
 pub(crate) fn restore(
     runner: &GitRunner,
     repo: &Path,
     target_commit: &str,
     now: OffsetDateTime,
-) -> Result<(), OpsError> {
+) -> Result<Option<String>, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
     if !current_conflicts.is_empty() {
@@ -612,8 +567,11 @@ pub(crate) fn restore(
         .trim()
         .to_string();
 
+    // 未保存の変更があるかを復元点の作成前に調べておく（取り消し先の決定に使う）
+    let dirty_before = !read_status(runner, repo)?.entries.is_empty();
+
     // 復元点を作成
-    let _ = create_restore_point(runner, repo, &branch, "restore", now)?;
+    let point = create_restore_point(runner, repo, &branch, "restore", now)?;
 
     // restore --source で指定時点のファイル状態に復元（未追跡ファイルは消さない）
     // 注意: restore --source は reset と異なり、staged / worktree の両方を復元する
@@ -630,7 +588,7 @@ pub(crate) fn restore(
         ],
     )?;
 
-    Ok(())
+    crate::restore_file::undo_target(runner, repo, &branch, point, dirty_before)
 }
 
 /// 競合を解消
