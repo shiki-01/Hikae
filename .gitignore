@@ -31,3 +31,8 @@ $RECYCLE.BIN/
 
 # 単体の rustc 実験で出る成果物
 *.rlib
+
+# 同梱する git（scripts/fetch-git-windows.mjs・scripts/build-git-macos.sh が生成する。バイナリはコミットしない）
+/src-tauri/app/resources/git/*
+!/src-tauri/app/resources/git/.gitkeep
+/src-tauri/app/resources/.git-staging/

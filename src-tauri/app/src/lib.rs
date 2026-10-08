@@ -396,13 +396,21 @@ pub(crate) fn project_info(p: &Project) -> ProjectInfo {
 
 // ========== git の呼び出し口 ==========
 
+/// アプリのリソースフォルダ（同梱 git の探索に使う）。setup で一度だけ設定する。
+static RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 /// アプリ共通の GitRunner を作る。
 ///
+/// git は `HIKAE_GIT_PATH`、同梱の git、PATH 上の git の順に探す（`GitRunner::bundled`）。
 /// ネットワーク通信（clone / fetch / push）には、アプリ自身を credential helper として渡す
 /// （設計書 8.2）。トークンは URL にもコマンドライン引数にも載せず、git が実行時にこの
 /// アプリの `credential` サブコマンドへ問い合わせる。ユーザーのグローバル git 設定には書き込まない。
 pub(crate) fn git_runner() -> GitRunner {
-    let runner = GitRunner::from_path_env();
+    // 同梱の git を優先する。resource_dir が未設定（setup 前）の場合は PATH 上の git を使う
+    let runner = match RESOURCE_DIR.get() {
+        Some(dir) => GitRunner::bundled(dir),
+        None => GitRunner::from_path_env(),
+    };
     let helper = std::env::current_exe()
         .ok()
         .and_then(|exe| core_github::helper_command(&exe.to_string_lossy()));
@@ -2493,6 +2501,11 @@ pub fn run() {
         .setup(move |app| {
             // イベントの登録（UI への通知に必要）
             builder.mount_events(app);
+
+            // 同梱 git の探索に使うリソースフォルダを保持する（取得できない場合は PATH 上の git を使う）
+            if let Ok(dir) = app.path().resource_dir() {
+                let _ = RESOURCE_DIR.set(dir);
+            }
 
             // app_data_dir 内に DB を配置
             let app_data_dir = app.path().app_data_dir().map_err(|e| {

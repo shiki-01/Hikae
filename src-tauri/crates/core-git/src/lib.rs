@@ -1,9 +1,11 @@
 // Git 操作の基盤 crate。GitRunner を通じてすべての git 呼び出しを統制する。
 
+mod bundled;
 mod parser;
 mod runner;
 mod validation;
 
+pub use bundled::{BundledEnv, GitSource, Layout, GIT_PATH_ENV};
 pub use parser::{
     parse_status_v2, BranchInfo, ParseError, StatusCode, StatusEntry, StatusKind, StatusV2,
 };

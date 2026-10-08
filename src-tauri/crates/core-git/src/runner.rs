@@ -1,3 +1,4 @@
+use crate::bundled::{self, BundledEnv, GitSource, Layout, Resolved, GIT_PATH_ENV};
 use crate::validation::validate;
 use crate::GitError;
 use std::ffi::OsStr;
@@ -25,6 +26,10 @@ pub struct GitRunner {
     /// ネットワーク通信（clone / fetch / push / ls-remote）にだけ渡す credential helper。
     /// アプリ自身を指す `!<コマンド>` 形式。トークンは含まれず、git が実行時に helper へ問い合わせる
     credential_helper: Option<String>,
+    /// 同梱構成の git を使うときに子プロセスへ足す設定（PATH の先頭、GIT_EXEC_PATH など）
+    bundled: Option<BundledEnv>,
+    /// git の入手元（ログ・診断用）
+    source: GitSource,
 }
 
 impl GitRunner {
@@ -34,16 +39,48 @@ impl GitRunner {
             git_path: git_path.into(),
             timeout: Duration::from_secs(60),
             credential_helper: None,
+            bundled: None,
+            source: GitSource::Explicit,
         }
     }
 
-    /// PATH から git を探して GitRunner を作成する（テスト・開発用）
-    pub fn from_path_env() -> Self {
+    fn from_resolved(r: Resolved) -> Self {
         GitRunner {
-            git_path: PathBuf::from("git"),
+            git_path: r.git_path,
             timeout: Duration::from_secs(60),
             credential_helper: None,
+            bundled: r.bundled,
+            source: r.source,
         }
+    }
+
+    /// git を探して GitRunner を作成する（テスト・開発用）。
+    ///
+    /// 環境変数 `HIKAE_GIT_PATH` が存在するファイルを指していればそれを使い、無ければ PATH 上の git を使う。
+    pub fn from_path_env() -> Self {
+        let explicit = std::env::var_os(GIT_PATH_ENV);
+        Self::from_resolved(bundled::resolve_without_resources(
+            explicit.as_deref(),
+            Layout::native(),
+        ))
+    }
+
+    /// 同梱の git を優先して GitRunner を作成する。
+    ///
+    /// 優先順位: (1) 環境変数 `HIKAE_GIT_PATH`、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git。
+    /// 同梱 git を使うときは、PATH の先頭・`GIT_EXEC_PATH`・`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。
+    pub fn bundled(resource_dir: &Path) -> Self {
+        let explicit = std::env::var_os(GIT_PATH_ENV);
+        Self::from_resolved(bundled::resolve(
+            Some(resource_dir),
+            explicit.as_deref(),
+            Layout::native(),
+        ))
+    }
+
+    /// git の入手元（明示指定・同梱・PATH）
+    pub fn source(&self) -> GitSource {
+        self.source
     }
 
     /// タイムアウト時間を設定する
@@ -148,6 +185,17 @@ impl GitRunner {
         cmd.env_clear();
         for key in ["PATH", "SystemRoot", "SYSTEMDRIVE", "TEMP", "TMP", "TMPDIR"] {
             if let Some(value) = std::env::var_os(key) {
+                cmd.env(key, value);
+            }
+        }
+
+        // 同梱 git のときは、同梱のフォルダを PATH の先頭に足し、GIT_EXEC_PATH などを渡す。
+        // 子プロセスにだけ渡す設定で、ユーザーの環境やグローバル git 設定は変更しない
+        if let Some(env) = &self.bundled {
+            if let Some(path) = bundled::prepend_path(&env.path_dirs, std::env::var_os("PATH")) {
+                cmd.env("PATH", path);
+            }
+            for (key, value) in bundled::extra_env(env) {
                 cmd.env(key, value);
             }
         }

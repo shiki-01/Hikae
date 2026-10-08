@@ -3,5 +3,5 @@
 	"compilerOptions": {
 		"skipLibCheck": true
 	},
-	"exclude": ["build", "src-tauri", "node_modules"]
+	"exclude": ["build", "src-tauri", "scripts", "node_modules"]
 }

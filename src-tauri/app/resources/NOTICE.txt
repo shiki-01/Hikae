@@ -1,0 +1,24 @@
+Hikae に同梱している第三者のソフトウェア
+Third-party software bundled with Hikae
+
+Git for Windows (MinGit)
+  同梱物 / Bundled: MinGit 2.56.0.2 (64-bit)  [git version 2.56.0.windows.2]
+  配布元 / Source : https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.2
+  ソース / Source code: https://github.com/git-for-windows/git
+  ライセンス / License: GNU General Public License v2 (一部の構成要素はそれぞれのライセンス)
+  ライセンス全文 / Full text: アプリのリソースフォルダ内 git/LICENSE.txt
+                              (the git/LICENSE.txt file in the application's resource folder)
+
+  Hikae は Git の保存・履歴管理の処理に、この git を別プロセスとして呼び出して使います。
+  Hikae uses this git as a separate process for saving and history management.
+  同梱の git は改変せず、公式リリースの MinGit から GUI の認証ツールなど Hikae が使わない
+  ファイルを取り除いたものです。
+  The bundled git is the official MinGit release, with only files that Hikae does not use
+  (such as GUI credential tools) removed. It is not modified otherwise.
+
+Git (macOS 版 / macOS builds)
+  macOS 版は、Git 公式のソースコード (https://git-scm.com/ 、https://github.com/git/git) から
+  scripts/build-git-macos.sh でビルドしたものを同梱します。
+  ライセンス: GNU General Public License v2。ライセンス全文はリソースフォルダ内 git/COPYING。
+  On macOS, Hikae bundles git built from the official source release with
+  scripts/build-git-macos.sh. License: GNU General Public License v2 (git/COPYING).

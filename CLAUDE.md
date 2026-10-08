@@ -14,20 +14,20 @@
 
 ## 技術スタック（確定）
 
-| 領域             | 採用                                                                                          |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| 基盤             | Tauri 2                                                                                       |
-| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript                        |
-| スタイル         | Master CSS（rc 版、`2.0.0-rc.88` に完全固定。正式版への追従はしない）。設定は CSS の `@theme` |
-| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ）              |
-| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                                           |
-| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）               |
-| ファイル監視     | notify + notify-debouncer-full                                                                |
-| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）                        |
-| アプリ内データ   | SQLite（rusqlite）                                                                            |
-| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替                        |
-| docx / xlsx 抽出 | zip + quick-xml、calamine                                                                     |
-| ごみ箱への移動   | `trash` crate（`=5.2.9` に固定。`app` のみ。`core-ops` は `Trasher` trait だけを持つ）        |
+| 領域             | 採用                                                                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 基盤             | Tauri 2                                                                                                                                                                                                                              |
+| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript                                                                                                                                                               |
+| スタイル         | Master CSS（rc 版、`2.0.0-rc.88` に完全固定。正式版への追従はしない）。設定は CSS の `@theme`                                                                                                                                        |
+| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ）                                                                                                                                                     |
+| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                                                                                                                                                                                  |
+| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）。Windows は MinGit を `scripts/fetch-git-windows.mjs` で取得、macOS は `scripts/build-git-macos.sh`（未検証）。探索は `HIKAE_GIT_PATH` → 同梱 → PATH |
+| ファイル監視     | notify + notify-debouncer-full                                                                                                                                                                                                       |
+| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）                                                                                                                                                               |
+| アプリ内データ   | SQLite（rusqlite）                                                                                                                                                                                                                   |
+| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替                                                                                                                                                               |
+| docx / xlsx 抽出 | zip + quick-xml、calamine                                                                                                                                                                                                            |
+| ごみ箱への移動   | `trash` crate（`=5.2.9` に固定。`app` のみ。`core-ops` は `Trasher` trait だけを持つ）                                                                                                                                               |
 
 ## リポジトリ構成
 

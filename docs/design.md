@@ -695,7 +695,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `snapshot_size_cap_x` | 保存のみ（Phase 2）。自動保存の容量上限は未実装。画面には元から無い |
 | `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
 | `ai_runner`、`ai_model`、`ai_scope`、`ai_model_source`、`ai_custom_gguf_path` | 保存のみ（Phase 2） |
-| `git_executable` | 保存のみ。git は同梱されておらず、PATH 上の git を使う（8.2） |
+| `git_executable` | 保存のみ。git の探索は設定ではなく `GitRunner::bundled` が行う（`HIKAE_GIT_PATH` → 同梱 → PATH。8.2） |
 | `work_copy_enabled`、`extension_dev_mode`、`extension_index_urls`、`git_lfs` | 保存のみ（Phase 3 / 4） |
 
 「拡張機能の有効化」（個別のオン・オフ）は、設定としては保存しません（拡張機能の管理は `extensions` テーブルを想定していますが、未使用です。9.1）。
@@ -708,7 +708,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 
 | 候補 | 機能網羅 | 速度 | 認証 | 配布 | 判定 |
 | --- | --- | --- | --- | --- | --- |
-| git CLI（同梱） | 完全。merge、競合ステージ、LFS も本家どおり | 1回の起動に数十 ms（Windows で遅め）。`-z` / `--porcelain=v2` の解析が必要 | 自作 credential helper でトークンを渡せる | Windows は MinGit、macOS は自前ビルドを同梱（数十 MB） | **採用** |
+| git CLI（同梱） | 完全。merge、競合ステージ、LFS も本家どおり | 1回の起動に数十 ms（Windows で遅め）。`-z` / `--porcelain=v2` の解析が必要 | 自作 credential helper でトークンを渡せる | Windows は MinGit、macOS は自前ビルドを同梱（数十 MB。実装状況は 8.2 と 13.3） | **採用** |
 | libgit2（git2-rs） | 基本操作は可。merge 周りやフック、LFS は非対応または挙動差あり | プロセス起動なしで高速 | コールバックで実装可能 | ライブラリ静的リンクのみ | 不採用（挙動差が安全設計の前提を崩す） |
 | gitoxide（gix） | 読み取り系は成熟。書き込み・push は発展途上 | 高速 | 実装途上 | Pure Rust で配布が楽 | Phase 3 で読み取り高速化に検討 |
 | isomorphic-git | 限定的。大きいリポジトリで遅い | 遅い | HTTP のみ | JS のみで完結 | 不採用 |
@@ -748,7 +748,9 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `tauri-specta` / `specta` 2.0.0-rc.25、`specta-typescript` 0.0.12 | `app`、`core-store` | `src/lib/bindings.ts` の生成 |
 | 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2` | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
 
-設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`zip` / `quick-xml` / `calamine`、`wasmtime`、`llama-server` サイドカー。同梱の git（MinGit、macOS の自前ビルド）も未導入で、`GitRunner` は PATH 上の `git` を呼ぶ（`core-preview` と `core-llm` は雛形のみ）。`tauri.conf.json` の CSP は未設定（`null`）。
+設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`zip` / `quick-xml` / `calamine`、`wasmtime`、`llama-server` サイドカー（`core-preview` と `core-llm` は雛形のみ）。
+
+**同梱の git**（実装済み（Windows）／仕組みのみ（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（Windows 上では実行できず、CI での実行結果も未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
 
 **ツールチェーンと設定の注意**（Phase 0 で判明）:
 
@@ -1023,7 +1025,7 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 
 Phase 1 の範囲の外または終了条件に関わる、**未実装・未確認**の項目:
 
-- 同梱の git（Phase 0 の検証項目だったが調査のみ。`docs/notes/git-bundling.md`）。いまは PATH 上の git を使うため、git が無い PC では動かない（E17 の検出も未実装）
+- 同梱の git: **Windows は実装済み**（MinGit を `tauri.conf.json` の `bundle.resources` で同梱し、実行時に優先して使う。インストーラ生成までは確認。git の無い実機での起動確認は未実施）。**macOS は仕組みのみ**（`scripts/build-git-macos.sh` と CI の手動ジョブ。ビルドの実行は未確認）。同梱 git が見つからない場合は PATH 上の git を使い、それも無い PC では動かない（E17 の検出は未実装）。署名・公証、git の版更新の運用も未着手。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」
 - Windows・macOS の実機での通し確認。CI は両 OS で `svelte-check`・`prettier`・`eslint`・`vitest`・`cargo fmt --check`・`cargo clippy -D warnings`・`cargo test --workspace`・`tauri build --debug` が成功しているが、WebView 上の操作の自動テスト（E2E）は無い。実機での確認の記録は、リポジトリからは確認できなかった
 - Device Flow の実認証（ブラウザでの手動承認から、トークンの保存、git での取得・アップロードまで）は未確認
 - 終了条件の被験者試験（Git 未経験者 5 人）は未実施
@@ -1082,6 +1084,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | 自動取り込みと手動保存の衝突（`index.lock`） | 同一プロジェクトへの状態変更を直列キューで実行（8.3） |
 | Master CSS が rc 版 | `package.json` で `@master/css` と `@master/css.vite` を `2.0.0-rc.88` に完全固定 |
 | 破壊的な git 操作の混入 | 許可リスト方式の `GitRunner` が実行時に拒否する（6.1）。拒否のテストは敵対的な入力を含む |
+| git が入っていない PC で動かない | **Windows**: 公式 MinGit（バージョンと SHA-256 を固定して取得）を `bundle.resources` で同梱し、`GitRunner::bundled` が優先して使う。`core-git` / `core-safety` / `core-ops` の統合テストが同梱 git でも通ることを確認。**macOS**: ビルドスクリプトと CI の手動ジョブまで（未確認）。8.2 |
 
 **未解決（対策が未実装のもの）**
 
@@ -1098,9 +1101,11 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | リスク | 影響 | 対策 |
 | --- | --- | --- |
 | 許可リストに無い git のコマンドを使うコードは、実行するまで失敗に気づけない | `history()` が許可リストにない `diff-tree` を呼んでおり、履歴の一覧が実行時に必ず失敗した（コミット 2e9dc9b で `log -z` と `diff --numstat` に書き換え）。型検査やモックを使ったテストでは見つからない | 実リポジトリを一時ディレクトリに作る統合テストで、使う経路を実際に通す（修正前に失敗するテストを追加して直した）。新しい git の呼び出しは、許可リストに既にあるサブコマンドとフラグだけで組み、足りないときは許可リストの変更を設計として検討する |
+| MinGit の busybox 版は `!` 形式の credential helper を動かせない | busybox 版（`MinGit-*-busybox-*.zip`）には sh が無く、`git -c 'alias.x=!echo ok' x` が `-c: applet not found` で失敗する（開発 PC は PATH 上の別の git に sh があるため再現しない）。Hikae は `!'<アプリ>' credential` 形式の helper を使うため、sh が必要 | 通常版（`MinGit-*-64-bit.zip`、`usr/bin/sh.exe` あり）を採用した。busybox 版は `busybox.exe` を `sh.exe` に複製すれば動くが、公式の構成から外れるため採用しない |
+| 同梱 git の版更新と GPLv2 の入手先 | 版を固定したため、脆弱性の修正を取り込むには `scripts/fetch-git-windows.mjs` の TAG・ASSET・SHA256 の更新が必要。GPLv2 は配布物に対応するソースの入手先の明示を求める | 更新手順はスクリプト冒頭に記載。`NOTICE.txt` に配布元とソースの URL を記載。更新の監視体制は未整備 |
 | 直列キューが、ロックの取り方で無効になる | ロックを `spawn_blocking` の外で取ると、クロージャがすぐ戻ってロックが本体の実行前に解放され、同一プロジェクトの操作が並行して走る。これを `unsafe` で `MutexGuard` を偽装して回避する実装は、安全性の根拠を失う（Phase 1 の実装中にそのような `unsafe` を取り除いた） | ロックの取得と解放を本体と同じブロッキング側の内側に置く（`run_exclusive`）。`unsafe` は使わない（`src-tauri` に無いことを確認）。同一 ID の最大同時実行数が 1 になることを、`ProjectLocks` のテストで確かめる |
 | 実時間に依存するテストが CI で揺れる | `test_project_locks_different_ids_parallel` が macOS の CI で 4 回失敗した（成功した回もあり、結果が揺れた）。`core-github` の単体テストが実時間の待ちで約 10 秒かかっていた | 経過時間を測らず、双方が同時に臨界区間に入ったことを観測する形に変更（コミット 1f67776）。`core-github` のテストは macOS の CI で約 2 秒になった |
-| 判定が git の英語の標準エラー出力に依存する | E12（ファイル使用中）、オフラインの判定、認証失敗、取得先が無い場合（E16）は、標準エラー出力の文言で分類する。git のバージョンで文言が変わると、誤分類や見逃しが起きる | `GitRunner` は `LC_ALL=C` で英語に固定している。同梱 git で版を固定し（未実装）、文言の変化を検出するテストを置く |
+| 判定が git の英語の標準エラー出力に依存する | E12（ファイル使用中）、オフラインの判定、認証失敗、取得先が無い場合（E16）は、標準エラー出力の文言で分類する。git のバージョンで文言が変わると、誤分類や見逃しが起きる | `GitRunner` は `LC_ALL=C` で英語に固定している。同梱 git で版を固定し（Windows は実装済み。`scripts/fetch-git-windows.mjs` で固定）、文言の変化を検出するテストを置く（未実装） |
 | 実際の GitHub の応答がモックと食い違う | Device Flow のトークン取得は、`Accept: application/json` を付けないとフォーム形式で返り、ポーリングが毎回失敗した（コミット 59c1c94）。実際の応答形式を前提にしないモックでは見つからない | ヘッダーが付いたときだけ JSON を返すモックのテストを追加した。実認証の手動確認は引き続き必要（5.1 と 12章） |
 | app 層での git 出力の自前解析 | Phase 1 の実機確認で「変更一覧が出ない」不具合が見つかった。`app` 層が `git status` の出力を自前で解析しており、`-z`（NUL 区切り）を行単位で読む誤り、変更種別コードの誤り、未追跡ファイルの欠落、`-uall` の欠落があった | 解析を `core-ops`（`changes.rs`）に移し、変更一覧は未追跡ファイルを含めて 1 件ずつ出す。実リポジトリを使う統合テストを追加した。解析は `core-*` crate に置いてテストする |
 | 新規ファイルの差分が空になる | Phase 1 の実機確認で、変更タブで新規ファイルを選んでも右ペインの差分が空（または「同一」）になった。`git diff` は、保存もインデックスへの登録もされていないファイルを出力しないため | 「いま」と比べる対象が新規ファイルのときは、作業フォルダのファイルを直接読んで全行を追加として返す（4.1）。バイナリ・1MB 超は本文を返さない。実リポジトリを使う統合テストを追加した（日本語名、空、バイナリ、大きいファイル、プロジェクト外、リンク） |

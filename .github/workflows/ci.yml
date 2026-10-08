@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # macOS の同梱 git のビルド（時間がかかるため、手動実行で行いキャッシュに保存する）
+  workflow_dispatch:
 
 jobs:
   check:
@@ -31,14 +33,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 同梱の git。Windows は公式の MinGit を取得して SHA-256 を検証する（スクリプト内に固定）
+      - name: Bundled git (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/fetch-git-windows.mjs
+
+      # macOS の同梱 git は、手動実行の bundle-git-macos ジョブが作ってキャッシュに保存する。
+      # キャッシュが無ければ同梱 git なしで進む（実行時は PATH 上の git を使う）
+      - name: Bundled git (macOS, from cache)
+        if: runner.os == 'macOS'
+        uses: actions/cache/restore@v4
+        with:
+          path: src-tauri/app/resources/git
+          key: bundled-git-macos-${{ hashFiles('scripts/build-git-macos.sh') }}
+
       - name: Frontend (svelte-check, lint, test)
         run: |
           pnpm check
           pnpm lint
           pnpm test
 
+      # HIKAE_GIT_PATH に同梱 git を指すと、統合テストも同梱 git で動く（無ければ無視され PATH 上の git を使う）
       - name: Rust (fmt, clippy, test)
         working-directory: src-tauri
+        env:
+          HIKAE_GIT_PATH: ${{ runner.os == 'Windows' && format('{0}\src-tauri\app\resources\git\cmd\git.exe', github.workspace) || format('{0}/src-tauri/app/resources/git/bin/git', github.workspace) }}
         run: |
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
@@ -46,3 +65,20 @@ jobs:
 
       - name: tauri build
         run: pnpm tauri build --debug
+
+  # macOS の同梱 git をソースからビルドしてキャッシュに保存する（手動実行のみ）。
+  # この手順は Windows 上では実行できず、CI での実行結果も未確認
+  bundle-git-macos:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build git (universal)
+        run: bash scripts/build-git-macos.sh --force
+
+      - name: Save to cache
+        uses: actions/cache/save@v4
+        with:
+          path: src-tauri/app/resources/git
+          key: bundled-git-macos-${{ hashFiles('scripts/build-git-macos.sh') }}

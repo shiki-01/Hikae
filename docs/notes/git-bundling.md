@@ -358,3 +358,62 @@ Hikae がユーザーのシステム git と衝突しないようにするため
 - git-osx-installer: https://sourceforge.net/projects/git-osx-installer/files/
 - Tauri 2 リソース機構: https://tauri.app/v2/reference/api/
 - Git for Windows ドキュメント: https://git-scm.com/download/win
+
+## 7. 実装結果（2026-10-08）
+
+### 7.1 実装の構成
+
+| 項目 | 内容 |
+|---|---|
+| 探索 | `core-git` の `GitRunner::bundled(resource_dir)`。優先順位は (1) `HIKAE_GIT_PATH`（存在するファイルのときだけ採用。空や存在しない値は無視）、(2) `<resource_dir>/git/` の同梱 git、(3) PATH 上の git。`from_path_env()`（テスト用）も `HIKAE_GIT_PATH` を見る |
+| `HIKAE_GIT_PATH` が同梱 git を指すとき | `<root>/cmd/git.exe`（Windows）または `<root>/bin/git`（Unix）の形で、`<root>` に exec-path があれば同梱構成と推定し、同じ環境変数を足す |
+| app | `setup` で `resource_dir` を `OnceLock` に保持し、`git_runner()` が `GitRunner::bundled` を使う。credential helper の設定は従来どおり |
+| Windows の取得 | `scripts/fetch-git-windows.mjs`。公式リリース `v2.56.0.windows.2` の `MinGit-2.56.0.2-64-bit.zip`、SHA-256 `da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be`（`gh api` の digest と一致を確認）をスクリプトに固定。検証に失敗したら破棄して終了コード 1（不一致のハッシュで実際に失敗することを確認）。展開は PowerShell の `Expand-Archive`。展開後に不要ファイルを削り、同梱 git で最小の流れを実行してから `src-tauri/app/resources/git/` に移す。版が一致していれば再取得しない（`.hikae-git-version`）。`tauri.conf.json` の `beforeDevCommand` / `beforeBuildCommand` から呼ぶ |
+| Windows の同梱 | `bundle.resources` で `resources/git` → `git`、`resources/NOTICE.txt` → `NOTICE.txt`。`git/` の中身は `.gitignore` 済み（`.gitkeep` だけ追跡。`tauri-build` が resources の存在を要求するため） |
+| macOS | `scripts/build-git-macos.sh`。kernel.org の `git-2.56.0.tar.xz`（SHA-256 `26c56c29…89d3`。kernel.org の `sha256sums.asc` と一致を確認）を固定。arm64 / x86_64 を別々にビルドして `lipo`。CI は `workflow_dispatch` の `bundle-git-macos` ジョブがビルドしてキャッシュに保存し、`check` ジョブの macOS 脚が復元する |
+
+### 7.2 Windows の同梱 git の実測
+
+- 採用: **通常版** `MinGit-2.56.0.2-64-bit.zip`（39.8 MB）。busybox 版は採用しない（理由は 7.4）
+- 展開後の構成: `cmd/git.exe`（ラッパー）、`ucrt64/bin/`（git.exe、git-remote-https.exe、DLL）、`ucrt64/libexec/git-core/`（スクリプト類）、`ucrt64/share/git-core/templates`、`usr/bin/`（sh.exe ほかの MSYS2 コマンド）、`etc/`、`LICENSE.txt`。`git-remote-https.exe` などは `ucrt64/bin` にあり、`etc/libexec-moved.txt` に移動した旨が書かれている
+- 削ったファイル（`ucrt64/bin` の Avalonia / System / Microsoft の各 DLL、GitHub・GitLab・Bitbucket の DLL、SkiaSharp・HarfBuzzSharp・av_libglesv2・msalruntime・gcmcore、git-credential-manager 一式、git-askpass、git-askyesno、blocked-file-util、docx-strip-pii、docx2txt、scalar、git-update-git-for-windows、`libexec/git-core/git-credential-wincred.exe`、`share/doc`、`share/bash-completion`）: 展開後 93 MB から **61 MB** へ（`ucrt64` 33 MB、`usr` 27 MB）。`usr/bin` はこれ以上削っていない（sh.exe が使う msys-*.dll の依存を確かめきれていないため）
+- 生成物（`tauri build --debug`）: NSIS インストーラ 25.7 MB、MSI 44.5 MB（デバッグビルド）
+- 調査ノート 1.6 の構成図の「`ucrt64/libexec/git-core` の 16 ファイルのハードリンク」は実際と異なる。実行ファイルは `ucrt64/bin` にあり、`libexec/git-core` にはスクリプト類と wincred だけがある
+
+### 7.3 子プロセスに渡す環境変数
+
+`GitRunner` は従来どおり親の環境を引き継がず（`env_clear`）、次を設定する。ユーザーのグローバル設定（`~/.gitconfig`）や親プロセスの環境は変更しない。
+
+| 変数 | 値 | 備考 |
+|---|---|---|
+| `PATH` | 同梱の `ucrt64/bin`、`usr/bin`（Unix は `bin`）を先頭に足した値 | 同梱 git のときだけ。`!` 形式の credential helper を実行する sh と、git-remote-https の依存 DLL を見つけるため |
+| `GIT_EXEC_PATH` | `<git>/ucrt64/libexec/git-core`（Unix は `<git>/libexec/git-core`） | 同梱 git のときだけ。存在するときだけ設定 |
+| `GIT_TEMPLATE_DIR` | `<git>/ucrt64/share/git-core/templates` | 同上 |
+| `GIT_CONFIG_NOSYSTEM` | `1` | 既存。MinGit の `etc/gitconfig`（`credential.helper=manager`、`core.autocrlf=true`）を読まないために必須 |
+| `GIT_CONFIG_GLOBAL` | `NUL`（Unix は `/dev/null`） | 既存。変更なし |
+| `GIT_TERMINAL_PROMPT` / `LC_ALL` / `GIT_OPTIONAL_LOCKS` | `0` / `C` / 読み取り系のみ `0` | 既存。変更なし |
+
+`HOME` は設定していない（`GIT_CONFIG_GLOBAL` で足りる）。MinGit は `RUNTIME_PREFIX` でビルドされており、`cmd/git.exe` 経由なら `GIT_EXEC_PATH` が無くても自分の位置から exec-path を解決することを確認した（空の環境で `--exec-path` が同梱の `ucrt64/libexec/git-core` を指す）。`GIT_EXEC_PATH` の設定は、念のための明示。**`ucrt64/bin/git.exe` を直接呼ぶ構成は採らない**（環境を空にするとクラッシュした）。
+
+### 7.4 確認したこと
+
+- 親の環境を空にした状態（`env -i`、PATH なし、`GIT_CONFIG_GLOBAL=NUL`、`GIT_CONFIG_NOSYSTEM=1`）で、同梱 git により init、config、add、commit、log が通る
+- 同じ状態で、status（`--porcelain=v2 -z --branch`）、log、ls-tree、cat-file、show、rev-list、for-each-ref、merge-base、check-ignore、ls-files、write-tree、commit-tree、update-ref、read-tree、diff、restore、rm --cached、remote add、push、fetch、clone（ローカルの bare リポジトリ）が成功する
+- `HIKAE_GIT_PATH` に同梱 git を指して `cargo test -p core-git -p core-safety -p core-ops` を実行し、全テストが通る（マージの競合、一時インデックス、credential helper を含む）。ただしテストの準備コードの一部が `git` を直接呼ぶため、PATH から git を外した状態では 10〜13 件が準備の段階で失敗する（`GitRunner` の問題ではない）。PATH を最小にしても、`credential_helper` のテスト（`!` 形式の helper を sh で実行）は同梱 git で通った
+- `git-remote-https` の存在と、実際の呼び出し（接続不能なローカルアドレスへの `ls-remote` が curl のエラーで終わる）を確認。実 GitHub への通信はしていない
+- busybox 版: init、add、commit、log は通る。しかし `!` 形式の alias / credential helper が `-c: applet not found` で失敗する（sh が無く、`busybox.exe -c ...` で呼ばれるため）。開発 PC では PATH 上の別の git に sh があり、普通に実行すると成功してしまうので、**環境を空にして**確認した。`busybox.exe` を `sh.exe` に複製すると動くが、公式の構成から外れるため、通常版を採用した（zip で 4.5 MB の差）
+
+### 7.5 macOS の判断
+
+- TLS と HTTP は **macOS 標準の libcurl に動的リンク**する（`/usr/lib/libcurl.4.dylib`、Apple の証明書ストア）。OpenSSL を同梱・静的リンクしない（`NO_OPENSSL`）。理由: 同梱物と更新対象が減る、universal 化で依存ライブラリを lipo する必要がない、CA 証明書が OS の更新に追従する。注意点: macOS 標準 libcurl の挙動は OS の版に依存する（最小は 11.0）
+- `RUNTIME_PREFIX=yes`、`NO_GETTEXT`、`NO_TCLTK`、`NO_PERL`、`NO_PYTHON`、`NO_EXPAT`（`git-http-push` を作らない）、`INSTALL_SYMLINKS`（`libexec/git-core` の実体を 1 つにする）、`SKIP_DASHED_BUILT_INS`。configure は使わず、make の変数で渡す
+- 調査ノート 2.2 の `--with-openssl` は採らなかった（上記の理由）。`--without-perl` などは make の `NO_PERL` などに対応する
+
+### 7.6 未検証事項
+
+- macOS: `scripts/build-git-macos.sh` は `bash -n` の構文確認のみ。実際のビルド、universal 化、CI の `bundle-git-macos` ジョブとキャッシュの受け渡しは**未確認**。ビルド後のサイズも未測定。Tauri の resources コピーが `libexec/git-core` のシンボリックリンクをどう扱うか（実体に展開されてサイズが増えないか）は**未確認**
+- Windows: git が入っていない実機での起動確認は未実施。インストール後のアプリや `tauri dev` で `resource_dir` が想定のフォルダを指し、同梱 git が使われることの画面上の確認も未実施（`tauri build --debug` の成功と、resources が `target/debug/git` とインストーラに含まれることまで）
+- `resource_dir` が `\\?\` 付きのパスで返る場合に備え、接頭辞を外す処理を入れたが、実際にその形で返るかは未確認
+- 実際の GitHub に対する HTTPS の clone / fetch / push（同梱の libcurl と OpenSSL、Windows の証明書ストア）は未確認
+- Windows の arm64 版（MinGit の arm64）は対象外
+- 署名・公証、同梱 git の版更新の監視は未着手
