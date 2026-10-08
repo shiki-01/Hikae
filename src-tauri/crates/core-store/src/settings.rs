@@ -145,7 +145,7 @@ define_settings! {
     // ----- 取り込み（プロジェクト別に上書きできる） -----
     /// 起動時に取り込む
     pull_on_startup: bool = true,
-    /// 定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60
+    /// 定期的に取り込む間隔（分）。0 はオフ。1〜1440 の任意の値（画面の選択肢は 0 / 5 / 15 / 60 とカスタム）
     pull_interval_minutes: u32 = 15,
     /// 取り込む前に未保存の変更を保存する（false は「確認する」）
     save_before_pull: bool = true,
@@ -158,12 +158,12 @@ define_settings! {
     /// アップロード待ちの通知間隔（時間）。0 はオフ。選択肢は 0 / 1 / 24
     push_reminder_hours: u32 = 24,
 
-    // ----- 自動保存（プロジェクト別に上書きできる。Phase 2） -----
+    // ----- 自動保存（プロジェクト別に上書きできる） -----
     /// ファイル監視による自動保存
     auto_snapshot_enabled: bool = true,
-    /// 最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600
+    /// 最後の変更からこの秒数だけ静止してから記録する。10〜3600 の任意の値（画面の選択肢は 30 / 120 / 600 とカスタム）
     auto_snapshot_delay_secs: u32 = 120,
-    /// 自動保存の保持期間（日）。選択肢は 30 / 90 / 365
+    /// 自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム）
     snapshot_retention_days: u32 = 90,
 
     // ----- 保存・表示・外部アプリ（プロジェクト別に上書きできる） -----
@@ -171,7 +171,7 @@ define_settings! {
     memo_suggestion: MemoSuggestion = MemoSuggestion::Rules,
     /// 元に戻した後に自動で保存する
     auto_save_after_restore: bool = true,
-    /// 大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100
+    /// 大きいファイルの警告閾値（MB）。1〜100 の任意の値（画面の選択肢は 25 / 50 / 100 とカスタム）
     large_file_warn_mb: u32 = 50,
     /// 自動保存をタイムラインに表示するか
     show_snapshots_in_timeline: TimelineSnapshots = TimelineSnapshots::Collapsed,
@@ -234,6 +234,28 @@ const MAX_TEXT_LEN: usize = 1024;
 /// 追加索引 URL の最大件数
 const MAX_INDEX_URLS: usize = 20;
 
+/// 定期的に取り込む間隔（分）として設定できる範囲。0（オフ）は別に許す。
+/// 画面の検証（`src/lib/features/settings/number-input.ts`）と一致させる
+pub const PULL_INTERVAL_MINUTES: std::ops::RangeInclusive<u32> = 1..=1440;
+/// 自動保存の静止時間（秒）として設定できる範囲
+pub const AUTO_SNAPSHOT_DELAY_SECS: std::ops::RangeInclusive<u32> = 10..=3600;
+/// 自動保存の保持期間（日）として設定できる範囲
+pub const SNAPSHOT_RETENTION_DAYS: std::ops::RangeInclusive<u32> = 7..=730;
+/// 大きいファイルの警告閾値（MB）として設定できる範囲。上限は GitHub が保存を拒否する 100MB
+pub const LARGE_FILE_WARN_MB: std::ops::RangeInclusive<u32> = 1..=100;
+
+fn in_range(name: &str, value: u32, allowed: std::ops::RangeInclusive<u32>) -> Result<(), String> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name} の値 {value} は設定できません（範囲: {}〜{}）",
+            allowed.start(),
+            allowed.end()
+        ))
+    }
+}
+
 fn in_set(name: &str, value: u32, allowed: &[u32]) -> Result<(), String> {
     if allowed.contains(&value) {
         Ok(())
@@ -257,26 +279,29 @@ fn plain_text(name: &str, value: &str) -> Result<(), String> {
 impl AppSettings {
     /// 値が選択肢の範囲にあるか検証する。違反があれば理由（技術情報）を返す。
     pub fn validate(&self) -> Result<(), String> {
-        in_set(
-            "pull_interval_minutes",
-            self.pull_interval_minutes,
-            &[0, 5, 15, 60],
-        )?;
+        // 0 は「オフ」。それ以外は範囲内の任意の値（画面の選択肢 + カスタム）
+        if self.pull_interval_minutes != 0 {
+            in_range(
+                "pull_interval_minutes",
+                self.pull_interval_minutes,
+                PULL_INTERVAL_MINUTES,
+            )?;
+        }
         in_set("push_reminder_hours", self.push_reminder_hours, &[0, 1, 24])?;
-        in_set(
+        in_range(
             "auto_snapshot_delay_secs",
             self.auto_snapshot_delay_secs,
-            &[30, 120, 600],
+            AUTO_SNAPSHOT_DELAY_SECS,
         )?;
-        in_set(
+        in_range(
             "snapshot_retention_days",
             self.snapshot_retention_days,
-            &[30, 90, 365],
+            SNAPSHOT_RETENTION_DAYS,
         )?;
-        in_set(
+        in_range(
             "large_file_warn_mb",
             self.large_file_warn_mb,
-            &[25, 50, 100],
+            LARGE_FILE_WARN_MB,
         )?;
         in_set(
             "snapshot_size_cap_x",
@@ -451,11 +476,11 @@ mod tests {
             f(&mut s);
             s.validate().is_err()
         };
-        assert!(bad(|s| s.pull_interval_minutes = 7));
+        assert!(bad(|s| s.pull_interval_minutes = 1441));
         assert!(bad(|s| s.push_reminder_hours = 2));
-        assert!(bad(|s| s.auto_snapshot_delay_secs = 1));
-        assert!(bad(|s| s.snapshot_retention_days = 10));
-        assert!(bad(|s| s.large_file_warn_mb = 10));
+        assert!(bad(|s| s.auto_snapshot_delay_secs = 9));
+        assert!(bad(|s| s.snapshot_retention_days = 6));
+        assert!(bad(|s| s.large_file_warn_mb = 101));
         assert!(bad(|s| s.snapshot_size_cap_x = 3));
         assert!(bad(|s| s.ai_model = "a\nb".to_string()));
         assert!(bad(
@@ -474,6 +499,36 @@ mod tests {
     }
 
     #[test]
+    fn numeric_settings_accept_any_value_inside_the_range() {
+        let with = |f: fn(&mut AppSettings)| {
+            let mut s = AppSettings::default();
+            f(&mut s);
+            s.validate().is_ok()
+        };
+        // 範囲の端と、画面の選択肢にない中間の値
+        assert!(with(|s| s.pull_interval_minutes = 0));
+        assert!(with(|s| s.pull_interval_minutes = 1));
+        assert!(with(|s| s.pull_interval_minutes = 37));
+        assert!(with(|s| s.pull_interval_minutes = 1440));
+        assert!(with(|s| s.auto_snapshot_delay_secs = 10));
+        assert!(with(|s| s.auto_snapshot_delay_secs = 45));
+        assert!(with(|s| s.auto_snapshot_delay_secs = 3600));
+        assert!(with(|s| s.snapshot_retention_days = 7));
+        assert!(with(|s| s.snapshot_retention_days = 180));
+        assert!(with(|s| s.snapshot_retention_days = 730));
+        assert!(with(|s| s.large_file_warn_mb = 1));
+        assert!(with(|s| s.large_file_warn_mb = 75));
+        assert!(with(|s| s.large_file_warn_mb = 100));
+        // 範囲の外
+        assert!(!with(|s| s.auto_snapshot_delay_secs = 0));
+        assert!(!with(|s| s.auto_snapshot_delay_secs = 3601));
+        assert!(!with(|s| s.snapshot_retention_days = 0));
+        assert!(!with(|s| s.snapshot_retention_days = 731));
+        assert!(!with(|s| s.large_file_warn_mb = 0));
+        assert!(!with(|s| s.pull_interval_minutes = 1441));
+    }
+
+    #[test]
     fn stored_entries_skip_unknown_broken_and_invalid_values() {
         let entries = valid_stored_entries(
             [
@@ -481,7 +536,7 @@ mod tests {
                 ("auto_push_after_save", "false"),
                 ("not_a_setting", "1"),
                 ("conflict_mode", "\"explode\""),
-                ("large_file_warn_mb", "77"),
+                ("large_file_warn_mb", "777"),
                 ("push_reminder_hours", "not json"),
                 ("git_lfs", "\"yes\""),
             ]

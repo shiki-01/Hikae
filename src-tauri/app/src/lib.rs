@@ -16,12 +16,14 @@ use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
 mod app_settings;
+mod auto_snapshot;
 mod events;
 mod github;
 mod maintenance;
 mod ops_runner;
 mod remote;
 mod scheduler;
+mod watch;
 
 use events::{OpTrigger, StatusChanged};
 use ops_runner::{
@@ -530,6 +532,8 @@ async fn add_project(
         },
     )
     .await?;
+    // ファイル監視を、登録に合わせて直ちに開始させる
+    state.scheduler.refresh();
 
     // ローカルの登録はここで完了している。保存先の作成に失敗しても登録は残す。
     // すでに保存先（origin）を持つリポジトリは、それを使うため新しく作らない
@@ -550,7 +554,7 @@ async fn add_project(
 #[specta::specta]
 async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result<(), AppError> {
     let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
             code: "database_error".to_string(),
             params: Vec::new(),
@@ -579,7 +583,10 @@ async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result
         data_is_safe: "何も変更されていません".to_string(),
         next_action: "もう一度試してください".to_string(),
         technical_info: Some(e.to_string()),
-    })?
+    })?;
+    // 登録を外したプロジェクトの監視と自動保存の予定を、直ちに止める
+    state.scheduler.refresh();
+    result
 }
 
 /// プロジェクトの状態を取得（未保存の変更、アップロード待ち、競合など）。
@@ -590,6 +597,7 @@ async fn project_status(
     id: String,
 ) -> Result<SyncStatus, AppError> {
     let store = state.store.clone();
+    let scheduler = state.scheduler.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
             code: "status_failed".to_string(),
@@ -659,6 +667,12 @@ async fn project_status(
             is_syncing: false,
             interrupted_operation,
             folder_missing: false,
+            watching: scheduler.is_watching(&id),
+            last_auto_snapshot_at: store.lock().ok().and_then(|g| {
+                g.last_success_at(&id, auto_snapshot::OPERATION)
+                    .ok()
+                    .flatten()
+            }),
         })
     })
     .await
@@ -1801,6 +1815,8 @@ async fn relocate_project(
     )
     .await?;
 
+    // 付け替え先のフォルダで、ファイル監視と自動保存を直ちに始めさせる
+    state.scheduler.refresh();
     let _ = StatusChanged {
         project_id: info.id.clone(),
     }
@@ -2048,6 +2064,10 @@ pub struct SyncStatus {
     pub interrupted_operation: Option<String>,
     /// 登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない
     pub folder_missing: bool,
+    /// ファイル監視が動いている。true の間、UI は変更一覧の定期的な取り直しをやめる（変更は `files_changed` で届く）
+    pub watching: bool,
+    /// 最後に自動保存を作った時刻（RFC3339）。まだ一度も作っていなければ null
+    pub last_auto_snapshot_at: Option<String>,
 }
 
 /// 1 ファイルを戻す影響の種類
@@ -2209,6 +2229,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         ])
         .events(collect_events![
             events::StatusChanged,
+            events::FilesChanged,
             events::OpProgress,
             events::OpFinished,
             events::SyncStateChanged,

@@ -157,3 +157,31 @@ fn interrupted_operation_exposes_its_start_time_until_resolved(
     assert!(store.interrupted_operation("p1")?.is_none());
     Ok(())
 }
+
+#[test]
+fn last_success_at_returns_the_latest_successful_run_of_one_operation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let store = Store::open(&tmp.path().join("t.db"))?;
+    assert_eq!(store.last_success_at("p1", "auto-snapshot")?, None);
+
+    store.record_journal(&entry("p1", "auto-snapshot", "2026-01-01T00:00:00Z"))?;
+    store.record_journal(&entry("p1", "auto-snapshot", "2026-01-02T00:00:00Z"))?;
+    // 失敗、別の操作、別のプロジェクトは数えない
+    let mut failed = entry("p1", "auto-snapshot", "2026-01-03T00:00:00Z");
+    failed.outcome = JournalOutcome::Failure;
+    store.record_journal(&failed)?;
+    store.record_journal(&entry("p1", "save", "2026-01-04T00:00:00Z"))?;
+    store.record_journal(&entry("p2", "auto-snapshot", "2026-01-05T00:00:00Z"))?;
+
+    assert_eq!(
+        store.last_success_at("p1", "auto-snapshot")?.as_deref(),
+        Some("2026-01-02T00:00:00Z")
+    );
+    assert_eq!(
+        store.last_success_at("p2", "auto-snapshot")?.as_deref(),
+        Some("2026-01-05T00:00:00Z")
+    );
+    assert_eq!(store.last_success_at("p3", "auto-snapshot")?, None);
+    Ok(())
+}

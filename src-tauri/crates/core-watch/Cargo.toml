@@ -8,6 +8,15 @@ publish.workspace = true
 
 [dependencies]
 core-safety = { workspace = true }
+# ファイル監視（設計書 8.2）
+notify = "8"
+notify-debouncer-full = "0.6"
+# .gitignore の判定（保存対象外のファイルの変更は無視する）
+ignore = "0.4"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

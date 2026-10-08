@@ -474,6 +474,26 @@ impl Store {
         Ok(changed)
     }
 
+    /// 指定した操作が最後に成功した時刻（RFC3339）。一度も無ければ None。
+    /// 「最後の自動保存」（操作名 `auto-snapshot`）の表示に使う。
+    pub fn last_success_at(
+        &self,
+        project_id: &str,
+        operation: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT finished_at FROM journal
+             WHERE project_id = ? AND operation = ? AND outcome = 'success'
+               AND finished_at IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![project_id, operation])?;
+        match rows.next()? {
+            Some(row) => Ok(row.get::<_, Option<String>>(0)?),
+            None => Ok(None),
+        }
+    }
+
     /// 利用者の手動の操作が作った復元点の ref（間引きの保護対象。設計書 6.2）。
     pub fn manual_restore_refs(&self, project_id: &str) -> Result<Vec<String>, StoreError> {
         let mut refs = Vec::new();

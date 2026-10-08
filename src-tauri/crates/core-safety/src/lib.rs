@@ -267,6 +267,35 @@ pub fn create_snapshot_as(
     now: OffsetDateTime,
     author: &Signature,
 ) -> Result<Option<SnapshotRef>, SafetyError> {
+    create_snapshot_inner(runner, repo, branch, now, author, &[], false)
+}
+
+/// ファイル監視による自動保存のスナップショットを作成する（設計書 6.2）。
+///
+/// `exclude`（プロジェクトからの相対パス）のファイルは、作業フォルダの内容を取り込まない。
+/// 追跡済みのファイルは `HEAD` の内容のまま、未追跡のファイルは含めない。大きいファイルを
+/// 自動で履歴に入れないために使う。作業フォルダとインデックスは変更しない（一時インデックスで作る）。
+/// ステージングに失敗したとき（読めないファイルなど）は、欠けたスナップショットを作らずエラーにする。
+pub fn create_snapshot_excluding(
+    runner: &GitRunner,
+    repo: &Path,
+    branch: &str,
+    now: OffsetDateTime,
+    author: &Signature,
+    exclude: &[String],
+) -> Result<Option<SnapshotRef>, SafetyError> {
+    create_snapshot_inner(runner, repo, branch, now, author, exclude, true)
+}
+
+fn create_snapshot_inner(
+    runner: &GitRunner,
+    repo: &Path,
+    branch: &str,
+    now: OffsetDateTime,
+    author: &Signature,
+    exclude: &[String],
+    strict_add: bool,
+) -> Result<Option<SnapshotRef>, SafetyError> {
     // branch 名を検証
     validate_branch_name(branch)?;
 
@@ -316,12 +345,25 @@ pub fn create_snapshot_as(
         )?;
     }
 
-    // add -A で作業フォルダをステージング
-    runner.run_with_env(
+    // add -A で作業フォルダをステージング（一時インデックスに対してだけ。除外は pathspec で指定する）
+    let mut add_args: Vec<String> = vec!["add".to_string(), "-A".to_string()];
+    if !exclude.is_empty() {
+        add_args.push("--".to_string());
+        add_args.push(".".to_string());
+        add_args.extend(exclude.iter().map(|p| format!(":(exclude,literal){p}")));
+    }
+    let add_refs: Vec<&str> = add_args.iter().map(String::as_str).collect();
+    let add_output = runner.run_with_env(
         repo,
-        &["add", "-A"],
+        &add_refs,
         &[("GIT_INDEX_FILE", OsStr::new(&*temp_index_str))],
     )?;
+    if strict_add && add_output.code != 0 {
+        return Err(SafetyError::Unexpected(format!(
+            "add failed: {}",
+            add_output.stderr
+        )));
+    }
 
     // write-tree で現在のツリーを取得
     let output = runner.run_with_env(

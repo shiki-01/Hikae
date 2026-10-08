@@ -44,7 +44,7 @@ impl OpContext {
     }
 
     /// 署名に使うユーザー（数値 ID, ログイン名）。未ログインなら None（固定の `Hikae`）
-    fn signing_user(&self) -> Option<(u64, String)> {
+    pub(crate) fn signing_user(&self) -> Option<(u64, String)> {
         self.session_user
             .lock()
             .ok()

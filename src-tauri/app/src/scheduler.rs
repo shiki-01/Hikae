@@ -13,12 +13,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use core_ops::{PullOutcome, UploadOutcome};
 use core_store::{AppSettings, Project};
 use core_watch::{
-    FailureKind, MaintenanceTimer, SyncHealth, SyncPlanner, SyncPolicy, SyncTask, TaskResult,
+    FailureKind, MaintenanceTimer, SnapshotAttempt, SnapshotPlanner, SnapshotPolicy, SyncHealth,
+    SyncPlanner, SyncPolicy, SyncTask, TaskResult,
 };
 use tauri::Manager;
 use tauri_specta::Event;
 
-use crate::events::{AttentionReason, NeedsAttention, OpTrigger, SyncStateChanged, SyncStateKind};
+use crate::events::{
+    AttentionReason, NeedsAttention, OpTrigger, StatusChanged, SyncStateChanged, SyncStateKind,
+};
 use crate::ops_runner::{
     failure_kind, run_op, size_limits_for, summarize_pull, summarize_push, OpContext, OpFailure,
     OpSpec,
@@ -31,6 +34,12 @@ const MAX_SLEEP_SECS: u64 = 30;
 struct Inner {
     started: Instant,
     planners: Mutex<HashMap<String, SyncPlanner>>,
+    /// 自動保存（ファイル監視）の実行計画。リモートの有無にかかわらず全プロジェクトが対象
+    snapshot_planners: Mutex<HashMap<String, SnapshotPlanner>>,
+    /// ファイル監視が動いているプロジェクト
+    watching: Mutex<HashSet<String>>,
+    /// 監視の途中で失敗した（やり直しが必要な）プロジェクト
+    watch_failed: Mutex<HashSet<String>>,
     wake_tx: Sender<()>,
     wake_rx: Mutex<Option<Receiver<()>>>,
 }
@@ -48,6 +57,9 @@ impl SchedulerHandle {
             inner: Arc::new(Inner {
                 started: Instant::now(),
                 planners: Mutex::new(HashMap::new()),
+                snapshot_planners: Mutex::new(HashMap::new()),
+                watching: Mutex::new(HashSet::new()),
+                watch_failed: Mutex::new(HashSet::new()),
                 wake_tx,
                 wake_rx: Mutex::new(Some(wake_rx)),
             }),
@@ -103,6 +115,95 @@ impl SchedulerHandle {
     /// （成功すれば失敗状態が解除され、失敗すれば再試行の間隔に従う）。
     pub fn note_result(&self, id: &str, task: SyncTask, result: TaskResult) {
         self.with_planner(id, |p, now| p.report(task, result, now));
+    }
+
+    // ----- ファイル監視と自動保存 -----
+
+    /// ファイル監視が動いているか（UI が変更一覧の再取得をやめてよいかの判断に使う）
+    pub fn is_watching(&self, id: &str) -> bool {
+        self.inner.watching.lock().is_ok_and(|set| set.contains(id))
+    }
+
+    pub(crate) fn set_watching(&self, id: &str, on: bool) {
+        if let Ok(mut set) = self.inner.watching.lock() {
+            if on {
+                set.insert(id.to_string());
+            } else {
+                set.remove(id);
+            }
+        }
+    }
+
+    /// 監視が途中で失敗した。次の巡回で止めてやり直す。
+    pub(crate) fn mark_watch_failed(&self, id: &str) {
+        if let Ok(mut set) = self.inner.watch_failed.lock() {
+            set.insert(id.to_string());
+        }
+        self.wake();
+    }
+
+    /// 失敗の印を取り出して消す。印があれば true
+    pub(crate) fn take_watch_failed(&self, id: &str) -> bool {
+        self.inner
+            .watch_failed
+            .lock()
+            .is_ok_and(|mut set| set.remove(id))
+    }
+
+    /// ファイルが変わった（監視から）。自動保存の静止判定を延ばす。
+    /// 待ち中の予定が無かった状態から待ち中になったときだけ、実行時刻に起きられるよう巡回を促す。
+    pub(crate) fn note_files_changed(&self, id: &str) {
+        let now = self.now();
+        let became_pending = self
+            .inner
+            .snapshot_planners
+            .lock()
+            .ok()
+            .and_then(|mut map| map.get_mut(id).map(|p| p.note_change(now)))
+            .unwrap_or(false);
+        if became_pending {
+            self.wake();
+        }
+    }
+
+    /// 自動保存の設定を計画へ反映する。登録が外されたプロジェクトの計画は捨てる。
+    /// 初めて見るプロジェクトは、アプリを閉じている間に変わった分を拾うため、起動直後の静止後に
+    /// 1 回試みる（変更が無ければ何も作らない）。
+    fn sync_snapshot_planners(&self, targets: &[(String, SnapshotPolicy)]) {
+        let now = self.now();
+        let Ok(mut map) = self.inner.snapshot_planners.lock() else {
+            return;
+        };
+        let wanted: HashSet<&str> = targets.iter().map(|(id, _)| id.as_str()).collect();
+        map.retain(|id, _| wanted.contains(id.as_str()));
+        for (id, policy) in targets {
+            match map.get_mut(id) {
+                Some(planner) => planner.set_policy(*policy),
+                None => {
+                    let mut planner = SnapshotPlanner::new(*policy);
+                    planner.note_change(now);
+                    map.insert(id.clone(), planner);
+                }
+            }
+        }
+    }
+
+    /// 自動保存を試みる時期なら、試みを始めたことを記録して true
+    fn snapshot_begin(&self, id: &str) -> bool {
+        let now = self.now();
+        self.inner
+            .snapshot_planners
+            .lock()
+            .is_ok_and(|mut map| map.get_mut(id).is_some_and(|p| p.begin(now)))
+    }
+
+    fn snapshot_finish(&self, id: &str, result: SnapshotAttempt) {
+        let now = self.now();
+        if let Ok(mut map) = self.inner.snapshot_planners.lock() {
+            if let Some(planner) = map.get_mut(id) {
+                planner.finish(result, now);
+            }
+        }
     }
 
     fn take_receiver(&self) -> Option<Receiver<()>> {
@@ -164,12 +265,22 @@ impl SchedulerHandle {
     /// 次に起きるまでの待ち時間
     fn sleep_for(&self) -> Duration {
         let now = self.now();
-        let next = self
+        let sync_next = self
             .inner
             .planners
             .lock()
             .ok()
             .and_then(|map| map.values().filter_map(|p| p.next_wake()).min());
+        let snapshot_next = self
+            .inner
+            .snapshot_planners
+            .lock()
+            .ok()
+            .and_then(|map| map.values().filter_map(|p| p.next_at()).min());
+        let next = match (sync_next, snapshot_next) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         let secs = match next {
             Some(at) => at.saturating_sub(now).clamp(1, MAX_SLEEP_SECS),
             None => MAX_SLEEP_SECS,
@@ -241,6 +352,8 @@ async fn run_loop(app: tauri::AppHandle) {
     let mut folder_missing_notified: HashSet<String> = HashSet::new();
     // 保守作業は起動直後に 1 回、その後は 1 日ごと
     let mut maintenance = MaintenanceTimer::daily();
+    // ファイル監視（プロジェクトごと）。監視の開始・停止は巡回のたびに登録内容へ合わせる
+    let mut watch_manager = crate::watch::WatchManager::default();
 
     loop {
         // 1) 登録内容と設定を計画へ反映
@@ -297,6 +410,50 @@ async fn run_loop(app: tauri::AppHandle) {
             }
         }
 
+        // フォルダが見つかる全プロジェクト（リモートの有無は問わない）が、ファイル監視と自動保存の対象
+        let active: Vec<(Project, AppSettings)> = listed
+            .iter()
+            .filter(|(p, _)| !missing.contains(&p.id))
+            .cloned()
+            .collect();
+        handle.sync_snapshot_planners(
+            &active
+                .iter()
+                .map(|(p, s)| {
+                    (
+                        p.id.clone(),
+                        SnapshotPolicy::from_settings(
+                            s.auto_snapshot_enabled,
+                            s.auto_snapshot_delay_secs,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        // 監視の開始・停止（プロジェクトの追加・削除・付け替え・フォルダ不明に追従する）
+        {
+            let watch_targets: Vec<(String, std::path::PathBuf)> = active
+                .iter()
+                .map(|(p, _)| (p.id.clone(), p.path.clone()))
+                .collect();
+            let manager = std::mem::take(&mut watch_manager);
+            let (app_for_watch, handle_for_watch, now) =
+                (app.clone(), handle.clone(), handle.now());
+            let synced = tauri::async_runtime::spawn_blocking(move || {
+                let mut manager = manager;
+                let changed = manager.sync(&app_for_watch, &handle_for_watch, &watch_targets, now);
+                (manager, changed)
+            })
+            .await;
+            if let Ok((manager, changed)) = synced {
+                watch_manager = manager;
+                // 監視中かどうかは UI の再取得の方針に影響するため、状態を取り直させる
+                for id in changed {
+                    let _ = StatusChanged { project_id: id }.emit(&app);
+                }
+            }
+        }
+
         let targets: Vec<(Project, SyncPolicy, bool)> = listed
             .into_iter()
             .filter(|(p, _)| !missing.contains(&p.id))
@@ -318,6 +475,15 @@ async fn run_loop(app: tauri::AppHandle) {
                 };
                 let result = execute(&ctx, project, task, *skip_when_unsaved).await;
                 handle.report(&project.id, task, result);
+            }
+        }
+
+        // 3b) 自動保存（ファイルの変更後に静止したプロジェクトだけ）。取り込み・保存など他の操作は
+        // 同じ直列キューを通るため、実行中ならその完了を待ち、完了後の内容で作る（同じ内容なら作らない）
+        for (project, _) in &active {
+            if handle.snapshot_begin(&project.id) {
+                let result = crate::auto_snapshot::run(&ctx, project).await;
+                handle.snapshot_finish(&project.id, result);
             }
         }
 

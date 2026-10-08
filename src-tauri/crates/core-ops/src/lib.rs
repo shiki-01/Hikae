@@ -1,6 +1,7 @@
 // 保存・取り込み・アップロード・ぶつかり解消などの高層操作 API。
 
 mod add_files;
+mod auto_snapshot;
 mod changes;
 mod clone_dest;
 mod file_in_use;
@@ -19,6 +20,7 @@ mod restore_file;
 mod size_check;
 
 pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
+pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
@@ -164,6 +166,18 @@ impl Ops {
         options: &SaveOptions,
     ) -> Result<SaveOutcome, OpsError> {
         operations::save(self.runner(), repo, memo, options, self.now(), self.meta())
+    }
+
+    /// ファイル監視による自動保存（スナップショット）を作る（設計書 6.2）。
+    /// 一時インデックスで作り、作業フォルダ・インデックスは変更しない。変更が無い、または直前と
+    /// 同じ内容なら作らない。`limits` の対象になる大きいファイルは含めない。ぶつかりの解消中は作らない。
+    /// 作者は `with_signing_user` / `with_signature` で指定した署名。
+    pub fn auto_snapshot(
+        &self,
+        repo: &Path,
+        limits: SizeLimits,
+    ) -> Result<AutoSnapshotOutcome, OpsError> {
+        auto_snapshot::auto_snapshot(self.runner(), repo, limits, self.now(), self.meta())
     }
 
     /// 保存した場合に問題になる大きいファイルを調べる（読み取りのみ）。

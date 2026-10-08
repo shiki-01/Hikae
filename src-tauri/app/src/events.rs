@@ -63,6 +63,13 @@ pub struct StatusChanged {
     pub project_id: String,
 }
 
+/// プロジェクトのフォルダでファイルが変わった（ファイル監視。保存の対象になりうる変更だけ）。
+/// UI は変更一覧のキャッシュだけを無効化して取り直す（重い再取得を避けるため `status_changed` とは分ける）。
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct FilesChanged {
+    pub project_id: String,
+}
+
 /// 状態変更操作を開始した
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 pub struct OpProgress {

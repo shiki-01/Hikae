@@ -73,7 +73,7 @@ fn invalid_values_are_rejected_and_nothing_is_saved() -> TestResult {
     let store = store_with_project(tmp.path())?;
     let result = store.update_settings(&SettingsPatch {
         auto_push_after_save: Some(false),
-        pull_interval_minutes: Some(7),
+        pull_interval_minutes: Some(1441),
         ..SettingsPatch::default()
     });
     assert!(matches!(result, Err(StoreError::InvalidData(_))));
