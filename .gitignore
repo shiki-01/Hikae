@@ -28,3 +28,6 @@ $RECYCLE.BIN/
 
 # Claude Code のローカル設定
 .claude/settings.local.json
+
+# 単体の rustc 実験で出る成果物
+*.rlib
