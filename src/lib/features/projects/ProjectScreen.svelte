@@ -67,6 +67,10 @@
 	const PANE_MAX = 360;
 
 	const project = useProject(() => projectId);
+	let tab = $state<'changes' | 'history'>('changes');
+	// 変更タブの左ペインの表示範囲（変更のみ / すべてのファイル）。クエリより前に宣言する（getter から参照するため）
+	let changesView = $state<ChangesView>('changes');
+
 	const changesQuery = useChanges(
 		() => projectId,
 		() => project.data?.watching ?? false
@@ -82,10 +86,7 @@
 		() => (changesQuery.data?.length ?? 0) > 0
 	);
 
-	let tab = $state<'changes' | 'history'>('changes');
 	let selectedPath = $state<string | null>(null);
-	// 変更タブの左ペインの表示範囲（変更のみ / すべてのファイル）
-	let changesView = $state<ChangesView>('changes');
 	// 「元に戻す（作成しない）」の確認待ちの新規ファイル
 	let discardPath = $state<string | null>(null);
 	let selectedPointId = $state<string | null>('now');
