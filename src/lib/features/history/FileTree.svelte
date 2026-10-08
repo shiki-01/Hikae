@@ -54,7 +54,7 @@
 						</span>
 						<span class="flex gap:2 flex-shrink:0">
 							<!-- この時点の版を、読み取り専用の一時ファイルとして開く -->
-							<Tooltip text={t('file_action.open_at_hint')} position="left">
+							<Tooltip text={t('file_action.open_at_hint')} position="bottom-end">
 								<Button size="sm" variant="ghost" onclick={() => onopenat(node.path)}>
 									{t('file_action.open_at')}
 								</Button>

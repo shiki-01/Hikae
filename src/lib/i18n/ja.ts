@@ -150,7 +150,7 @@ const messages = {
 		'ファイルはこの PC に残っています。操作の前の状態も控えとして残してあります。',
 	'interrupted.next':
 		'もう一度同じ操作を行ってください。元の状態に戻したいときは、履歴から戻せます。',
-	'interrupted.recover': '取り込み前（操作前）の状態に戻す',
+	'interrupted.recover': '操作前の状態に戻す',
 	'interrupted.recover_hint': '戻す前の状態も控えとして残るため、後から取り出せます。',
 	'interrupted.close': '閉じる',
 	'interrupted.op_save': '保存',

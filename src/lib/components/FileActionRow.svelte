@@ -63,7 +63,7 @@
 			</Button>
 		{/if}
 		{#if onopenat}
-			<Tooltip text={t('file_action.open_at_hint')} position="left">
+			<Tooltip text={t('file_action.open_at_hint')} position="bottom-end">
 				<Button size="sm" variant="secondary" onclick={onopenat}>
 					<ExternalLink size={14} aria-hidden="true" />
 					{t('file_action.open_at')}

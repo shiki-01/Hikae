@@ -4,7 +4,7 @@
 
 - 詳細設計: `docs/design.md`（要件、フロー、Git コマンド対応、安全設計、設定、データモデル、ロードマップ）
 - デザイン要件: `docs/design-requirements.md`（トークン名、コンポーネント、画面レイアウト）
-- 実装前に該当章を必ず読むこと。設計と矛盾する実装が必要になった場合は、実装せずに理由を報告して判断を仰ぐ
+- 実装前に該当章を必ず読むこと。設計と矛盾する実装が必要になった場合は、実装せずに理由を報告して判断を仰ぐ。実装に合わせた設計書の更新（追記・誤記修正）は Claude が行ってよい。CLAUDE.md も必要に応じて Claude が更新してよい
 
 ## 開発環境の前提
 
@@ -33,7 +33,7 @@
 ```text
 .
 ├── CLAUDE.md
-├── docs/                 # 設計書（編集は人間が行う。Claude は誤記の指摘のみ）
+├── docs/                 # 設計書（Claude も編集してよい。実装と食い違いが出たら更新する。設計の方針自体を変える場合は理由を報告する）
 ├── src/                  # SvelteKit フロントエンド
 │   ├── lib/features/*    # projects, changes, history, compare, conflict, settings, ai, extensions
 │   ├── lib/components/*  # デザイン要件 3章のコンポーネント
@@ -90,7 +90,7 @@
 
 ## 進め方
 
-- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 0（技術検証）の完了確認中。結果は `docs/notes/phase0-report.md`。Phase 1 に進む前に、macOS での CI 実行と Device Flow の実認証を確認する
+- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 1（MVP）の実装中。Phase 0 の結果は `docs/notes/phase0-report.md`。macOS での CI 実行は確認済み。Device Flow の実認証（ブラウザでの手動承認）は未確認
 - 1つの作業単位ごとに commit する。commit メッセージは英語、Conventional Commits 形式
 - 設計にない機能を追加しない。必要だと判断した場合は提案として報告する
 - 判断に迷う点は推測で埋めず、選択肢と推奨を添えて質問する

@@ -3,7 +3,7 @@
 
 	interface Props {
 		text: string;
-		position?: 'top' | 'bottom' | 'left' | 'right';
+		position?: 'top' | 'bottom' | 'bottom-end' | 'left' | 'right';
 		children: Snippet;
 		class?: string;
 	}
@@ -39,6 +39,8 @@
 	const placement = {
 		top: 'bottom:100% left:50% transform:translateX(-50%) mb:1',
 		bottom: 'top:100% left:50% transform:translateX(-50%) mt:1',
+		// 右端をそろえて下に出す（右端のボタンで、画面の外や隣の操作にはみ出さないため）
+		'bottom-end': 'top:100% right:0 mt:1',
 		left: 'right:100% top:50% transform:translateY(-50%) mr:1',
 		right: 'left:100% top:50% transform:translateY(-50%) ml:1'
 	};
@@ -54,7 +56,7 @@
 		<span
 			{id}
 			role="tooltip"
-			class={`position:absolute z:50 px:2 py:1 r:sm bg:fg fg:bg type-small white-space:nowrap pointer-events:none ${placement[position]}`}
+			class={`position:absolute z:50 px:2 py:1 r:sm bg:fg fg:bg type-small w:max-content max-w:280px pointer-events:none ${placement[position]}`}
 		>
 			{text}
 		</span>

@@ -85,7 +85,7 @@
 			{:else}
 				<ul class="m:0 p:0 list-style:none">
 					{#each files.data ?? [] as file (file.path)}
-						<li>
+						<li class="px:2">
 							<!-- この時点で削除されたファイルは、この時点の版が無いため開けない -->
 							<FileActionRow
 								filename={file.path}

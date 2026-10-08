@@ -46,6 +46,20 @@
 		} else if (!open && el.open) el.close();
 	});
 
+	// 処理中に開いたダイアログは、操作部品がすべて無効のため初期フォーカスを置けない。
+	// 処理が終わったときに、フォーカスがダイアログ自体にあるままなら最初の操作部品へ移す
+	$effect(() => {
+		const el = dialog;
+		if (!el || !open || busy) return;
+		const active = document.activeElement;
+		if (
+			el.open &&
+			!(active instanceof HTMLElement && el.contains(active) && active.matches(FOCUSABLE))
+		) {
+			focusInitial();
+		}
+	});
+
 	const FOCUSABLE =
 		'input:not([readonly]):not(:disabled), textarea:not([readonly]):not(:disabled), select:not(:disabled), button:not(:disabled), [tabindex="0"]';
 
@@ -89,9 +103,11 @@
 					<XCircle size={24} class="fg:state-danger flex-shrink:0" aria-hidden="true" />
 				{/if}
 				<div class="flex:1 min-w:0">
-					<h2 id={`${id}-title`} class="m:0 type-heading">{title}</h2>
+					<h2 id={`${id}-title`} class="m:0 type-heading" style:text-wrap="balance">{title}</h2>
 					{#if description}
-						<p id={`${id}-desc`} class="m:0 mt:1 type-body fg:fg-muted">{description}</p>
+						<p id={`${id}-desc`} class="m:0 mt:1 type-body fg:fg-muted" style:text-wrap="balance">
+							{description}
+						</p>
 					{/if}
 				</div>
 				{@render headerExtra?.()}
