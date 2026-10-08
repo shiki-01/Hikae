@@ -94,7 +94,6 @@ const messages = {
 	'file_action.restore_point': 'この版に戻す',
 	'file_action.open': '開く',
 	'file_action.open_default': '既定のアプリで開く',
-	'file_action.open_vscode': 'VS Code で開く',
 	'file_action.show_folder': 'フォルダで表示',
 	'file_action.copy_path': 'パスをコピー',
 	'file_action.open_current': '現在のファイルを開く',
@@ -145,6 +144,13 @@ const messages = {
 	'sync_size.safe': '何も変更していません。ファイルはこの PC にそのまま残っています。',
 	'sync_size.next': 'ファイルを保存対象から外すか、保存し直してから、もう一度お試しください。',
 	'sync_size.close': '閉じる',
+	'pull_confirm.title': '保存していない変更があります',
+	'pull_confirm.what': 'ファイルが {count} 件あります。保存してから取り込みます。',
+	'pull_confirm.safe':
+		'保存した内容は履歴に残ります。取り込む前の状態にも戻せるため、変更が失われることはありません。',
+	'pull_confirm.next': '保存して取り込むか、取り込まずに戻って内容を確認してください。',
+	'pull_confirm.save_and_fetch': '保存して取り込む',
+	'pull_confirm.cancel': 'キャンセル',
 
 	'interrupted.title': '途中で止まった操作があります',
 	'interrupted.description': '前回のアプリ終了で、{name}が途中で止まっています。',
@@ -371,9 +377,6 @@ const messages = {
 	'settings.scope_all': '全体の設定に戻る',
 	'settings.confirm_cancel': 'キャンセル',
 	'settings.confirm_apply': '変更する',
-	'settings.confirm_auto_snapshot_off_title': '自動保存をオフにしますか',
-	'settings.confirm_auto_snapshot_off_text':
-		'誤って消したり上書きしたりしたファイルを、自動保存から取り出せなくなります。',
 	'settings.confirm_auto_push_off_title': '保存時の自動アップロードをオフにしますか',
 	'settings.confirm_auto_push_off_text':
 		'アップロードするまで、保存した内容はクラウドに控えが置かれません。この PC が壊れると、失われる可能性があります。',
@@ -381,9 +384,6 @@ const messages = {
 	'settings.confirm_retention_text':
 		'短くした期間を過ぎた古い自動保存は、整理されて取り出せなくなることがあります。',
 
-	'settings.auto_save_after_restore': '戻した後に自動で保存する',
-	'settings.auto_save_after_restore_text':
-		'元に戻したあと、その内容を新しい保存ポイントとして残します。',
 	'settings.large_file_warn': '大きいファイルを知らせるサイズ',
 	'settings.large_file_warn_text':
 		'このサイズ以上のファイルは、アップロードに時間がかかることをお知らせします。',
@@ -396,18 +396,8 @@ const messages = {
 	'settings.auto_save_before_fetch': '取り込む前に自動で保存する',
 	'settings.auto_save_before_fetch_text':
 		'未保存の変更があるときは、保存してから取り込みます。オフのときは取り込む前に確認します。',
-	'settings.conflict_mode': '変更のぶつかりが見つかったとき',
-	'settings.conflict_mode_text': '自動で取り込んだ結果にぶつかりがあったときの動作です。',
 	'settings.auto_upload_on_save': '保存したら自動でアップロードする',
 	'settings.auto_upload_on_save_text': '保存と同時に、クラウドへ控えを置きます。',
-	'settings.push_reminder': 'アップロード待ちのお知らせ',
-	'settings.push_reminder_text':
-		'自動でアップロードしない場合に、アップロード待ちがあることをお知らせする間隔です。',
-	'settings.auto_snapshot': 'ファイルの変更を自動で記録する',
-	'settings.auto_snapshot_text':
-		'変更が止まったところで、自動保存として記録します。保存ポイントには影響しません。',
-	'settings.auto_snapshot_delay': '記録するまでの待ち時間',
-	'settings.auto_snapshot_delay_text': '最後の変更から、この時間だけ変更がなければ記録します。',
 	'settings.snapshot_retention': '自動保存を残す期間',
 	'settings.snapshot_retention_text': 'この期間を過ぎた自動保存は整理されます。',
 
@@ -415,22 +405,15 @@ const messages = {
 	'settings.opt_interval_5': '5 分ごと',
 	'settings.opt_interval_15': '15 分ごと',
 	'settings.opt_interval_60': '60 分ごと',
-	'settings.opt_hours_1': '1 時間ごと',
-	'settings.opt_hours_24': '1 日ごと',
 	'settings.opt_mb_25': '25MB',
 	'settings.opt_mb_50': '50MB',
 	'settings.opt_mb_100': '100MB',
-	'settings.opt_delay_30': '30 秒',
-	'settings.opt_delay_120': '2 分',
-	'settings.opt_delay_600': '10 分',
 	'settings.opt_keep_30': '30 日',
 	'settings.opt_keep_90': '90 日',
 	'settings.opt_keep_365': '1 年',
 	'settings.opt_snap_collapsed': '折りたたむ',
 	'settings.opt_snap_shown': '表示する',
 	'settings.opt_snap_hidden': '表示しない',
-	'settings.opt_conflict_dialog': 'すぐ解消画面を開く',
-	'settings.opt_conflict_notify': '通知だけ出す',
 
 	'settings.note_ignore': '保存しないファイルの設定は、今後のバージョンで利用できます。',
 	'settings.note_ai':
@@ -679,6 +662,56 @@ const messages = {
 	'errcode.settings_io_failed.what': '設定を読み書きできませんでした',
 	'errcode.settings_io_failed.safe': 'ファイルは変更されていません。',
 	'errcode.settings_io_failed.next': 'もう一度お試しください。',
+	'errcode.invalid_settings.what': '設定の値が正しくないため、変更できませんでした',
+	'errcode.invalid_settings.safe': 'ファイルは変更されていません。設定も元のままです。',
+	'errcode.invalid_settings.next': '設定を選び直してください。',
+	'errcode.status_failed.what': '未保存の変更を確認できませんでした',
+	'errcode.status_failed.safe': 'ファイルは変更されていません。',
+	'errcode.status_failed.next':
+		'もう一度お試しください。解決しないときは、技術情報をコピーしてサポートに連絡してください。',
+	'errcode.change_list_failed.what': '未保存の変更の一覧を読み込めませんでした',
+	'errcode.change_list_failed.safe': 'ファイルは変更されていません。',
+	'errcode.change_list_failed.next':
+		'もう一度お試しください。解決しないときは、技術情報をコピーしてサポートに連絡してください。',
+	'errcode.history_failed.what': '履歴を読み込めませんでした',
+	'errcode.history_failed.safe': 'これまでに保存した内容は失われていません。',
+	'errcode.history_failed.next':
+		'もう一度お試しください。解決しないときは、技術情報をコピーしてサポートに連絡してください。',
+	'errcode.diff_failed.what': '2つの版を見比べられませんでした',
+	'errcode.diff_failed.safe': 'ファイルは変更されていません。',
+	'errcode.diff_failed.next': '選び直すか、もう一度お試しください。',
+	'errcode.preview_failed.what': 'ファイルの内容を表示できませんでした',
+	'errcode.preview_failed.safe': 'ファイルは変更されていません。',
+	'errcode.preview_failed.next': '「開く」から、対応するアプリで確認してください。',
+	'errcode.conflict_list_failed.what': '変更がぶつかっているファイルの一覧を読み込めませんでした',
+	'errcode.conflict_list_failed.safe': '両方の版は失われていません。',
+	'errcode.conflict_list_failed.next': 'もう一度お試しください。',
+	'errcode.open_failed.what': 'ファイルまたはフォルダを開けませんでした',
+	'errcode.open_failed.safe': 'ファイルは変更されていません。',
+	'errcode.open_failed.next':
+		'対応するアプリがインストールされているか、フォルダの場所と権限を確認してください。',
+	'errcode.project_folder_missing.what': 'プロジェクトのフォルダが見つかりません',
+	'errcode.project_folder_missing.safe':
+		'ファイルは変更されていません。GitHub には何も作られていません。',
+	'errcode.project_folder_missing.next': 'フォルダの場所を指定してから、もう一度お試しください。',
+	'errcode.remote_already_connected.what':
+		'このプロジェクトは、すでにクラウドの保管場所に接続されています',
+	'errcode.remote_already_connected.safe':
+		'ファイルは変更されていません。GitHub には何も作られていません。',
+	'errcode.remote_already_connected.next': '画面を更新して、状態を確認してください。',
+	'errcode.remote_name_invalid.what': '保存先の名前に使えない文字が含まれています',
+	'errcode.remote_name_invalid.safe':
+		'ファイルはこの PC に安全に残っています。GitHub には何も作られていません。',
+	'errcode.remote_name_invalid.next': '英数字と - _ . だけで名前を付けて、もう一度お試しください。',
+	'errcode.remote_owner_invalid.what': '保存先の指定が正しくありません',
+	'errcode.remote_owner_invalid.safe':
+		'ファイルはこの PC に安全に残っています。GitHub には何も作られていません。',
+	'errcode.remote_owner_invalid.next': '保存先を選び直してください。',
+	'errcode.remote_public_not_confirmed.what': '公開してよいかの確認が済んでいません',
+	'errcode.remote_public_not_confirmed.safe':
+		'ファイルは変更されていません。GitHub には何も作られていません。',
+	'errcode.remote_public_not_confirmed.next':
+		'公開する場合は、注意事項を確認してからもう一度お試しください。',
 	'errcode.remote_name_taken.what': '同じ名前の保存先がすでに GitHub にあります',
 	'errcode.remote_name_taken.safe':
 		'ファイルはこの PC に安全に残っています。GitHub 上のものには何も変更していません。',

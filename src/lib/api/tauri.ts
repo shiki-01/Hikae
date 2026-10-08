@@ -38,10 +38,11 @@ import type {
 	ConflictFile,
 	ConnectRemoteInput,
 	DroppedFile,
+	FetchOptions,
 	FileDiff,
 	FileEntry,
 	ImpactItem,
-	OpenTarget,
+	OpenAction,
 	PointFile,
 	Project,
 	ProjectApi,
@@ -293,8 +294,8 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.undoRestore(projectId, undoToken));
 	},
 
-	async fetch(projectId: string) {
-		return mapPull(await unwrap(commands.pull(projectId)));
+	async fetch(projectId: string, options?: FetchOptions) {
+		return mapPull(await unwrap(commands.pull(projectId, options?.saveConfirmed ?? false)));
 	},
 
 	async push(projectId: string): Promise<PushResult> {
@@ -323,10 +324,10 @@ export const tauriApi: ProjectApi = {
 		return mapAddFilesResult(result);
 	},
 
-	async openFile(projectId: string, path: string, target: OpenTarget): Promise<void> {
-		if (target !== 'default') unsupported(`open file with target ${target}`);
-		// パスの検証（プロジェクト外の拒否）はバックエンド側で行う
-		await unwrap(commands.openProjectFile(projectId, path));
+	async openFile(projectId: string, path: string, target: OpenAction): Promise<void> {
+		// パスの検証（プロジェクト外の拒否）はどちらもバックエンド側で行う
+		if (target === 'folder') await unwrap(commands.revealProjectFile(projectId, path));
+		else await unwrap(commands.openProjectFile(projectId, path));
 	},
 
 	async openFileAt(projectId: string, savePointId: string, path: string): Promise<void> {

@@ -17,6 +17,7 @@
 	import type { SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
 	import StatusHeader from '#lib/components/StatusHeader.svelte';
+	import { projectFilePath } from '#lib/components/file-actions.js';
 	import { buildTimeline, latestManualPoint } from '#lib/components/timeline.js';
 	import ChangeDetail from '#lib/features/changes/ChangeDetail.svelte';
 	import ChangesPane from '#lib/features/changes/ChangesPane.svelte';
@@ -45,6 +46,7 @@
 	import { liveStateOf } from './live.svelte.js';
 	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import InterruptedDialog from './InterruptedDialog.svelte';
+	import PullSaveDialog from './PullSaveDialog.svelte';
 	import SyncSizeDialog from './SyncSizeDialog.svelte';
 	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
 	import { useRecoverInterrupted } from './mutations';
@@ -94,6 +96,8 @@
 	let connectOpen = $state(false);
 	// 大きいファイルのため、取り込み・アップロードを見送った内容
 	let syncSize = $state<SyncSizeRequest | null>(null);
+	// 取り込む前の保存の確認待ち（未保存のファイルの件数。E06）
+	let pullConfirmCount = $state<number | null>(null);
 
 	const changes = $derived(changesQuery.data ?? []);
 	const history = $derived(historyQuery.data ?? []);
@@ -120,7 +124,8 @@
 	const fetchMutation = useFetch(
 		() => projectId,
 		() => (conflictOpen = true),
-		(request) => (syncSize = request)
+		(request) => (syncSize = request),
+		(count) => (pullConfirmCount = count)
 	);
 	const push = usePush(
 		() => projectId,
@@ -202,7 +207,8 @@
 	async function openFile(path: string, target: OpenTarget) {
 		try {
 			if (target === 'copy_path') {
-				await navigator.clipboard.writeText(`${project.data?.path ?? ''}\\${path}`);
+				// クリップボードへの書き込みだけで、ファイルは開かない（バックエンドは呼ばない）
+				await navigator.clipboard.writeText(projectFilePath(project.data?.path ?? '', path));
 				pushToast({ type: 'info', message: t('toast.path_copied') });
 				return;
 			}
@@ -499,6 +505,15 @@
 />
 
 <SyncSizeDialog request={syncSize} onclose={() => (syncSize = null)} />
+
+<PullSaveDialog
+	unsavedCount={pullConfirmCount}
+	oncancel={() => (pullConfirmCount = null)}
+	onconfirm={() => {
+		pullConfirmCount = null;
+		fetchMutation.mutate({ saveConfirmed: true });
+	}}
+/>
 
 <AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />
 

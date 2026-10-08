@@ -3,6 +3,7 @@ import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
 import { t } from '#lib/i18n/index.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
+import type { FetchOptions } from '#lib/api/types.js';
 import { syncSizeRequest, type SyncSizeRequest } from './sync-size';
 
 export function invalidateProject(client: QueryClient, projectId: string): Promise<unknown> {
@@ -19,19 +20,27 @@ export function invalidateProject(client: QueryClient, projectId: string): Promi
 	]);
 }
 
+/** 取り込みの実行時の指定。画面から呼ぶときは省略する。確認で承諾した後だけ `saveConfirmed` を渡す */
+export type FetchVariables = FetchOptions | void;
+
 export function useFetch(
 	getProjectId: () => string,
 	onConflict?: () => void,
-	onSizeCheck?: (request: SyncSizeRequest) => void
+	onSizeCheck?: (request: SyncSizeRequest) => void,
+	onSaveConfirm?: (unsavedCount: number) => void
 ) {
 	const client = useQueryClient();
 	const retry = { run: () => {} };
 	const mutation = createMutation(() => ({
-		mutationFn: () => api.fetch(getProjectId()),
+		mutationFn: (variables: FetchVariables) =>
+			api.fetch(getProjectId(), variables ? variables : undefined),
 		onSuccess: async (result) => {
 			await invalidateProject(client, getProjectId());
 			const skipped = syncSizeRequest('fetch', result);
-			if (skipped) {
+			if (result.unsavedCount !== null) {
+				// 未保存の変更があり、保存の確認が必要なため何も実行していない。成功のトーストは出さない
+				onSaveConfirm?.(result.unsavedCount);
+			} else if (skipped) {
 				// 大きいファイルのため何も実行していない。成功のトーストは出さない
 				onSizeCheck?.(skipped);
 			} else if (result.conflictCount > 0) {

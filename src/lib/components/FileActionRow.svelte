@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { Eye, ExternalLink, FolderOpen, Copy, RotateCcw, Code } from '@lucide/svelte';
+	import { Eye, ExternalLink, FolderOpen, Copy, RotateCcw } from '@lucide/svelte';
 	import { t } from '#lib/i18n/index.js';
 	import type { OpenTarget } from '#lib/api/types.js';
+	import { OPEN_MENU } from './file-actions';
 	import Button from './Button.svelte';
 	import SplitButton from './SplitButton.svelte';
 	import Tooltip from './Tooltip.svelte';
@@ -30,17 +31,19 @@
 		class: className = ''
 	}: Props = $props();
 
-	const items = $derived([
-		{
-			label: t('file_action.open_default'),
-			icon: ExternalLink,
-			onselect: () => onopen?.('default')
-		},
-		{ label: t('file_action.open_vscode'), icon: Code, onselect: () => onopen?.('vscode') },
-		{ label: t('file_action.show_folder'), icon: FolderOpen, onselect: () => onopen?.('folder') },
-		{ type: 'separator' as const },
-		{ label: t('file_action.copy_path'), icon: Copy, onselect: () => onopen?.('copy_path') }
-	]);
+	const icons = { default: ExternalLink, folder: FolderOpen, copy_path: Copy } as const;
+
+	const items = $derived(
+		OPEN_MENU.map((entry) =>
+			entry.type === 'separator'
+				? { type: 'separator' as const }
+				: {
+						label: t(entry.label),
+						icon: icons[entry.target],
+						onselect: () => onopen?.(entry.target)
+					}
+		)
+	);
 </script>
 
 <div

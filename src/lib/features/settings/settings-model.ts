@@ -32,12 +32,6 @@ export type SettingRow = ToggleRow | SelectRow;
 export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 	general: [
 		{
-			type: 'toggle',
-			key: 'autoSaveAfterRestore',
-			label: 'settings.auto_save_after_restore',
-			text: 'settings.auto_save_after_restore_text'
-		},
-		{
 			type: 'select',
 			key: 'largeFileWarnMb',
 			label: 'settings.large_file_warn',
@@ -84,16 +78,6 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 			key: 'saveBeforePull',
 			label: 'settings.auto_save_before_fetch',
 			text: 'settings.auto_save_before_fetch_text'
-		},
-		{
-			type: 'select',
-			key: 'conflictMode',
-			label: 'settings.conflict_mode',
-			text: 'settings.conflict_mode_text',
-			options: [
-				{ value: 'show-dialog', label: 'settings.opt_conflict_dialog' },
-				{ value: 'notify-only', label: 'settings.opt_conflict_notify' }
-			]
 		}
 	],
 	push: [
@@ -102,37 +86,9 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 			key: 'autoPushAfterSave',
 			label: 'settings.auto_upload_on_save',
 			text: 'settings.auto_upload_on_save_text'
-		},
-		{
-			type: 'select',
-			key: 'pushReminderHours',
-			label: 'settings.push_reminder',
-			text: 'settings.push_reminder_text',
-			options: [
-				{ value: 0, label: 'settings.opt_off' },
-				{ value: 1, label: 'settings.opt_hours_1' },
-				{ value: 24, label: 'settings.opt_hours_24' }
-			]
 		}
 	],
 	auto_save: [
-		{
-			type: 'toggle',
-			key: 'autoSnapshotEnabled',
-			label: 'settings.auto_snapshot',
-			text: 'settings.auto_snapshot_text'
-		},
-		{
-			type: 'select',
-			key: 'autoSnapshotDelaySecs',
-			label: 'settings.auto_snapshot_delay',
-			text: 'settings.auto_snapshot_delay_text',
-			options: [
-				{ value: 30, label: 'settings.opt_delay_30' },
-				{ value: 120, label: 'settings.opt_delay_120' },
-				{ value: 600, label: 'settings.opt_delay_600' }
-			]
-		},
 		{
 			type: 'select',
 			key: 'snapshotRetentionDays',
@@ -167,12 +123,6 @@ export function confirmationFor(
 	current: AppSettings,
 	next: SettingValue
 ): SettingConfirmation | null {
-	if (key === 'autoSnapshotEnabled' && current.autoSnapshotEnabled && next === false) {
-		return {
-			title: 'settings.confirm_auto_snapshot_off_title',
-			text: 'settings.confirm_auto_snapshot_off_text'
-		};
-	}
 	if (key === 'autoPushAfterSave' && current.autoPushAfterSave && next === false) {
 		return {
 			title: 'settings.confirm_auto_push_off_title',

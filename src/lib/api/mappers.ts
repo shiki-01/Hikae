@@ -209,7 +209,8 @@ export function mapPull(result: PullResult): FetchResult {
 	return {
 		mergedCount: merged ? 1 : 0,
 		conflictCount: result.conflicts.length,
-		sizeCheck: mapSizeCheck(result.size_check)
+		sizeCheck: mapSizeCheck(result.size_check),
+		unsavedCount: result.outcome === 'needs-save-confirmation' ? (result.unsaved_count ?? 0) : null
 	};
 }
 

@@ -135,6 +135,17 @@ export interface FetchResult {
 	conflictCount: number;
 	/** 大きいファイルがあり、何も実行せずに見送った場合の内容。なければ null */
 	sizeCheck: SizeCheck | null;
+	/**
+	 * 未保存の変更があり、取り込む前に保存の確認が必要なため、何も実行せずに見送った場合の
+	 * 未保存のファイルの件数（E06）。なければ null
+	 */
+	unsavedCount: number | null;
+}
+
+/** 取り込みの指定 */
+export interface FetchOptions {
+	/** 取り込む前に未保存の変更を保存することを、利用者が確認で承諾した */
+	saveConfirmed?: boolean;
 }
 
 export interface PushResult {
@@ -251,7 +262,11 @@ export interface AddFilesOutcome {
 	rejected: RejectedFile[];
 }
 
-export type OpenTarget = 'default' | 'vscode' | 'folder' | 'copy_path';
+/** 「開く」メニューの選択肢。パスのコピーは画面側（クリップボード）で行い、バックエンドは呼ばない */
+export type OpenTarget = 'default' | 'folder' | 'copy_path';
+
+/** バックエンドで実行する「開く」の種類（既定のアプリで開く・フォルダで表示） */
+export type OpenAction = Exclude<OpenTarget, 'copy_path'>;
 
 export type ConflictMode = 'show-dialog' | 'notify-only';
 export type TimelineSnapshots = 'collapsed' | 'shown' | 'hidden';
@@ -357,14 +372,14 @@ export interface ProjectApi {
 	restoreImpact(projectId: string, targetId: string, scope: RestoreScope): Promise<ImpactItem[]>;
 	restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult>;
 	undoRestore(projectId: string, undoToken: string): Promise<void>;
-	fetch(projectId: string): Promise<FetchResult>;
+	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;
 	resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void>;
 	abortMerge(projectId: string): Promise<void>;
 
 	addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome>;
-	openFile(projectId: string, path: string, target: OpenTarget): Promise<void>;
+	openFile(projectId: string, path: string, target: OpenAction): Promise<void>;
 	/** 過去の保存時点の版を、読み取り専用で既定のアプリで開く。現在のファイルは変更しない */
 	openFileAt(projectId: string, savePointId: string, path: string): Promise<void>;
 	/** 中断された操作の直前の状態へ戻す。戻せない場合はエラー（何も変更しない） */

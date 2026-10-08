@@ -35,6 +35,21 @@ describe('設定項目の定義', () => {
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 
+	it('バックエンドが参照していない設定は画面に出さない', () => {
+		const keys = SETTINGS_TABS.flatMap((tab) => SETTING_ROWS[tab].map((row) => row.key)).sort();
+		expect(keys).toEqual(
+			[
+				'autoPushAfterSave',
+				'largeFileWarnMb',
+				'pullIntervalMinutes',
+				'pullOnStartup',
+				'saveBeforePull',
+				'showSnapshotsInTimeline',
+				'snapshotRetentionDays'
+			].sort()
+		);
+	});
+
 	it('ラベルと説明の文言が定義されている', () => {
 		for (const tab of SETTINGS_TABS) {
 			for (const row of SETTING_ROWS[tab]) {
@@ -68,14 +83,6 @@ describe('選択肢の値の復元', () => {
 });
 
 describe('確認ダイアログが必要な変更', () => {
-	it('自動保存をオフにするときだけ確認する', () => {
-		expect(confirmationFor('autoSnapshotEnabled', current, false)).not.toBeNull();
-		expect(confirmationFor('autoSnapshotEnabled', current, true)).toBeNull();
-		expect(
-			confirmationFor('autoSnapshotEnabled', { ...current, autoSnapshotEnabled: false }, false)
-		).toBeNull();
-	});
-
 	it('自動アップロードをオフにするときだけ確認する', () => {
 		expect(confirmationFor('autoPushAfterSave', current, false)).not.toBeNull();
 		expect(confirmationFor('autoPushAfterSave', current, true)).toBeNull();

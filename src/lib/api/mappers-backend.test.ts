@@ -7,6 +7,7 @@ import {
 	mapOverridden,
 	mapOwner,
 	mapPointChange,
+	mapPull,
 	mapProject,
 	mapRemoteOutcome,
 	mapRemoteProjects,
@@ -207,15 +208,34 @@ describe('設定の変換', () => {
 	});
 
 	it('変更した項目だけをバックエンドの項目名で送る', () => {
-		expect(toBackendPatch({ pullIntervalMinutes: 0, autoSnapshotEnabled: false })).toEqual({
+		expect(toBackendPatch({ pullIntervalMinutes: 0, largeFileWarnMb: 25 })).toEqual({
 			pull_interval_minutes: 0,
-			auto_snapshot_enabled: false
+			large_file_warn_mb: 25
 		});
 		expect(toBackendPatch({})).toEqual({});
 	});
 
 	it('false や 0 も省略せず送る', () => {
 		expect(toBackendPatch({ saveBeforePull: false })).toEqual({ save_before_pull: false });
+	});
+});
+
+describe('取り込み結果の変換', () => {
+	const base = { outcome: 'up-to-date', conflicts: [], size_check: null, unsaved_count: null };
+
+	it('未保存の変更の確認が必要なときは、件数を持つ', () => {
+		const result = mapPull({ ...base, outcome: 'needs-save-confirmation', unsaved_count: 3 });
+		expect(result.unsavedCount).toBe(3);
+		expect(result.mergedCount).toBe(0);
+		expect(result.conflictCount).toBe(0);
+		expect(result.sizeCheck).toBeNull();
+	});
+
+	it('そのほかの結果では確認の件数を持たない', () => {
+		for (const outcome of ['up-to-date', 'fast-forwarded', 'merged', 'needs-size-decision']) {
+			expect(mapPull({ ...base, outcome }).unsavedCount, outcome).toBeNull();
+		}
+		expect(mapPull({ ...base, outcome: 'merged' }).mergedCount).toBe(1);
 	});
 });
 

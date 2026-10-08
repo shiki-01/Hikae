@@ -113,10 +113,13 @@ describe('競合種別の変換', () => {
 	});
 
 	it('取り込み結果から競合数を取り出す', () => {
-		expect(mapPull({ outcome: 'up-to-date', conflicts: [], size_check: null })).toEqual({
+		expect(
+			mapPull({ outcome: 'up-to-date', conflicts: [], size_check: null, unsaved_count: null })
+		).toEqual({
 			mergedCount: 0,
 			conflictCount: 0,
-			sizeCheck: null
+			sizeCheck: null,
+			unsavedCount: null
 		});
 		expect(
 			mapPull({
@@ -131,10 +134,14 @@ describe('競合種別の変換', () => {
 						cloud_pc_name: null
 					}
 				],
-				size_check: null
+				size_check: null,
+				unsaved_count: null
 			})
-		).toEqual({ mergedCount: 0, conflictCount: 1, sizeCheck: null });
-		expect(mapPull({ outcome: 'merged', conflicts: [], size_check: null }).mergedCount).toBe(1);
+		).toEqual({ mergedCount: 0, conflictCount: 1, sizeCheck: null, unsavedCount: null });
+		expect(
+			mapPull({ outcome: 'merged', conflicts: [], size_check: null, unsaved_count: null })
+				.mergedCount
+		).toBe(1);
 	});
 });
 

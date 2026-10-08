@@ -80,6 +80,90 @@ describe('バックエンドのエラーコードによる文言', () => {
 		expect(view.message).toBe('RUST_SAFE\nRUST_NEXT');
 	});
 
+	it('画面に出うるバックエンドのエラーコードすべてに、3 要素の文言がある', () => {
+		// app/src/lib.rs の AppError のコード一覧と、一覧に載らない復旧系のコード
+		const codes = [
+			'conflict',
+			'git_failed',
+			'git_timeout',
+			'safety_check_failed',
+			'io_error',
+			'file_in_use',
+			'invalid_input',
+			'restore_point_not_found',
+			'unexpected',
+			'no_interrupted_operation',
+			'not_recoverable',
+			'file_not_found',
+			'file_unreadable',
+			'outside_project',
+			'not_logged_in',
+			'github_forbidden',
+			'github_rate_limited',
+			'network_unavailable',
+			'github_unavailable',
+			'login_not_configured',
+			'keychain_error',
+			'login_not_in_progress',
+			'login_page_unexpected',
+			'browser_open_failed',
+			'github_error',
+			'clone_invalid_repo',
+			'clone_invalid_destination',
+			'destination_not_empty',
+			'destination_not_a_folder',
+			'destination_unreadable',
+			'remote_not_found',
+			'clone_failed',
+			'clone_timeout',
+			'clone_register_failed',
+			'remote_name_taken',
+			'remote_name_invalid',
+			'remote_owner_invalid',
+			'remote_public_not_confirmed',
+			'remote_already_connected',
+			'project_folder_missing',
+			'remote_conflict',
+			'remote_not_writable',
+			'remote_orphaned',
+			'project_not_found',
+			'project_already_registered',
+			'folder_already_registered',
+			'project_list_failed',
+			'project_register_failed',
+			'project_remove_failed',
+			'relocate_not_a_project',
+			'relocate_different_project',
+			'relocate_cannot_verify',
+			'relocate_failed',
+			'database_error',
+			'task_failed',
+			'lock_failed',
+			'settings_io_failed',
+			'invalid_settings',
+			'status_failed',
+			'history_failed',
+			'diff_failed',
+			'change_list_failed',
+			'conflict_list_failed',
+			'preview_failed',
+			'open_failed'
+		];
+		const params = { count: 1, file: 'a.txt', name: 'x/y', operation: 'pull' };
+		for (const code of codes) {
+			const resolved = resolveBackendMessage({
+				code,
+				params,
+				whatHappened: 'RUST_WHAT',
+				dataIsSafe: 'RUST_SAFE',
+				nextAction: 'RUST_NEXT'
+			});
+			expect(resolved.whatHappened, code).not.toBe('RUST_WHAT');
+			expect(resolved.dataIsSafe, code).not.toBe('RUST_SAFE');
+			expect(resolved.nextAction, code).not.toBe('RUST_NEXT');
+		}
+	});
+
 	it('復旧できないときの専用文言がある', () => {
 		for (const code of ['restore_point_not_found', 'not_recoverable']) {
 			const resolved = resolveBackendMessage({

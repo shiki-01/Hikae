@@ -49,8 +49,14 @@ export const commands = {
 	save: (id: string, message: string) => typedError<SaveResult, AppError>(__TAURI_INVOKE("save", { id, message })),
 	/**  大きいファイルについての選択（E07 / E08）を添えて保存をやり直す。 */
 	saveWithSizeChoice: (id: string, message: string, choice: SaveSizeChoice) => typedError<SaveResult, AppError>(__TAURI_INVOKE("save_with_size_choice", { id, message, choice })),
-	/**  取り込む（fetch + merge）を実行。 */
-	pull: (id: string) => typedError<PullResult, AppError>(__TAURI_INVOKE("pull", { id })),
+	/**
+	 *  取り込む（fetch + merge）を実行。
+	 * 
+	 *  設定「取り込む前に未保存の変更を保存」が「確認する」で、未保存の変更があり取り込む内容もあるときは、
+	 *  何も変更せず結果 `needs-save-confirmation` を返す（E06）。画面は確認の後、`save_confirmed` を
+	 *  真にしてもう一度呼ぶ。このとき従来どおり、復元点 → 自動保存 → 取り込みの順で実行する。
+	 */
+	pull: (id: string, saveConfirmed: boolean) => typedError<PullResult, AppError>(__TAURI_INVOKE("pull", { id, saveConfirmed })),
 	/**  アップロード（push）を実行。 */
 	push: (id: string) => typedError<PushResult, AppError>(__TAURI_INVOKE("push", { id })),
 	/**  履歴を取得。 */
@@ -78,6 +84,13 @@ export const commands = {
 	 *  読み取りのみのため直列キューは通さない。
 	 */
 	openProjectFile: (id: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_project_file", { id, relativePath })),
+	/**
+	 *  プロジェクト内のファイルを、ファイルマネージャーでフォルダを開いて選択状態で表示する（設計書 4.7）。
+	 *  相対パスは `open_project_file` と同じ検証（`resolve_in_project`）を通し、プロジェクト外
+	 *  （`..`・絶対パス・シンボリックリンク経由）は表示しない。画面（JS）には opener の権限を与えず、
+	 *  Rust 側の API だけを検証の後に呼ぶ。読み取りのみのため直列キューは通さない。
+	 */
+	revealProjectFile: (id: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("reveal_project_file", { id, relativePath })),
 	/**  1 ファイルだけを戻した場合の影響（読み取りのみのため直列キューは通さない）。 */
 	restoreFilePreview: (id: string, commit: string, path: string) => typedError<RestoreFilePreviewData, AppError>(__TAURI_INVOKE("restore_file_preview", { id, commit, path })),
 	/**  指定した保存時点の 1 ファイルだけを戻す。復元点は core-ops が作る。 */
@@ -566,6 +579,11 @@ export type PullResult = {
 	conflicts: ConflictItem[],
 	/**  取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容（E07 / E08）。なければ null */
 	size_check: SizeCheckResult | null,
+	/**
+	 *  未保存の変更があり、取り込む前の保存の確認を求める場合（結果 `needs-save-confirmation`）の
+	 *  未保存のファイルの件数（E06）。なければ null
+	 */
+	unsaved_count: number | null,
 };
 
 /**  アップロード結果 */

@@ -16,6 +16,7 @@ import type {
 	ConnectRemoteInput,
 	DeviceFlow,
 	DroppedFile,
+	FetchOptions,
 	FetchResult,
 	FileDiff,
 	FileEntry,
@@ -876,26 +877,44 @@ export const mockApi: ProjectApi = {
 		undoSnapshots.delete(undoToken);
 	},
 
-	async fetch(projectId: string): Promise<FetchResult> {
+	async fetch(projectId: string, options?: FetchOptions): Promise<FetchResult> {
 		await sleep(WAIT_LONG + 300);
 		const state = stateOf(projectId);
 		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
-		if (state.changes.length > 0 && settings.saveBeforePull) {
+		const confirmed = options?.saveConfirmed ?? false;
+		if (state.changes.length > 0 && !settings.saveBeforePull && !confirmed) {
+			// 「確認する」設定: 取り込む内容があるときだけ、何も実行せずに確認を求める
+			if (state.project.fetchPendingCount > 0) {
+				return {
+					mergedCount: 0,
+					conflictCount: 0,
+					sizeCheck: null,
+					unsavedCount: state.changes.length
+				};
+			}
+			return { mergedCount: 0, conflictCount: 0, sizeCheck: null, unsavedCount: null };
+		}
+		if (state.changes.length > 0) {
 			// 取り込み前の自動保存に大きいファイルがあるときは、何も実行せずに見送る
 			const check = inspectSizes(state.changes);
 			if (check.blocked.length > 0 || check.warned.length > 0) {
-				return { mergedCount: 0, conflictCount: 0, sizeCheck: check };
+				return { mergedCount: 0, conflictCount: 0, sizeCheck: check, unsavedCount: null };
 			}
 			addSavePoint(state, t('mock.memo.before_fetch'), 3);
 		}
 		if (state.conflictsOnNextFetch && state.conflicts.length > 0) {
 			state.conflictsOnNextFetch = false;
 			state.project.hasConflict = true;
-			return { mergedCount: 0, conflictCount: state.conflicts.length, sizeCheck: null };
+			return {
+				mergedCount: 0,
+				conflictCount: state.conflicts.length,
+				sizeCheck: null,
+				unsavedCount: null
+			};
 		}
 		const merged = state.project.fetchPendingCount;
 		state.project.fetchPendingCount = 0;
-		return { mergedCount: merged, conflictCount: 0, sizeCheck: null };
+		return { mergedCount: merged, conflictCount: 0, sizeCheck: null, unsavedCount: null };
 	},
 
 	async push(projectId: string): Promise<PushResult> {
