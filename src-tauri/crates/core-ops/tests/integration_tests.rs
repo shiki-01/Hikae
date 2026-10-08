@@ -1596,3 +1596,47 @@ fn test_32_file_held_open_by_another_app_is_reported_as_in_use(
     setup.cleanup()?;
     Ok(())
 }
+
+#[test]
+fn clone_refuses_a_non_empty_destination_and_accepts_an_empty_one(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-clone-dest")?;
+    let ops = Ops::new(new_runner());
+    let url = setup.bare_repo.to_string_lossy().to_string();
+    let identity = core_ops::Identity {
+        name: "pc-c".to_string(),
+        email: "pc-c@users.noreply.github.com".to_string(),
+    };
+    let root = setup.pc_a.parent().ok_or("no parent")?.to_path_buf();
+
+    // 空でないフォルダ: 拒否し、中身には触れない
+    let busy = root.join("busy");
+    std::fs::create_dir_all(&busy)?;
+    std::fs::write(busy.join("mine.txt"), "keep")?;
+    let result = ops.clone_project(&url, &busy, &identity);
+    assert!(matches!(result, Err(core_ops::OpsError::InvalidInput(_))));
+    assert_eq!(std::fs::read_to_string(busy.join("mine.txt"))?, "keep");
+    assert!(!busy.join(".git").exists());
+
+    // ファイルがある場所: 拒否
+    let file_path = root.join("a-file");
+    std::fs::write(&file_path, "x")?;
+    assert!(matches!(
+        ops.clone_project(&url, &file_path, &identity),
+        Err(core_ops::OpsError::InvalidInput(_))
+    ));
+
+    // 空の既存フォルダ: 取得できる
+    let empty = root.join("empty");
+    std::fs::create_dir_all(&empty)?;
+    ops.clone_project(&url, &empty, &identity)?;
+    assert_eq!(read(&empty, "file.txt"), "initial content");
+
+    // 存在しない場所: 取得できる
+    let fresh = root.join("fresh");
+    ops.clone_project(&url, &fresh, &identity)?;
+    assert_eq!(read(&fresh, "file.txt"), "initial content");
+
+    setup.cleanup()?;
+    Ok(())
+}

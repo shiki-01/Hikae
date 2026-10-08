@@ -22,6 +22,9 @@ pub struct GitOutput {
 pub struct GitRunner {
     git_path: PathBuf,
     timeout: Duration,
+    /// ネットワーク通信（clone / fetch / push / ls-remote）にだけ渡す credential helper。
+    /// アプリ自身を指す `!<コマンド>` 形式。トークンは含まれず、git が実行時に helper へ問い合わせる
+    credential_helper: Option<String>,
 }
 
 impl GitRunner {
@@ -30,6 +33,7 @@ impl GitRunner {
         GitRunner {
             git_path: git_path.into(),
             timeout: Duration::from_secs(60),
+            credential_helper: None,
         }
     }
 
@@ -38,12 +42,27 @@ impl GitRunner {
         GitRunner {
             git_path: PathBuf::from("git"),
             timeout: Duration::from_secs(60),
+            credential_helper: None,
         }
     }
 
     /// タイムアウト時間を設定する
     pub fn with_timeout(mut self, d: Duration) -> Self {
         self.timeout = d;
+        self
+    }
+
+    /// ネットワーク通信の認証に使う credential helper を設定する。
+    ///
+    /// `!<コマンド>` 形式の文字列を渡す。clone / fetch / push / ls-remote の実行時だけ、
+    /// `-c credential.helper=`（既存の helper を無効化）と `-c credential.helper=<helper>` を先頭に付ける。
+    /// 空文字や制御文字を含む値は設定せず無視する（認証なしで実行され、認証エラーとして失敗する）。
+    /// ユーザーのグローバル git 設定には何も書き込まない。
+    pub fn with_credential_helper(mut self, helper: impl Into<String>) -> Self {
+        let helper = helper.into();
+        if !helper.is_empty() && !helper.chars().any(char::is_control) {
+            self.credential_helper = Some(helper);
+        }
         self
     }
 
@@ -85,6 +104,20 @@ impl GitRunner {
     ) -> Result<GitOutput, GitError> {
         // 引数を検証する（実行前に拒否）
         validate(args).map_err(GitError::Rejected)?;
+
+        // ネットワーク通信にだけ credential helper を付ける。付与後の引数列も検証にかける
+        let extra_config = credential_config_args(
+            self.credential_helper.as_deref(),
+            subcommand_of(args).unwrap_or_default(),
+        );
+        if !extra_config.is_empty() {
+            let combined: Vec<&str> = extra_config
+                .iter()
+                .map(String::as_str)
+                .chain(args.iter().copied())
+                .collect();
+            validate(&combined).map_err(GitError::Rejected)?;
+        }
 
         // extra_env の検証
         for (key, _) in extra_env {
@@ -131,7 +164,7 @@ impl GitRunner {
         cmd.env("LC_ALL", "C");
 
         // 読み取り系のコマンドの場合は GIT_OPTIONAL_LOCKS を設定
-        if let Some(subcmd) = args.first() {
+        if let Some(subcmd) = subcommand_of(args) {
             if is_read_only_command(subcmd) {
                 cmd.env("GIT_OPTIONAL_LOCKS", "0");
             }
@@ -151,7 +184,10 @@ impl GitRunner {
             cmd.current_dir(repo);
         }
 
-        // 引数を追加
+        // 引数を追加（credential helper の設定は git のグローバルオプションとして先頭に置く）
+        for arg in &extra_config {
+            cmd.arg(arg);
+        }
         for arg in args {
             cmd.arg(arg);
         }
@@ -224,6 +260,41 @@ impl GitRunner {
     }
 }
 
+/// 先頭の `-c key=value` を読み飛ばして、サブコマンド名を返す。
+fn subcommand_of<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-c" {
+            i += 2;
+        } else if arg.starts_with("-c") {
+            i += 1;
+        } else {
+            return Some(arg);
+        }
+    }
+    None
+}
+
+/// credential helper を渡す対象のサブコマンド（ネットワーク通信を行うもの）
+fn needs_credentials(subcmd: &str) -> bool {
+    matches!(subcmd, "clone" | "fetch" | "push" | "ls-remote")
+}
+
+/// credential helper を有効にする `-c` 引数列を作る。対象外のサブコマンドや helper 未設定なら空。
+/// 先に空値で既存の helper を無効化し、そのあとアプリの helper だけを指定する。
+fn credential_config_args(helper: Option<&str>, subcmd: &str) -> Vec<String> {
+    match helper {
+        Some(h) if needs_credentials(subcmd) => vec![
+            "-c".to_string(),
+            "credential.helper=".to_string(),
+            "-c".to_string(),
+            format!("credential.helper={h}"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 fn is_read_only_command(cmd: &str) -> bool {
     matches!(
         cmd,
@@ -265,6 +336,55 @@ mod tests {
         let runner = GitRunner::new("/usr/bin/git");
         assert_eq!(runner.git_path, PathBuf::from("/usr/bin/git"));
         assert_eq!(runner.timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn subcommand_skips_leading_config_options() {
+        assert_eq!(subcommand_of(&["status", "-z"]), Some("status"));
+        assert_eq!(
+            subcommand_of(&["-c", "core.hooksPath=", "commit", "-m", "x"]),
+            Some("commit")
+        );
+        assert_eq!(
+            subcommand_of(&["-ccore.hooksPath=", "commit"]),
+            Some("commit")
+        );
+        assert_eq!(subcommand_of(&[]), None);
+    }
+
+    #[test]
+    fn credential_helper_is_added_only_to_network_commands() {
+        let helper = "!'C:/app/hikae.exe' credential";
+        for sub in ["clone", "fetch", "push", "ls-remote"] {
+            let args = credential_config_args(Some(helper), sub);
+            assert_eq!(
+                args,
+                vec![
+                    "-c".to_string(),
+                    "credential.helper=".to_string(),
+                    "-c".to_string(),
+                    format!("credential.helper={helper}"),
+                ]
+            );
+            // 付与後の引数列も許可リストを通ること
+            let mut full: Vec<&str> = args.iter().map(String::as_str).collect();
+            full.push(sub);
+            assert!(validate(&full).is_ok(), "{sub}");
+        }
+        for sub in ["status", "commit", "merge", "add", "config"] {
+            assert!(credential_config_args(Some(helper), sub).is_empty());
+        }
+        assert!(credential_config_args(None, "fetch").is_empty());
+    }
+
+    #[test]
+    fn invalid_credential_helper_is_ignored() {
+        let valid = GitRunner::new("git").with_credential_helper("!'x' credential");
+        assert!(valid.credential_helper.is_some());
+        let empty = GitRunner::new("git").with_credential_helper("");
+        assert!(empty.credential_helper.is_none());
+        let control = GitRunner::new("git").with_credential_helper("!x\ny");
+        assert!(control.credential_helper.is_none());
     }
 
     #[test]

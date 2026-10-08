@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use core_git::{GitError, GitRunner};
+use core_git::GitError;
 use core_ops::{new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, UploadOutcome};
 use core_store::{
     now_rfc3339, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks, Store,
@@ -140,7 +140,7 @@ where
                 })?
             };
 
-            let ops = Ops::new(GitRunner::from_path_env()).with_labels(app_labels());
+            let ops = Ops::new(crate::git_runner()).with_labels(app_labels());
             let started_at = now_rfc3339();
             let before = ops.restore_point_refs(&project.path).unwrap_or_default();
 

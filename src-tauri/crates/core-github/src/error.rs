@@ -59,4 +59,28 @@ pub enum AuthError {
 
     #[error("キーチェーン エラー")]
     KeyringError,
+
+    #[error("GitHub に認証されていません（トークンが無効または取り消されました）")]
+    Unauthorized,
+
+    #[error("GitHub が操作を許可しませんでした")]
+    Forbidden,
+
+    #[error("GitHub が短時間のリクエスト数の上限に達しました")]
+    RateLimited,
+
+    #[error("GitHub にたどり着けません（ネットワークに接続できません）")]
+    NetworkUnavailable,
+
+    #[error("GitHub が一時的に応答していません")]
+    ServerUnavailable,
+
+    #[error("GitHub から想定外の応答がありました")]
+    UnexpectedStatus,
+
+    #[error("ログインの手続きが始まっていません")]
+    NoPendingLogin,
+
+    #[error("ログインの完了待ちがすでに行われています")]
+    LoginInProgress,
 }

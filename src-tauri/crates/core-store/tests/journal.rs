@@ -115,7 +115,7 @@ fn migration_from_v1_database_adds_journal_and_keeps_projects(
 
     let conn = Connection::open(&path)?;
     let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     // 追加された列は既存の行では未設定
     let initial: Option<String> = conn.query_row(
         "SELECT initial_commit FROM projects WHERE id = 'p1'",

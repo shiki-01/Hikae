@@ -63,10 +63,43 @@ export const commands = {
 	relocateProject: (id: string, newPath: string) => typedError<ProjectInfo, AppError>(__TAURI_INVOKE("relocate_project", { id, newPath })),
 	/**  保存時点で変更されたファイルの一覧（変更の種類つき、読み取りのみ）。 */
 	listPointChanges: (id: string, commit: string) => typedError<PointChangeItem[], AppError>(__TAURI_INVOKE("list_point_changes", { id, commit })),
+	/**  ログイン状態を返す。 */
+	getSession: () => typedError<SessionInfo, AppError>(__TAURI_INVOKE("get_session")),
+	/**  ログインを始める（Device Flow）。確認コードと確認ページの URL を返す。 */
+	startLogin: () => typedError<LoginStart, AppError>(__TAURI_INVOKE("start_login")),
+	/**  ユーザーが GitHub で許可するまで待つ。長時間かかるため async のまま待機し、`cancel_login` で中断できる。 */
+	waitLogin: () => typedError<LoginOutcome, AppError>(__TAURI_INVOKE("wait_login")),
+	/**  進行中のログインを中断する。待機中の `wait_login` は `canceled` で戻る。 */
+	cancelLogin: () => __TAURI_INVOKE<void>("cancel_login"),
+	/**  ログアウトする。キーチェーンのトークンを削除する（GitHub 側の許可の取り消しは行わない）。 */
+	logout: () => typedError<null, AppError>(__TAURI_INVOKE("logout")),
+	/**  保存先（個人 + 所属 Organization）の一覧。 */
+	listOwners: () => typedError<OwnerInfo[], AppError>(__TAURI_INVOKE("list_owners")),
+	/**  取得できるリポジトリの一覧（`query` を含む `owner/name` に絞り込む）。 */
+	listRemoteProjects: (query: string) => typedError<RemoteProjectList, AppError>(__TAURI_INVOKE("list_remote_projects", { query })),
+	/**
+	 *  GitHub のリポジトリをこの PC のフォルダへ取得し、プロジェクトとして登録する。
+	 * 
+	 *  - `repo` は `owner/name`。URL は常に `https://github.com/...` に固定し、任意の URL は受け付けない
+	 *  - `path` は取得先のフォルダ。存在しないか空である必要がある（空でなければ拒否し、中身には触れない）
+	 *  - 認証は credential helper 経由（トークンを URL や引数に載せない）
+	 *  - 新しいフォルダを作るだけで既存のファイルを変更しないため、復元点は作らない
+	 */
+	cloneProject: (id: string, repo: string, path: string, displayName: string | null) => typedError<ProjectInfo, AppError>(__TAURI_INVOKE("clone_project", { id, repo, path, displayName })),
+	/**  設定を取得する。`project_id` を指定すると、そのプロジェクトの上書きを反映した設定を返す。 */
+	getSettings: (projectId: string | null) => typedError<SettingsView, AppError>(__TAURI_INVOKE("get_settings", { projectId })),
+	/**
+	 *  設定を更新する。指定した項目だけを書き換え、更新後の設定を返す。
+	 *  `project_id` を指定するとそのプロジェクトの上書きとして保存する（上書きできない項目は拒否）。
+	 */
+	updateSettings: (projectId: string | null, patch: SettingsPatch_Deserialize) => typedError<SettingsView, AppError>(__TAURI_INVOKE("update_settings", { projectId, patch })),
+	/**  初回設定の完了を記録する。 */
+	completeOnboarding: () => typedError<null, AppError>(__TAURI_INVOKE("complete_onboarding")),
 };
 
 /** Events */
 export const events = {
+	cloneProgress: makeEvent<CloneProgress>("clone-progress"),
 	needsAttention: makeEvent<NeedsAttention>("needs-attention"),
 	opFinished: makeEvent<OpFinished>("op-finished"),
 	opProgress: makeEvent<OpProgress>("op-progress"),
@@ -100,6 +133,15 @@ export type AddedFileItem = {
 	large: boolean,
 };
 
+/**  AI モデルの指定方法 */
+export type AiModelSource = "catalog" | "custom-gguf";
+
+/**  AI の実行方式 */
+export type AiRunner = "builtin" | "ollama";
+
+/**  AI に渡す範囲 */
+export type AiScope = "file-names" | "text-diff" | "with-images";
+
 /**  何が起きたか、データは無事か、次の行動を含むエラー型 */
 export type AppError = {
 	/**  何が起きたか（ユーザー向けの平易な説明） */
@@ -110,6 +152,68 @@ export type AppError = {
 	next_action: string,
 	/**  技術情報（Git エラー原文など。秘密情報は除外） */
 	technical_info: string | null,
+};
+
+/**  全体設定（またはプロジェクト別の上書きを反映した、実際に使う設定） */
+export type AppSettings = {
+	/**  初回設定（ログインと保存先の案内）を完了したか */
+	onboarded: boolean,
+	/**  起動時に取り込む */
+	pull_on_startup: boolean,
+	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	pull_interval_minutes: number,
+	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
+	save_before_pull: boolean,
+	/**  ぶつかり発生時の動作 */
+	conflict_mode: ConflictMode,
+	/**  保存時に自動アップロードする */
+	auto_push_after_save: boolean,
+	/**  アップロード待ちの通知間隔（時間）。0 はオフ。選択肢は 0 / 1 / 24 */
+	push_reminder_hours: number,
+	/**  ファイル監視による自動保存 */
+	auto_snapshot_enabled: boolean,
+	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	auto_snapshot_delay_secs: number,
+	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	snapshot_retention_days: number,
+	/**  メモの自動提案の方式 */
+	memo_suggestion: MemoSuggestion,
+	/**  元に戻した後に自動で保存する */
+	auto_save_after_restore: boolean,
+	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	large_file_warn_mb: number,
+	/**  自動保存をタイムラインに表示するか */
+	show_snapshots_in_timeline: TimelineSnapshots,
+	/**  「開く」の既定動作 */
+	open_action: OpenAction,
+	/**  実行方式 */
+	ai_runner: AiRunner,
+	/**  使用モデルの識別子。空は未インストール */
+	ai_model: string,
+	/**  AI に渡す範囲 */
+	ai_scope: AiScope,
+	/**  git 実行ファイル */
+	git_executable: GitExecutable,
+	/**  技術情報をエラーに表示する */
+	show_technical_info: boolean,
+	/**  新規リポジトリの既定の公開範囲 */
+	default_visibility: DefaultVisibility,
+	/**  自動保存の容量上限（プロジェクトサイズの倍数）。0 は上限なし。選択肢は 0 / 1 / 2 / 5。Phase 2 */
+	snapshot_size_cap_x: number,
+	/**  AI モデルの指定方法。Phase 2 */
+	ai_model_source: AiModelSource,
+	/**  任意の GGUF ファイルのパス（`ai_model_source` が `custom-gguf` のとき）。Phase 2 */
+	ai_custom_gguf_path: string,
+	/**  作業コピー機能を表示する。Phase 3 */
+	work_copy_enabled: boolean,
+	/**  拡張機能の開発者モード（署名なしの手動導入）。Phase 3 */
+	extension_dev_mode: boolean,
+	/**  拡張機能の追加索引の URL。空は公式のみ。Phase 4 */
+	extension_index_urls: string[],
+	/**  Git LFS を有効にする。Phase 4 */
+	git_lfs: boolean,
+	/**  用語の表示 */
+	term_display: TermDisplay,
 };
 
 /**  ユーザーの対応が必要な理由 */
@@ -129,6 +233,25 @@ export type ChangeFile = {
 
 export type ChangeKind = "modified" | "added" | "deleted" | "renamed";
 
+/**  GitHub から取得する処理の段階 */
+export type ClonePhase = 
+/**  取得先や認証の確認中 */
+"preparing" | 
+/**  ファイルをダウンロード中（git の実行中。割合は取得できない） */
+"downloading" | 
+/**  ダウンロード後の仕上げ（登録）中 */
+"finishing" | 
+/**  完了した */
+"done" | 
+/**  失敗した（エラーは呼び出しの戻り値で返す） */
+"failed";
+
+/**  GitHub からの取得の進行状況。実行中のプロジェクトは一覧にまだ無いため、呼び出し時に渡した ID で識別する。 */
+export type CloneProgress = {
+	project_id: string,
+	phase: ClonePhase,
+};
+
 export type ConflictChoice = "mine" | "theirs";
 
 /**  競合ファイル */
@@ -142,6 +265,16 @@ export type ConflictItem = {
 };
 
 export type ConflictKind = "both-modified" | "both-added" | "deleted-by-us" | "deleted-by-them" | "both-deleted";
+
+/**  ぶつかり発生時の動作 */
+export type ConflictMode = 
+/**  すぐ解消画面を開く */
+"show-dialog" | 
+/**  通知だけ出す */
+"notify-only";
+
+/**  新規リポジトリの既定の公開範囲 */
+export type DefaultVisibility = "private" | "public";
 
 /**  差分行 */
 export type DiffLine = {
@@ -159,6 +292,9 @@ export type FileEntry = {
 	size: number | null,
 };
 
+/**  git 実行ファイルの種類 */
+export type GitExecutable = "bundled" | "system";
+
 /**  履歴アイテム */
 export type HistoryItem = {
 	commit: string,
@@ -167,6 +303,36 @@ export type HistoryItem = {
 	changed_files_count: number,
 	is_snapshot: boolean,
 };
+
+/**  ログインの結末 */
+export type LoginOutcome = 
+/**  ログインできた */
+"succeeded" | 
+/**  GitHub の画面で拒否された */
+"denied" | 
+/**  有効期限が切れた */
+"expired" | 
+/**  キャンセルした */
+"canceled";
+
+/**  画面に出すログイン手順（device_code は含まない） */
+export type LoginStart = {
+	/**  GitHub の画面で入力するコード */
+	user_code: string,
+	/**  コードを入力するページの URL */
+	verification_uri: string,
+	/**  有効期限（秒） */
+	expires_in: number,
+	/**  ポーリング間隔（秒） */
+	interval: number,
+};
+
+/**  メモの自動提案の方式 */
+export type MemoSuggestion = 
+/**  ルールのみ */
+"rules" | 
+/**  AI を使う */
+"ai";
 
 /**  ユーザーの対応が必要になった */
 export type NeedsAttention = {
@@ -198,6 +364,33 @@ export type OpTrigger =
 "manual" | 
 /**  スケジューラによる自動実行 */
 "auto";
+
+/**  「開く」の既定動作 */
+export type OpenAction = "default-app" | "vs-code";
+
+/**  保存先に作れない理由 */
+export type OwnerBlockReason = 
+/**  Organization への参加が承認待ち */
+"pending-invitation" | 
+/**  Organization の設定でメンバーによる作成が許可されていない */
+"members-cannot-create" | 
+/**  Organization の情報を確認できない（メンバーでない、またはアプリの利用が許可されていない） */
+"no-access";
+
+/**  保存先（個人または Organization） */
+export type OwnerInfo = {
+	/**  GitHub のログイン名。`RemoteProjectInfo.owner_id` と一致する */
+	id: string,
+	name: string,
+	kind: OwnerKindData,
+	avatar_url: string | null,
+	/**  新しく作れるか。false のときは灰色表示にして `reason` を説明する */
+	can_create: boolean,
+	reason: OwnerBlockReason | null,
+};
+
+/**  保存先の種類 */
+export type OwnerKindData = "personal" | "org";
 
 /**  保存時点で変更されたファイル */
 export type PointChangeItem = {
@@ -238,6 +431,26 @@ export type RejectedFileItem = {
 	reason: AddRejectKind,
 	/**  `too-large` のときの元のサイズ（バイト） */
 	size: number | null,
+};
+
+/**  取得できるリポジトリ */
+export type RemoteProjectInfo = {
+	/**  `owner/name`。`clone_project` の `repo` に渡す */
+	id: string,
+	name: string,
+	/**  所有者のログイン名（`OwnerInfo.id`） */
+	owner_id: string,
+	private: boolean,
+	/**  最終更新日時（RFC3339） */
+	updated_at: string | null,
+};
+
+/**  取得できるリポジトリの一覧 */
+export type RemoteProjectList = {
+	/**  オーナーごとにまとまった並び（個人が先、Organization は名前順。各オーナー内も名前順） */
+	projects: RemoteProjectInfo[],
+	/**  件数が多く、一部しか取得していない */
+	truncated: boolean,
 };
 
 /**  全体を元に戻した結果 */
@@ -295,6 +508,159 @@ export type SaveResult = {
 	message: string | null,
 };
 
+/**  現在のログイン状態。トークンは含めない。 */
+export type SessionInfo = {
+	/**  ログイン済みか（オフラインでユーザー情報を確認できない場合も true） */
+	logged_in: boolean,
+	/**  トークンが失効・取り消しされており、もう一度ログインが必要（E01） */
+	reauth_required: boolean,
+	/**  初回設定を完了したか */
+	onboarded: boolean,
+	/**  ユーザー情報。未ログイン、またはオフラインで確認できないときは null */
+	user: SessionUser | null,
+};
+
+/**  ログイン中の GitHub ユーザー（表示用） */
+export type SessionUser = {
+	login: string,
+	avatar_url: string | null,
+};
+
+/**  設定の更新内容。指定した項目だけを書き換える。 */
+export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
+
+/**  設定の更新内容。指定した項目だけを書き換える。 */
+export type SettingsPatch_Deserialize = {
+	/**  初回設定（ログインと保存先の案内）を完了したか */
+	onboarded?: boolean | null,
+	/**  起動時に取り込む */
+	pull_on_startup?: boolean | null,
+	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	pull_interval_minutes?: number | null,
+	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
+	save_before_pull?: boolean | null,
+	/**  ぶつかり発生時の動作 */
+	conflict_mode?: ConflictMode | null,
+	/**  保存時に自動アップロードする */
+	auto_push_after_save?: boolean | null,
+	/**  アップロード待ちの通知間隔（時間）。0 はオフ。選択肢は 0 / 1 / 24 */
+	push_reminder_hours?: number | null,
+	/**  ファイル監視による自動保存 */
+	auto_snapshot_enabled?: boolean | null,
+	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	auto_snapshot_delay_secs?: number | null,
+	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	snapshot_retention_days?: number | null,
+	/**  メモの自動提案の方式 */
+	memo_suggestion?: MemoSuggestion | null,
+	/**  元に戻した後に自動で保存する */
+	auto_save_after_restore?: boolean | null,
+	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	large_file_warn_mb?: number | null,
+	/**  自動保存をタイムラインに表示するか */
+	show_snapshots_in_timeline?: TimelineSnapshots | null,
+	/**  「開く」の既定動作 */
+	open_action?: OpenAction | null,
+	/**  実行方式 */
+	ai_runner?: AiRunner | null,
+	/**  使用モデルの識別子。空は未インストール */
+	ai_model?: string | null,
+	/**  AI に渡す範囲 */
+	ai_scope?: AiScope | null,
+	/**  git 実行ファイル */
+	git_executable?: GitExecutable | null,
+	/**  技術情報をエラーに表示する */
+	show_technical_info?: boolean | null,
+	/**  新規リポジトリの既定の公開範囲 */
+	default_visibility?: DefaultVisibility | null,
+	/**  自動保存の容量上限（プロジェクトサイズの倍数）。0 は上限なし。選択肢は 0 / 1 / 2 / 5。Phase 2 */
+	snapshot_size_cap_x?: number | null,
+	/**  AI モデルの指定方法。Phase 2 */
+	ai_model_source?: AiModelSource | null,
+	/**  任意の GGUF ファイルのパス（`ai_model_source` が `custom-gguf` のとき）。Phase 2 */
+	ai_custom_gguf_path?: string | null,
+	/**  作業コピー機能を表示する。Phase 3 */
+	work_copy_enabled?: boolean | null,
+	/**  拡張機能の開発者モード（署名なしの手動導入）。Phase 3 */
+	extension_dev_mode?: boolean | null,
+	/**  拡張機能の追加索引の URL。空は公式のみ。Phase 4 */
+	extension_index_urls?: string[] | null,
+	/**  Git LFS を有効にする。Phase 4 */
+	git_lfs?: boolean | null,
+	/**  用語の表示 */
+	term_display?: TermDisplay | null,
+};
+
+/**  設定の更新内容。指定した項目だけを書き換える。 */
+export type SettingsPatch_Serialize = {
+	/**  初回設定（ログインと保存先の案内）を完了したか */
+	onboarded?: boolean | null,
+	/**  起動時に取り込む */
+	pull_on_startup?: boolean | null,
+	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	pull_interval_minutes?: number | null,
+	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
+	save_before_pull?: boolean | null,
+	/**  ぶつかり発生時の動作 */
+	conflict_mode?: ConflictMode | null,
+	/**  保存時に自動アップロードする */
+	auto_push_after_save?: boolean | null,
+	/**  アップロード待ちの通知間隔（時間）。0 はオフ。選択肢は 0 / 1 / 24 */
+	push_reminder_hours?: number | null,
+	/**  ファイル監視による自動保存 */
+	auto_snapshot_enabled?: boolean | null,
+	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	auto_snapshot_delay_secs?: number | null,
+	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	snapshot_retention_days?: number | null,
+	/**  メモの自動提案の方式 */
+	memo_suggestion?: MemoSuggestion | null,
+	/**  元に戻した後に自動で保存する */
+	auto_save_after_restore?: boolean | null,
+	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	large_file_warn_mb?: number | null,
+	/**  自動保存をタイムラインに表示するか */
+	show_snapshots_in_timeline?: TimelineSnapshots | null,
+	/**  「開く」の既定動作 */
+	open_action?: OpenAction | null,
+	/**  実行方式 */
+	ai_runner?: AiRunner | null,
+	/**  使用モデルの識別子。空は未インストール */
+	ai_model?: string | null,
+	/**  AI に渡す範囲 */
+	ai_scope?: AiScope | null,
+	/**  git 実行ファイル */
+	git_executable?: GitExecutable | null,
+	/**  技術情報をエラーに表示する */
+	show_technical_info?: boolean | null,
+	/**  新規リポジトリの既定の公開範囲 */
+	default_visibility?: DefaultVisibility | null,
+	/**  自動保存の容量上限（プロジェクトサイズの倍数）。0 は上限なし。選択肢は 0 / 1 / 2 / 5。Phase 2 */
+	snapshot_size_cap_x?: number | null,
+	/**  AI モデルの指定方法。Phase 2 */
+	ai_model_source?: AiModelSource | null,
+	/**  任意の GGUF ファイルのパス（`ai_model_source` が `custom-gguf` のとき）。Phase 2 */
+	ai_custom_gguf_path?: string | null,
+	/**  作業コピー機能を表示する。Phase 3 */
+	work_copy_enabled?: boolean | null,
+	/**  拡張機能の開発者モード（署名なしの手動導入）。Phase 3 */
+	extension_dev_mode?: boolean | null,
+	/**  拡張機能の追加索引の URL。空は公式のみ。Phase 4 */
+	extension_index_urls?: string[] | null,
+	/**  Git LFS を有効にする。Phase 4 */
+	git_lfs?: boolean | null,
+	/**  用語の表示 */
+	term_display?: TermDisplay | null,
+};
+
+/**  画面に返す設定 */
+export type SettingsView = {
+	/**  実際に使う設定。プロジェクトを指定した場合は、全体設定にそのプロジェクトの上書きを重ねたもの */
+	settings: AppSettings,
+	/**  プロジェクトを指定した場合に、そのプロジェクトで上書きしている項目のキー名 */
+	overridden: string[],
+};
+
 /**  プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。 */
 export type StatusChanged = {
 	project_id: string,
@@ -327,6 +693,16 @@ export type SyncStatus = {
 	has_conflicts: boolean,
 	is_syncing: boolean,
 };
+
+/**  用語の表示 */
+export type TermDisplay = 
+/**  平易な表現のみ */
+"plain" | 
+/**  Git 用語を併記 */
+"with-git";
+
+/**  自動保存をタイムラインに出すか */
+export type TimelineSnapshots = "collapsed" | "shown" | "hidden";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

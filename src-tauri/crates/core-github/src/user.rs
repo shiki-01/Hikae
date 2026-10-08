@@ -1,4 +1,5 @@
 use crate::error::AuthError;
+use crate::http;
 use crate::token::{AccessToken, User};
 use reqwest::Client;
 use serde::Deserialize;
@@ -8,6 +9,8 @@ use serde::Deserialize;
 struct UserResponse {
     id: u64,
     login: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
 }
 
 /// GitHub REST API v3 のユーザー情報エンドポイントにアクセスするクライアント。
@@ -20,7 +23,7 @@ impl UserClient {
     /// 本番環境用のクライアントを作成する。
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: http::client(),
             user_endpoint: "https://api.github.com/user".to_string(),
         }
     }
@@ -28,26 +31,25 @@ impl UserClient {
     /// テスト用にエンドポイントをカスタマイズする。
     pub fn with_endpoint(endpoint: String) -> Self {
         Self {
-            client: Client::new(),
+            client: http::client(),
             user_endpoint: endpoint,
         }
     }
 
     /// アクセストークンを使用してログイン中のユーザー情報を取得する。
-    /// User-Agent は "Hikae" で固定。
+    /// User-Agent は "Hikae" で固定。失敗は 401（失効）・通信不可・GitHub 側の障害などに分類する。
     pub async fn fetch_user(&self, token: &AccessToken) -> Result<User, AuthError> {
-        let response = self
-            .client
-            .get(&self.user_endpoint)
-            .header("Authorization", format!("Bearer {}", token.expose_secret()))
-            .header("User-Agent", "Hikae")
-            .header("Accept", "application/vnd.github+json")
+        let response = http::with_github_headers(self.client.get(&self.user_endpoint), token)
             .send()
             .await
-            .map_err(|_| AuthError::FailedToFetchUser)?;
+            .map_err(http::classify_send_error)?;
 
         if !response.status().is_success() {
-            return Err(AuthError::FailedToFetchUser);
+            let remaining = http::rate_limit_remaining(&response);
+            return Err(http::classify_status(
+                response.status(),
+                remaining.as_deref(),
+            ));
         }
 
         let body = response
@@ -55,7 +57,7 @@ impl UserClient {
             .await
             .map_err(|_| AuthError::InvalidUserResponse)?;
 
-        Ok(User::new(body.id, body.login))
+        Ok(User::new(body.id, body.login).with_avatar_url(body.avatar_url))
     }
 }
 
@@ -84,6 +86,7 @@ mod tests {
                 .json_body(serde_json::json!({
                     "id": 12345,
                     "login": "alice",
+                    "avatar_url": "https://avatars.example/alice.png",
                 }));
         });
 
@@ -94,6 +97,10 @@ mod tests {
 
         assert_eq!(user.id, 12345);
         assert_eq!(user.login, "alice");
+        assert_eq!(
+            user.avatar_url.as_deref(),
+            Some("https://avatars.example/alice.png")
+        );
         assert_eq!(user.noreply_email(), "12345+alice@users.noreply.github.com");
 
         mock.assert();
@@ -112,7 +119,7 @@ mod tests {
         let token = AccessToken::new("invalid_token".to_string());
 
         let result = client.fetch_user(&token).await;
-        assert!(matches!(result, Err(AuthError::FailedToFetchUser)));
+        assert!(matches!(result, Err(AuthError::Unauthorized)));
     }
 
     #[tokio::test]

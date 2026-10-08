@@ -29,7 +29,7 @@ core-watch = { workspace = true }
 core-github = { workspace = true }
 core-preview = { workspace = true }
 core-llm = { workspace = true }
-core-store = { workspace = true }
+core-store = { workspace = true, features = ["specta"] }
 
 [[bin]]
 name = "hikae"

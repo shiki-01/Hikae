@@ -10,12 +10,18 @@ use thiserror::Error;
 pub mod journal;
 pub mod migrations;
 pub mod models;
+pub mod settings;
 
 pub use journal::{
     now_rfc3339, redact, JournalEntry, JournalOutcome, JournalTrigger, NewJournalEntry,
 };
 pub use migrations::run_migrations;
 pub use models::{Project, ProjectConfig};
+pub use settings::{
+    AiModelSource, AiRunner, AiScope, AppSettings, ConflictMode, DefaultVisibility, GitExecutable,
+    MemoSuggestion, OpenAction, SettingsPatch, TermDisplay, TimelineSnapshots,
+    PROJECT_OVERRIDABLE_KEYS,
+};
 
 /// Store のエラー型
 #[derive(Error, Debug)]
@@ -178,9 +184,104 @@ impl Store {
 
     /// プロジェクトを削除（登録のみ。フォルダは消さない）。
     pub fn remove_project(&self, id: &str) -> Result<(), StoreError> {
+        // 外部キーの連鎖削除に頼らず、プロジェクト別の設定も明示的に消す
+        self.conn.execute(
+            "DELETE FROM project_settings WHERE project_id = ?",
+            params![id],
+        )?;
         self.conn
             .execute("DELETE FROM projects WHERE id = ?", params![id])?;
         Ok(())
+    }
+
+    // ===== 設定（設計書 7章・7.1） =====
+
+    fn read_entries(&self, sql: &str, args: &[&str]) -> Result<Vec<(String, String)>, StoreError> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// 全体設定を取得する。保存されていない項目や、壊れた値の項目は既定値になる。
+    pub fn get_settings(&self) -> Result<AppSettings, StoreError> {
+        let rows = self.read_entries("SELECT key, value FROM settings", &[])?;
+        Ok(settings::settings_from_entries(
+            settings::valid_stored_entries(rows, None),
+        ))
+    }
+
+    /// 全体設定を更新する。指定した項目だけを書き換え、更新後の設定を返す。
+    /// 選択肢にない値は保存せず `InvalidData` にする。
+    pub fn update_settings(&self, patch: &SettingsPatch) -> Result<AppSettings, StoreError> {
+        let current = self.get_settings()?;
+        let next = current.applied(patch);
+        next.validate().map_err(StoreError::InvalidData)?;
+        let tx = self.conn.unchecked_transaction()?;
+        for (key, value) in settings::to_map(patch) {
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(next)
+    }
+
+    /// プロジェクト別の上書きだけを取得する（上書きしていない項目は None）。
+    pub fn project_overrides(&self, project_id: &str) -> Result<SettingsPatch, StoreError> {
+        let rows = self.read_entries(
+            "SELECT key, value FROM project_settings WHERE project_id = ?",
+            &[project_id],
+        )?;
+        Ok(settings::patch_from_entries(
+            settings::valid_stored_entries(rows, Some(PROJECT_OVERRIDABLE_KEYS)),
+        ))
+    }
+
+    /// プロジェクト別の上書きを更新する。上書きできない項目が含まれていれば拒否する。
+    /// 更新後の上書き内容を返す。
+    pub fn update_project_settings(
+        &self,
+        project_id: &str,
+        patch: &SettingsPatch,
+    ) -> Result<SettingsPatch, StoreError> {
+        self.get_project(project_id)?;
+        if let Some(key) = patch
+            .keys()
+            .into_iter()
+            .find(|k| !PROJECT_OVERRIDABLE_KEYS.contains(&k.as_str()))
+        {
+            return Err(StoreError::InvalidData(format!(
+                "{key} はプロジェクトごとには設定できません"
+            )));
+        }
+        let effective = self
+            .get_settings()?
+            .applied(&self.project_overrides(project_id)?)
+            .applied(patch);
+        effective.validate().map_err(StoreError::InvalidData)?;
+        let tx = self.conn.unchecked_transaction()?;
+        for (key, value) in settings::to_map(patch) {
+            tx.execute(
+                "INSERT INTO project_settings (project_id, key, value) VALUES (?, ?, ?)
+                 ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value",
+                params![project_id, key, value.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        self.project_overrides(project_id)
+    }
+
+    /// 実際に使う設定（全体設定にプロジェクト別の上書きを重ねたもの）。
+    pub fn effective_settings(&self, project_id: &str) -> Result<AppSettings, StoreError> {
+        Ok(self
+            .get_settings()?
+            .applied(&self.project_overrides(project_id)?))
     }
 
     /// 操作ジャーナルへ 1 件追記する。文字列は `redact` を通して認証情報を伏せる。

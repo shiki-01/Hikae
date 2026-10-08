@@ -16,6 +16,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 3 {
         migrate_to_v3(conn)?;
     }
+    if current_version < 4 {
+        migrate_to_v4(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -136,6 +139,79 @@ fn migrate_to_v3(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v4: 設定（設計書 7章）。全体の `settings` とプロジェクト別の上書き `project_settings`。
+/// 旧 `projects.config`（JSON）に入っていた上書きは、有効な値だけ `project_settings` へ移す。
+/// 移行後も `projects.config` の列は残すが、設定の読み書きには使わない。
+fn migrate_to_v4(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS project_settings (
+            project_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (project_id, key),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        "#,
+    )?;
+
+    let legacy: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT id, config FROM projects")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (project_id, config) in legacy {
+        for (key, value) in legacy_overrides(&config) {
+            conn.execute(
+                "INSERT OR IGNORE INTO project_settings (project_id, key, value) VALUES (?, ?, ?)",
+                rusqlite::params![project_id, key, value],
+            )?;
+        }
+    }
+
+    conn.execute_batch("PRAGMA user_version = 4;")?;
+    Ok(())
+}
+
+/// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
+/// 壊れた JSON、null、選択肢にない値は取り込まない。
+fn legacy_overrides(config: &str) -> Vec<(String, String)> {
+    const RENAMES: &[(&str, &str)] = &[
+        ("auto_pull_on_startup", "pull_on_startup"),
+        ("pull_interval_minutes", "pull_interval_minutes"),
+        ("auto_save_before_pull", "save_before_pull"),
+        ("resolve_conflict_mode", "conflict_mode"),
+        ("auto_push_after_save", "auto_push_after_save"),
+        ("push_notification_interval_hours", "push_reminder_hours"),
+        ("auto_save_snapshots", "auto_snapshot_enabled"),
+        ("snapshot_retention_days", "snapshot_retention_days"),
+    ];
+    let Ok(serde_json::Value::Object(old)) = serde_json::from_str::<serde_json::Value>(config)
+    else {
+        return Vec::new();
+    };
+    let candidates = RENAMES.iter().filter_map(|(from, to)| {
+        let value = old.get(*from).filter(|v| !v.is_null())?;
+        Some((to.to_string(), value.to_string()))
+    });
+    crate::settings::valid_stored_entries(
+        candidates,
+        Some(crate::settings::PROJECT_OVERRIDABLE_KEYS),
+    )
+    .into_iter()
+    .map(|(k, v)| (k, v.to_string()))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +234,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",

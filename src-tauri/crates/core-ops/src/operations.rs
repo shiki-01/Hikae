@@ -46,6 +46,13 @@ pub(crate) fn clone_project(
     identity: &Identity,
     _now: OffsetDateTime,
 ) -> Result<(), OpsError> {
+    // 空でないフォルダには取得しない（既存のファイルを巻き込まない）
+    if let Err(reason) = crate::clone_dest::check_clone_destination(dest) {
+        return Err(OpsError::InvalidInput(format!(
+            "clone destination is not usable: {reason:?}"
+        )));
+    }
+
     // dest の親ディレクトリを cwd として clone を実行
     let parent = dest
         .parent()

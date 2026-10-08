@@ -1,6 +1,7 @@
 // 保存・取り込み・アップロード・ぶつかり解消などの高層操作 API。
 
 mod add_files;
+mod clone_dest;
 mod file_in_use;
 mod history;
 mod memo;
@@ -11,6 +12,7 @@ mod relocate;
 mod restore_file;
 
 pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
+pub use clone_dest::{check_clone_destination, CloneDestinationError};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
     new_restore_points, AddFilesOutcome, AddRejectReason, AddedFile, Choice, ConflictFile,

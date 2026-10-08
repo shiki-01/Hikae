@@ -12,6 +12,11 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# 設定の型を TS へ出力するときだけ有効にする（app が指定）
+specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
+
+[features]
+specta = ["dep:specta"]
 
 [dev-dependencies]
 tempfile = "3"

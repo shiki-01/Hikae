@@ -12,7 +12,9 @@ use core_ops::{Ops, OpsError};
 use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
+mod app_settings;
 mod events;
+mod github;
 mod ops_runner;
 mod scheduler;
 
@@ -123,6 +125,10 @@ pub struct AppState {
     pub locks: Arc<ProjectLocks>,
     /// 起動時・定期の取り込みとアップロードのスケジューラ
     pub scheduler: SchedulerHandle,
+    /// 進行中の GitHub ログイン（device_code はここにだけ保持し、画面へは渡さない）
+    pub login: Arc<core_github::LoginCoordinator>,
+    /// ログイン中のユーザー情報の控え（トークンは含まない）
+    pub session_user: Arc<Mutex<Option<core_github::User>>>,
 }
 
 impl AppState {
@@ -132,6 +138,8 @@ impl AppState {
             store: Arc::new(Mutex::new(store)),
             locks: Arc::new(ProjectLocks::new()),
             scheduler: SchedulerHandle::new(),
+            login: Arc::new(core_github::LoginCoordinator::new()),
+            session_user: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -227,6 +235,57 @@ fn record_initial_commit(store: &Arc<Mutex<Store>>, id: &str, path: &std::path::
     }
 }
 
+// ========== git の呼び出し口 ==========
+
+/// アプリ共通の GitRunner を作る。
+///
+/// ネットワーク通信（clone / fetch / push）には、アプリ自身を credential helper として渡す
+/// （設計書 8.2）。トークンは URL にもコマンドライン引数にも載せず、git が実行時にこの
+/// アプリの `credential` サブコマンドへ問い合わせる。ユーザーのグローバル git 設定には書き込まない。
+pub(crate) fn git_runner() -> GitRunner {
+    let runner = GitRunner::from_path_env();
+    let helper = std::env::current_exe()
+        .ok()
+        .and_then(|exe| core_github::helper_command(&exe.to_string_lossy()));
+    match helper {
+        Some(helper) => runner.with_credential_helper(helper),
+        None => runner,
+    }
+}
+
+/// git の credential helper として動く（`hikae credential <get|store|erase>`）。終了コードを返す。
+///
+/// `get` のときだけ、https://github.com 宛ての要求にトークンを返す。それ以外の要求・ホストには
+/// 何も出力しない。トークンは標準出力（git への応答）以外には出さない。
+pub fn run_credential_helper(operation: Option<&str>) -> i32 {
+    use std::io::{BufRead, Write};
+
+    let operation = operation.unwrap_or("");
+    // 要求は「key=value」の行で、空行で終わる
+    let mut input = String::new();
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        if line.is_empty() {
+            break;
+        }
+        input.push_str(&line);
+        input.push('\n');
+    }
+    input.push('\n');
+
+    let token = if operation == "get" {
+        core_github::TokenStore::load().ok().flatten()
+    } else {
+        None
+    };
+    if let Some(response) = core_github::respond_to_git(operation, &input, token.as_ref()) {
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(response.as_bytes());
+        let _ = out.flush();
+    }
+    0
+}
+
 // ========== Tauri コマンド（全て async/spawn_blocking） ==========
 
 /// プロジェクト一覧を取得。
@@ -289,7 +348,7 @@ async fn add_project(
         id,
         "ファイルは変更されていません",
         move || {
-            let runner = GitRunner::from_path_env();
+            let runner = crate::git_runner();
             let ops = Ops::new(runner);
             let identity = core_ops::Identity {
                 name: owner.clone(),
@@ -392,7 +451,7 @@ async fn project_status(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
         let sync = ops
@@ -444,7 +503,7 @@ async fn list_changes(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
 
         let out = runner
             .run_ok(
@@ -565,7 +624,7 @@ async fn suggest_memo(state: tauri::State<'_, AppState>, id: String) -> Result<S
     let store = state.store_clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        let ops = Ops::new(GitRunner::from_path_env());
+        let ops = Ops::new(crate::git_runner());
         ops.suggest_memo(&project.path, &memo_labels())
             .map_err(AppError::from_ops_error)
     })
@@ -583,7 +642,7 @@ async fn list_files_at(
     let store = state.store_clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        let ops = Ops::new(GitRunner::from_path_env());
+        let ops = Ops::new(crate::git_runner());
         let files = ops
             .list_files_at(&project.path, &commit)
             .map_err(AppError::from_ops_error)?;
@@ -766,7 +825,7 @@ async fn list_history(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
         let entries = ops
@@ -821,7 +880,7 @@ async fn diff(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
         let lines = ops
@@ -875,7 +934,7 @@ async fn restore_preview(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
         let preview = ops
@@ -952,7 +1011,7 @@ async fn list_conflicts(
 
         drop(store_guard);
 
-        let runner = GitRunner::from_path_env();
+        let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
         let conflicts = ops
@@ -1042,7 +1101,7 @@ async fn restore_file_preview(
     let store = state.store_clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        let ops = Ops::new(GitRunner::from_path_env());
+        let ops = Ops::new(crate::git_runner());
         let p = ops
             .restore_file_preview(&project.path, &commit, &path)
             .map_err(AppError::from_ops_error)?;
@@ -1255,7 +1314,7 @@ async fn relocate_project(
         "ファイルは変更されていません",
         move || {
             let project = load_project(&store, &id)?;
-            let ops = Ops::new(GitRunner::from_path_env());
+            let ops = Ops::new(crate::git_runner());
             let check = ops
                 .check_relocation_with(
                     &new_path,
@@ -1337,7 +1396,7 @@ async fn list_point_changes(
     let store = state.store_clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        let ops = Ops::new(GitRunner::from_path_env());
+        let ops = Ops::new(crate::git_runner());
         let changes = ops
             .list_point_changes(&project.path, &commit)
             .map_err(AppError::from_ops_error)?;
@@ -1636,6 +1695,17 @@ fn specta_builder() -> Builder<tauri::Wry> {
             add_files,
             relocate_project,
             list_point_changes,
+            github::get_session,
+            github::start_login,
+            github::wait_login,
+            github::cancel_login,
+            github::logout,
+            github::list_owners,
+            github::list_remote_projects,
+            github::clone_project,
+            app_settings::get_settings,
+            app_settings::update_settings,
+            app_settings::complete_onboarding,
         ])
         .events(collect_events![
             events::StatusChanged,
@@ -1643,6 +1713,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::OpFinished,
             events::SyncStateChanged,
             events::NeedsAttention,
+            events::CloneProgress,
         ])
 }
 

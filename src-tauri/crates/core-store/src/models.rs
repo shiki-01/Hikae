@@ -51,7 +51,8 @@ impl Default for ProjectConfig {
             auto_pull_on_startup: Some(true),
             pull_interval_minutes: Some(15),
             auto_save_before_pull: Some(true),
-            resolve_conflict_mode: Some("show-dialog".to_string()),
+            // 設計書 7章: ぶつかり発生時の既定は「通知だけ出す」
+            resolve_conflict_mode: Some("notify-only".to_string()),
             auto_push_after_save: Some(true),
             push_notification_interval_hours: Some(24),
             auto_save_snapshots: Some(true),

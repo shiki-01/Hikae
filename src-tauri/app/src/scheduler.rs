@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use core_ops::{PullOutcome, UploadOutcome};
-use core_store::Project;
+use core_store::{AppSettings, Project};
 use core_watch::{FailureKind, SyncHealth, SyncPlanner, SyncPolicy, SyncTask, TaskResult};
 use tauri::Manager;
 use tauri_specta::Event;
@@ -67,6 +67,11 @@ impl SchedulerHandle {
 
     fn wake(&self) {
         let _ = self.inner.wake_tx.send(());
+    }
+
+    /// 登録や設定が変わったので、直ちに計画を作り直させる。
+    pub fn refresh(&self) {
+        self.wake();
     }
 
     fn with_planner(&self, id: &str, f: impl FnOnce(&mut SyncPlanner, u64)) {
@@ -175,6 +180,15 @@ impl Default for SchedulerHandle {
     }
 }
 
+/// 設定から同期の方針を作る（起動時の取り込み・定期取り込みの間隔・保存時の自動アップロード）。
+fn policy_from_settings(s: &AppSettings) -> SyncPolicy {
+    SyncPolicy::from_config(
+        Some(s.pull_on_startup),
+        Some(s.pull_interval_minutes),
+        Some(s.auto_push_after_save),
+    )
+}
+
 fn state_kind(h: SyncHealth) -> SyncStateKind {
     match h {
         SyncHealth::Idle => SyncStateKind::Idle,
@@ -222,9 +236,21 @@ async fn run_loop(app: tauri::AppHandle) {
 
     loop {
         // 1) 登録内容と設定を計画へ反映
+        // 設定（全体 + プロジェクト別の上書き。設計書 7章）を毎回読み直す
         let store = ctx.store.clone();
-        let listed = tauri::async_runtime::spawn_blocking(move || {
-            store.lock().ok().and_then(|g| g.list_projects().ok())
+        let listed: Vec<(Project, AppSettings)> = tauri::async_runtime::spawn_blocking(move || {
+            let guard = store.lock().ok()?;
+            let projects = guard.list_projects().ok()?;
+            Some(
+                projects
+                    .into_iter()
+                    .map(|p| {
+                        // 設定を読めない場合は 7章の既定値で動かす
+                        let settings = guard.effective_settings(&p.id).unwrap_or_default();
+                        (p, settings)
+                    })
+                    .collect::<Vec<_>>(),
+            )
         })
         .await
         .ok()
@@ -233,17 +259,8 @@ async fn run_loop(app: tauri::AppHandle) {
 
         let targets: Vec<(Project, SyncPolicy, bool)> = listed
             .into_iter()
-            .filter(|p| p.remote_url.as_deref().is_some_and(|u| !u.is_empty()))
-            .map(|p| {
-                let cfg = p.config_overrides();
-                let policy = SyncPolicy::from_config(
-                    cfg.auto_pull_on_startup,
-                    cfg.pull_interval_minutes,
-                    cfg.auto_push_after_save,
-                );
-                let skip_when_unsaved = cfg.auto_save_before_pull == Some(false);
-                (p, policy, skip_when_unsaved)
-            })
+            .filter(|(p, _)| p.remote_url.as_deref().is_some_and(|u| !u.is_empty()))
+            .map(|(p, s)| (p, policy_from_settings(&s), !s.save_before_pull))
             .collect();
         handle.sync_planners(
             &targets
@@ -372,7 +389,7 @@ async fn execute(
 async fn has_unsaved_changes(project: &Project) -> bool {
     let path = project.path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let ops = core_ops::Ops::new(core_git::GitRunner::from_path_env());
+        let ops = core_ops::Ops::new(crate::git_runner());
         ops.sync_state(&path).map(|s| s.dirty).unwrap_or(false)
     })
     .await

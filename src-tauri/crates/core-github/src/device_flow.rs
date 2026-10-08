@@ -52,7 +52,7 @@ impl DeviceFlowClient {
     /// 本番環境用の DeviceFlowClient を作成する。
     pub fn new(client_id: String) -> Self {
         Self {
-            client: Client::new(),
+            client: crate::http::client(),
             client_id,
             device_code_endpoint: "https://github.com/login/device/code".to_string(),
             token_endpoint: "https://github.com/login/oauth/access_token".to_string(),
@@ -67,7 +67,7 @@ impl DeviceFlowClient {
         token_endpoint: String,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: crate::http::client(),
             client_id,
             device_code_endpoint,
             token_endpoint,
@@ -146,13 +146,13 @@ impl DeviceFlowClient {
             match token_result {
                 TokenPollResult::Success(token) => return Ok(token),
                 TokenPollResult::Pending => {
-                    // まだ許可されていない。interval だけ待機して再試行
-                    sleep(Duration::from_secs(interval)).await;
+                    // まだ許可されていない。interval だけ待機して再試行（待機中のキャンセルにも即応する）
+                    wait_or_cancel(interval, cancel_token).await?;
                 }
                 TokenPollResult::SlowDown(new_interval) => {
                     // サーバー側の要求で interval を増やす（既定は +5秒）
                     interval = new_interval.unwrap_or(interval + self.slow_down_increment);
-                    sleep(Duration::from_secs(interval)).await;
+                    wait_or_cancel(interval, cancel_token).await?;
                 }
             }
         }
@@ -208,6 +208,26 @@ impl DeviceFlowClient {
     }
 }
 
+/// 指定秒だけ待つ。待機中にキャンセルされたら直ちに `PollingCanceled` を返す。
+async fn wait_or_cancel(secs: u64, cancel: Option<&CancellationToken>) -> Result<(), AuthError> {
+    let duration = Duration::from_secs(secs);
+    match cancel {
+        Some(token) => {
+            if tokio::time::timeout(duration, token.cancelled())
+                .await
+                .is_ok()
+            {
+                return Err(AuthError::PollingCanceled);
+            }
+            Ok(())
+        }
+        None => {
+            sleep(duration).await;
+            Ok(())
+        }
+    }
+}
+
 /// ポーリングの結果
 enum TokenPollResult {
     Success(AccessToken),
@@ -218,6 +238,25 @@ enum TokenPollResult {
 /// 環境変数から client_id を読み込む。
 pub fn client_id_from_env() -> Result<String, AuthError> {
     client_id_from(|key| std::env::var(key).ok())
+}
+
+/// client_id を解決する。実行時の環境変数を優先し、無ければビルド時に埋め込まれた値を使う。
+/// client_id は OAuth App の公開情報（秘密ではない）。どちらも無ければ `MissingClientId`。
+pub fn resolve_client_id(build_time: Option<&str>) -> Result<String, AuthError> {
+    resolve_client_id_with(|key| std::env::var(key).ok(), build_time)
+}
+
+fn resolve_client_id_with(
+    lookup: impl Fn(&str) -> Option<String>,
+    build_time: Option<&str>,
+) -> Result<String, AuthError> {
+    client_id_from(lookup).or_else(|_| {
+        build_time
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .ok_or(AuthError::MissingClientId)
+    })
 }
 
 /// 環境変数の参照元を差し替え可能にした内部版（テストが並列でも壊れないようにする）
@@ -526,6 +565,59 @@ mod tests {
         })
         .expect("should succeed");
         assert_eq!(result, "test_client_id_value");
+    }
+
+    #[test]
+    fn resolve_client_id_prefers_runtime_then_build_time() {
+        let runtime = resolve_client_id_with(|_| Some("runtime_id".to_string()), Some("build_id"));
+        assert_eq!(runtime.expect("runtime"), "runtime_id");
+
+        let build = resolve_client_id_with(|_| None, Some("  build_id "));
+        assert_eq!(build.expect("build"), "build_id");
+
+        assert!(matches!(
+            resolve_client_id_with(|_| None, None),
+            Err(AuthError::MissingClientId)
+        ));
+        assert!(matches!(
+            resolve_client_id_with(|_| None, Some("  ")),
+            Err(AuthError::MissingClientId)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_the_wait_between_polls() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path("/login/oauth/access_token");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({ "error": "authorization_pending" }));
+        });
+        let base_url = server.url("");
+        let client = DeviceFlowClient::with_endpoints(
+            "id".to_string(),
+            format!("{}/login/device/code", base_url),
+            format!("{}/login/oauth/access_token", base_url),
+        );
+        // 間隔が 1 時間でも、キャンセルすれば待たずに戻ること
+        let device = DeviceCode::new(
+            "dc".to_string(),
+            "AAAA-BBBB".to_string(),
+            "https://github.com/login/device".to_string(),
+            7200,
+            3600,
+        );
+        let cancel = CancellationToken::new();
+        let canceller = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            canceller.cancel();
+        });
+        let started = std::time::Instant::now();
+        let result = client.poll_for_token(&device, Some(&cancel)).await;
+        assert!(matches!(result, Err(AuthError::PollingCanceled)));
+        assert!(started.elapsed() < Duration::from_secs(30));
     }
 
     #[test]

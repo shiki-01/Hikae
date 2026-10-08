@@ -88,3 +88,30 @@ pub struct NeedsAttention {
     pub project_id: String,
     pub reason: AttentionReason,
 }
+
+/// GitHub から取得する処理の段階
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub enum ClonePhase {
+    /// 取得先や認証の確認中
+    #[serde(rename = "preparing")]
+    Preparing,
+    /// ファイルをダウンロード中（git の実行中。割合は取得できない）
+    #[serde(rename = "downloading")]
+    Downloading,
+    /// ダウンロード後の仕上げ（登録）中
+    #[serde(rename = "finishing")]
+    Finishing,
+    /// 完了した
+    #[serde(rename = "done")]
+    Done,
+    /// 失敗した（エラーは呼び出しの戻り値で返す）
+    #[serde(rename = "failed")]
+    Failed,
+}
+
+/// GitHub からの取得の進行状況。実行中のプロジェクトは一覧にまだ無いため、呼び出し時に渡した ID で識別する。
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct CloneProgress {
+    pub project_id: String,
+    pub phase: ClonePhase,
+}

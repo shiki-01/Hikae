@@ -100,11 +100,24 @@ pub struct User {
 
     /// GitHub ログイン名。noreply アドレス組み立て用。
     pub login: String,
+
+    /// アバター画像の URL（表示用）。取得できなければ None
+    pub avatar_url: Option<String>,
 }
 
 impl User {
     pub fn new(id: u64, login: String) -> Self {
-        Self { id, login }
+        Self {
+            id,
+            login,
+            avatar_url: None,
+        }
+    }
+
+    /// アバター画像の URL を付ける。
+    pub fn with_avatar_url(mut self, avatar_url: Option<String>) -> Self {
+        self.avatar_url = avatar_url;
+        self
     }
 
     /// noreply メールアドレスを生成する。
