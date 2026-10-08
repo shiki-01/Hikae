@@ -1,23 +1,37 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { commands } from '#lib/bindings.js';
-import { mockApi } from './mock';
+import { commands, events } from '#lib/bindings.js';
+import { joinPath } from '#lib/utils/path.js';
 import {
+	mapAddFilesResult,
 	mapChange,
 	mapConflict,
+	mapDeviceFlow,
 	mapDiff,
 	mapFileEntries,
+	mapFileImpact,
 	mapError,
 	mapImpact,
+	mapOwner,
+	mapPointChange,
 	mapProject,
 	mapPull,
+	mapRemoteProjects,
 	mapResolutions,
 	mapSavePoint,
-	parseDate
+	mapSession,
+	mapSettingsView,
+	parseDate,
+	restoreFileFailure,
+	toBackendPatch
 } from './mappers';
 import type {
+	AddFilesOutcome,
 	AddProjectInput,
+	AppSettings,
 	Change,
+	ClonePhase,
 	ConflictFile,
+	DroppedFile,
 	FileDiff,
 	FileEntry,
 	ImpactItem,
@@ -63,23 +77,63 @@ async function buildProject(info: Parameters<typeof mapProject>[0]): Promise<Pro
 	return mapProject(info, status, lastSave ? parseDate(lastSave.timestamp) : null);
 }
 
-function requireAllScope(scope: RestoreScope): void {
-	if (scope.kind !== 'all') unsupported('restore of a single file');
+/** GitHub から取得する。進行状況のイベントは、呼び出しに渡した ID で絞り込む */
+async function cloneProject(
+	input: AddProjectInput,
+	onProgress?: (phase: ClonePhase) => void
+): Promise<Project> {
+	if (!input.remoteId) throw new Error('remote project is not selected');
+	const id = crypto.randomUUID();
+	const unlisten = await events.cloneProgress.listen((event) => {
+		if (event.payload.project_id === id) onProgress?.(event.payload.phase);
+	});
+	try {
+		// 取得先は、選んだフォルダの中に新しく作るフォルダ（存在しないか空である必要がある）
+		const info = await unwrap(
+			commands.cloneProject(id, input.remoteId, joinPath(input.folder, input.name), input.name)
+		);
+		return await buildProject(info);
+	} finally {
+		unlisten();
+	}
 }
 
 export const tauriApi: ProjectApi = {
-	// 1 ファイルだけを戻すコマンドはバックエンドに無い
-	capabilities: { restoreFile: false },
+	capabilities: { restoreFile: true },
 
-	// ログイン・初回設定・設定値はバックエンド未実装のため、モックに委ねる
-	getSession: () => mockApi.getSession(),
-	startLogin: () => mockApi.startLogin(),
-	waitLogin: () => mockApi.waitLogin(),
-	completeOnboarding: () => mockApi.completeOnboarding(),
-	listOwners: () => mockApi.listOwners(),
-	listRemoteProjects: (query) => mockApi.listRemoteProjects(query),
-	getSettings: () => mockApi.getSettings(),
-	updateSettings: (patch) => mockApi.updateSettings(patch),
+	async getSession() {
+		return mapSession(await unwrap(commands.getSession()));
+	},
+
+	async startLogin() {
+		return mapDeviceFlow(await unwrap(commands.startLogin()));
+	},
+
+	waitLogin: () => unwrap(commands.waitLogin()),
+
+	async cancelLogin() {
+		await commands.cancelLogin();
+	},
+
+	async completeOnboarding() {
+		await unwrap(commands.completeOnboarding());
+	},
+
+	async listOwners() {
+		return (await unwrap(commands.listOwners())).map(mapOwner);
+	},
+
+	async listRemoteProjects(query: string) {
+		return mapRemoteProjects(await unwrap(commands.listRemoteProjects(query)));
+	},
+
+	async getSettings(projectId: string | null) {
+		return mapSettingsView(await unwrap(commands.getSettings(projectId)));
+	},
+
+	async updateSettings(projectId: string | null, patch: Partial<AppSettings>) {
+		return mapSettingsView(await unwrap(commands.updateSettings(projectId, toBackendPatch(patch))));
+	},
 
 	async listProjects(): Promise<Project[]> {
 		const infos = await unwrap(commands.listProjects());
@@ -93,8 +147,17 @@ export const tauriApi: ProjectApi = {
 		return typeof selected === 'string' ? selected : null;
 	},
 
-	async addProject(input: AddProjectInput): Promise<Project> {
-		if (input.mode === 'github') unsupported('adding a project from GitHub');
+	async pickFiles(): Promise<string[] | null> {
+		const selected = await open({ directory: false, multiple: true });
+		if (selected === null) return null;
+		return Array.isArray(selected) ? selected : [selected];
+	},
+
+	async addProject(
+		input: AddProjectInput,
+		onProgress?: (phase: ClonePhase) => void
+	): Promise<Project> {
+		if (input.mode === 'github') return cloneProject(input, onProgress);
 		const id = crypto.randomUUID();
 		await unwrap(commands.addProject(id, input.name, input.folder, input.ownerId, null));
 		return loadProject(id);
@@ -104,8 +167,8 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.removeProject(id));
 	},
 
-	async relocateProject(): Promise<Project> {
-		return unsupported('relocate project');
+	async relocateProject(id: string, folder: string): Promise<Project> {
+		return buildProject(await unwrap(commands.relocateProject(id, folder)));
 	},
 
 	async listChanges(projectId: string): Promise<Change[]> {
@@ -122,9 +185,9 @@ export const tauriApi: ProjectApi = {
 		return items.map(mapSavePoint);
 	},
 
-	async listPointFiles(): Promise<PointFile[]> {
-		// その時点で変更されたファイルの一覧を返すコマンドが未提供
-		return [];
+	async listPointFiles(projectId: string, savePointId: string): Promise<PointFile[]> {
+		const items = await unwrap(commands.listPointChanges(projectId, savePointId));
+		return items.map(mapPointChange);
 	},
 
 	async listFilesAt(projectId: string, savePointId: string): Promise<FileEntry[]> {
@@ -147,23 +210,29 @@ export const tauriApi: ProjectApi = {
 		targetId: string,
 		scope: RestoreScope
 	): Promise<ImpactItem[]> {
-		requireAllScope(scope);
+		if (scope.kind === 'file') {
+			const preview = await unwrap(commands.restoreFilePreview(projectId, targetId, scope.path));
+			return mapFileImpact(scope.path, preview);
+		}
 		return mapImpact(await unwrap(commands.restorePreview(projectId, targetId)));
 	},
 
 	async restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult> {
-		requireAllScope(scope);
+		if (scope.kind === 'file') {
+			const result = await unwrap(commands.restoreFile(projectId, targetId, scope.path));
+			if (result.outcome !== 'restored') throw restoreFileFailure(result.outcome, scope.path);
+			return { undoToken: result.undo_token, changedCount: 1 };
+		}
 		const preview = await unwrap(commands.restorePreview(projectId, targetId));
-		await unwrap(commands.restore(projectId, targetId));
-		// 取り消し用トークンはバックエンドが返さない
+		const result = await unwrap(commands.restore(projectId, targetId));
 		return {
-			undoToken: '',
+			undoToken: result.undo_token,
 			changedCount: preview.modified.length + preview.deleted.length + preview.created.length
 		};
 	},
 
-	async undoRestore(): Promise<void> {
-		unsupported('undo restore');
+	async undoRestore(projectId: string, undoToken: string): Promise<void> {
+		await unwrap(commands.undoRestore(projectId, undoToken));
 	},
 
 	async fetch(projectId: string) {
@@ -184,12 +253,16 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.resolveConflicts(projectId, choices, keepOtherCopy));
 	},
 
-	async abortMerge(): Promise<void> {
-		unsupported('abort merge');
+	async abortMerge(projectId: string): Promise<void> {
+		await unwrap(commands.abortMerge(projectId));
 	},
 
-	async addFiles(): Promise<number> {
-		return unsupported('add files');
+	async addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome> {
+		const paths = files.map((file) => file.path);
+		if (paths.some((path) => path === undefined)) unsupported('adding files without a real path');
+		// プロジェクト直下へコピーする。サイズの検査と別名化はバックエンドが行う
+		const result = await unwrap(commands.addFiles(projectId, paths as string[], ''));
+		return mapAddFilesResult(result);
 	},
 
 	async openFile(projectId: string, path: string, target: OpenTarget): Promise<void> {

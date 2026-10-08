@@ -2,6 +2,7 @@
 	import { ChevronRight, File as FileIcon, Folder } from '@lucide/svelte';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
+	import Tooltip from '#lib/components/Tooltip.svelte';
 	import type { TreeNode } from './file-tree';
 
 	interface Props {
@@ -51,9 +52,12 @@
 							>
 						</span>
 						<span class="flex gap:2 flex-shrink:0">
-							<Button size="sm" variant="ghost" onclick={() => onopen(node.path)}>
-								{t('file_action.open')}
-							</Button>
+							<!-- 開くのは作業フォルダ上の現在のファイルで、この時点の版ではない -->
+							<Tooltip text={t('file_action.open_current_hint')} position="left">
+								<Button size="sm" variant="ghost" onclick={() => onopen(node.path)}>
+									{t('file_action.open_current')}
+								</Button>
+							</Tooltip>
 							{#if canRestore}
 								<Button size="sm" variant="secondary" onclick={() => onrestore(node.path)}>
 									{t('file_action.restore_point')}

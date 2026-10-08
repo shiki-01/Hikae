@@ -9,11 +9,21 @@
 		loading: boolean;
 		selectedId: string | null;
 		expanded: string[];
+		/** 自動保存を常に開いて表示するか */
+		showAutos?: boolean;
 		onselect: (id: string) => void;
 		ontoggle: (id: string) => void;
 	}
 
-	let { entries, loading, selectedId, expanded, onselect, ontoggle }: Props = $props();
+	let {
+		entries,
+		loading,
+		selectedId,
+		expanded,
+		showAutos = false,
+		onselect,
+		ontoggle
+	}: Props = $props();
 
 	const saveCount = $derived(entries.filter((e) => e.kind === 'save').length);
 </script>
@@ -31,7 +41,7 @@
 				<TimelineItem
 					{entry}
 					{selectedId}
-					expanded={expanded.includes(entry.id)}
+					expanded={showAutos || expanded.includes(entry.id)}
 					isLast={index === entries.length - 1}
 					{onselect}
 					{ontoggle}

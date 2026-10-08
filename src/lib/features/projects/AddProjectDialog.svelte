@@ -3,15 +3,17 @@
 	import type { Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import { api } from '#lib/api/index.js';
-	import type { AddProjectMode, Project } from '#lib/api/types.js';
+	import type { AddProjectMode, ClonePhase, Project } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
 	import OwnerPicker from '#lib/components/OwnerPicker.svelte';
+	import ProgressBar from '#lib/components/ProgressBar.svelte';
 	import Radio from '#lib/components/Radio.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import TextField from '#lib/components/TextField.svelte';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
+	import { joinPath } from '#lib/utils/path.js';
 	import {
 		canSubmit,
 		emptyForm,
@@ -40,31 +42,54 @@
 	let submitted = $state(false);
 	let search = $state('');
 	let picking = $state(false);
+	let clonePhase = $state<ClonePhase | null>(null);
 
 	const remote = useRemoteProjects(
 		() => search,
 		() => open && step === 'form' && form.mode === 'github'
 	);
 
-	const add = useAddProject((project) => {
-		onadded?.(project);
-		onclose();
-	});
+	const add = useAddProject(
+		(project) => {
+			onadded?.(project);
+			onclose();
+		},
+		(phase) => (clonePhase = phase)
+	);
 
 	$effect(() => {
 		if (!open) return;
 		submitted = false;
+		clonePhase = null;
 		search = '';
 		step = initialMode ? 'form' : 'choose';
 		form = emptyForm(initialMode ?? 'existing', defaultOwner);
 	});
 
 	const errors = $derived(submitted ? validateAddProject(form, ownerList) : {});
-	const remoteList = $derived(remote.data ?? []);
+	const remoteList = $derived(remote.data?.projects ?? []);
+	const pickedRemote = $derived(remoteList.find((r) => r.id === form.remoteId));
+	const cloneTarget = $derived(
+		pickedRemote && form.folder ? joinPath(form.folder, pickedRemote.name) : ''
+	);
+	const cloneMessages = {
+		preparing: 'add_project.clone_preparing',
+		downloading: 'add_project.clone_downloading',
+		finishing: 'add_project.clone_finishing',
+		done: 'add_project.clone_done',
+		failed: 'add_project.clone_failed'
+	} as const satisfies Record<ClonePhase, MessageKey>;
+	// 保存先の一覧に無い所有者のプロジェクトも、取りこぼさず並べる
 	const groups = $derived(
-		ownerList
-			.map((owner) => ({ owner, items: remoteList.filter((r) => r.ownerId === owner.id) }))
-			.filter((group) => group.items.length > 0)
+		[...new Set(remoteList.map((r) => r.ownerId))].map((ownerId) => ({
+			owner: ownerList.find((o) => o.id === ownerId) ?? {
+				id: ownerId,
+				name: ownerId,
+				kind: 'org' as const,
+				canCreate: false
+			},
+			items: remoteList.filter((r) => r.ownerId === ownerId)
+		}))
 	);
 
 	const cards: { mode: AddProjectMode; icon: Component; title: MessageKey; text: MessageKey }[] = [
@@ -106,7 +131,8 @@
 	function submit() {
 		submitted = true;
 		if (!canSubmit(form, ownerList)) return;
-		const picked = remoteList.find((r) => r.id === form.remoteId);
+		const picked = pickedRemote;
+		clonePhase = null;
 		add.mutate({
 			mode: form.mode,
 			name: form.mode === 'github' ? (picked?.name ?? '') : form.name.trim(),
@@ -205,6 +231,9 @@
 							</fieldset>
 						{/each}
 					{/if}
+					{#if remote.data?.truncated}
+						<p class="m:0 type-small fg:fg-muted">{t('add_project.github_truncated')}</p>
+					{/if}
 					{#if errors.remote}
 						<p class="m:0 type-small fg:state-danger" role="alert">{t(errors.remote)}</p>
 					{/if}
@@ -235,6 +264,25 @@
 					{t('add_project.browse')}
 				</Button>
 			</div>
+
+			{#if form.mode === 'github' && cloneTarget}
+				<p class="m:0 type-small fg:fg-muted overflow-wrap:anywhere">
+					{t('add_project.github_clone_target', { path: cloneTarget })}
+				</p>
+			{/if}
+
+			{#if form.mode === 'github' && add.isPending}
+				{@const phase = clonePhase ?? 'preparing'}
+				<div class="flex flex-direction:column gap:2" aria-live="polite">
+					<ProgressBar
+						indeterminate={phase !== 'done'}
+						value={100}
+						state={phase === 'failed' ? 'failed' : phase === 'done' ? 'done' : 'running'}
+						label={t('add_project.clone_label')}
+					/>
+					<p class="m:0 type-small fg:fg-muted">{t(cloneMessages[phase])}</p>
+				</div>
+			{/if}
 
 			{#if form.mode !== 'github'}
 				<div class="flex flex-direction:column gap:2">

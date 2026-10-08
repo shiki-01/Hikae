@@ -1,19 +1,49 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { ArrowLeft } from '@lucide/svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
-	import type { AppSettings } from '#lib/api/types.js';
+	import type { AppSettings, SettingKey } from '#lib/api/types.js';
+	import Badge from '#lib/components/Badge.svelte';
+	import Button from '#lib/components/Button.svelte';
+	import Dialog from '#lib/components/Dialog.svelte';
 	import IconButton from '#lib/components/IconButton.svelte';
+	import Select from '#lib/components/Select.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import Tabs from '#lib/components/Tabs.svelte';
 	import Toggle from '#lib/components/Toggle.svelte';
+	import { useProject } from '#lib/features/projects/queries.js';
 	import { useSettings, useUpdateSettings } from './queries';
+	import {
+		SETTING_ROWS,
+		confirmationFor,
+		isOverridden,
+		isSettingsTab,
+		optionValue,
+		type SettingConfirmation,
+		type SettingRow,
+		type SettingValue
+	} from './settings-model';
 
-	const settings = useSettings();
-	const update = useUpdateSettings();
+	/** 設定画面を開いたプロジェクト。無ければ「このプロジェクトだけ変更」は出さない */
+	const contextProjectId = $derived(page.url.searchParams.get('project'));
+	const contextProject = useProject(() => contextProjectId ?? '');
+
+	let scope = $state<'all' | 'project'>('all');
+	const activeProjectId = $derived(scope === 'project' ? contextProjectId : null);
+
+	const settings = useSettings(() => activeProjectId);
+	const update = useUpdateSettings(() => activeProjectId);
 
 	let selected = $state('general');
+	// 確認ダイアログで取りやめたとき、見た目だけ先に切り替わった部品を元の値で作り直す
+	let nonce = $state(0);
+	let pending = $state<{
+		key: SettingKey;
+		value: SettingValue;
+		confirmation: SettingConfirmation;
+	} | null>(null);
 
 	const tabs: { id: string; label: MessageKey }[] = [
 		{ id: 'general', label: 'settings.general' },
@@ -26,42 +56,34 @@
 		{ id: 'advanced', label: 'settings.advanced' }
 	];
 
-	const toggles: Record<string, { key: keyof AppSettings; label: MessageKey; text: MessageKey }[]> =
-		{
-			general: [
-				{
-					key: 'autoSaveAfterRestore',
-					label: 'settings.auto_save_after_restore',
-					text: 'settings.auto_save_after_restore_text'
-				}
-			],
-			fetch: [
-				{
-					key: 'autoSaveBeforeFetch',
-					label: 'settings.auto_save_before_fetch',
-					text: 'settings.auto_save_before_fetch_text'
-				},
-				{
-					key: 'autoFetchOnLaunch',
-					label: 'settings.auto_fetch_on_launch',
-					text: 'settings.auto_fetch_on_launch_text'
-				}
-			],
-			push: [
-				{
-					key: 'autoUploadOnSave',
-					label: 'settings.auto_upload_on_save',
-					text: 'settings.auto_upload_on_save_text'
-				}
-			]
-		};
-
 	const notes: Record<string, MessageKey> = {
-		auto_save: 'settings.note_auto_save',
 		ignore: 'settings.note_ignore',
 		ai: 'settings.note_ai',
 		extensions: 'settings.note_extensions'
 	};
+
+	function change(current: AppSettings, key: SettingKey, value: SettingValue) {
+		const confirmation = confirmationFor(key, current, value);
+		if (confirmation) {
+			pending = { key, value, confirmation };
+			return;
+		}
+		apply(key, value);
+	}
+
+	function apply(key: SettingKey, value: SettingValue) {
+		update.mutate({ [key]: value } as Partial<AppSettings>);
+	}
+
+	function confirmPending() {
+		if (pending) apply(pending.key, pending.value);
+		pending = null;
+	}
+
+	function cancelPending() {
+		pending = null;
+		nonce += 1;
+	}
 
 	function back() {
 		if (history.length > 1) history.back();
@@ -90,27 +112,30 @@
 					{t(tabs.find((tab) => tab.id === id)?.label ?? 'settings.general')}
 				</h2>
 
-				{#if toggles[id]}
+				{#if scope === 'project' && contextProject.data}
+					<div
+						class="flex align-items:center justify-content:space-between gap:3 p:3 r:md bg:accent-subtle"
+						role="status"
+					>
+						<span class="type-body"
+							>{t('settings.scope_project', { name: contextProject.data.name })}</span
+						>
+						<Button size="sm" variant="secondary" onclick={() => (scope = 'all')}>
+							{t('settings.scope_all')}
+						</Button>
+					</div>
+				{/if}
+
+				{#if isSettingsTab(id)}
 					{#if settings.isPending}
 						<Skeleton class="h:48px" />
 						<Skeleton class="h:48px" />
 					{:else if settings.data}
-						{@const values = settings.data}
+						{@const values = settings.data.settings}
+						{@const overridden = settings.data.overridden}
 						<ul class="m:0 p:0 list-style:none flex flex-direction:column">
-							{#each toggles[id] as row (row.key)}
-								<li
-									class="flex align-items:center justify-content:space-between gap:6 py:3 bb:1px|solid|border"
-								>
-									<div class="flex flex-direction:column">
-										<span class="type-body font-weight:500">{t(row.label)}</span>
-										<span class="type-small fg:fg-muted">{t(row.text)}</span>
-									</div>
-									<Toggle
-										label={t(row.label)}
-										checked={values[row.key]}
-										onchange={(checked) => update.mutate({ [row.key]: checked })}
-									/>
-								</li>
+							{#each SETTING_ROWS[id] as row (row.key)}
+								{@render settingRow(row, values, overridden)}
 							{/each}
 						</ul>
 					{/if}
@@ -126,3 +151,59 @@
 		{/snippet}
 	</Tabs>
 </div>
+
+{#snippet settingRow(row: SettingRow, values: AppSettings, overridden: SettingKey[])}
+	<li class="flex align-items:center justify-content:space-between gap:6 py:3 bb:1px|solid|border">
+		<div class="flex flex-direction:column gap:1 min-w:0">
+			<span class="type-body font-weight:500">{t(row.label)}</span>
+			<span class="type-small fg:fg-muted">{t(row.text)}</span>
+			{#if scope === 'project' && isOverridden(overridden, row.key)}
+				<Badge variant="sync" label={t('settings.overridden')} class="align-self:flex-start" />
+			{:else if scope === 'all' && contextProjectId}
+				<button
+					type="button"
+					class="align-self:flex-start p:0 b:0 bg:transparent fg:accent type-small cursor:pointer text-decoration:underline"
+					onclick={() => (scope = 'project')}
+				>
+					{t('settings.project_only')}
+				</button>
+			{/if}
+		</div>
+		{#key `${activeProjectId}-${nonce}`}
+			{#if row.type === 'toggle'}
+				<Toggle
+					label={t(row.label)}
+					checked={values[row.key] as boolean}
+					onchange={(checked) => change(values, row.key, checked)}
+				/>
+			{:else}
+				<Select
+					class="w:200px flex-shrink:0"
+					ariaLabel={t(row.label)}
+					value={String(values[row.key])}
+					options={row.options.map((option) => ({
+						value: String(option.value),
+						label: t(option.label)
+					}))}
+					onchange={(picked) => {
+						const value = optionValue(row, picked);
+						if (value !== undefined) change(values, row.key, value);
+					}}
+				/>
+			{/if}
+		{/key}
+	</li>
+{/snippet}
+
+<Dialog
+	open={pending !== null}
+	variant="warning"
+	title={pending ? t(pending.confirmation.title) : ''}
+	description={pending ? t(pending.confirmation.text) : undefined}
+	onclose={cancelPending}
+>
+	{#snippet actions()}
+		<Button variant="secondary" onclick={cancelPending}>{t('settings.confirm_cancel')}</Button>
+		<Button onclick={confirmPending}>{t('settings.confirm_apply')}</Button>
+	{/snippet}
+</Dialog>

@@ -5,8 +5,8 @@
 	import { untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
-	import { api } from '#lib/api/index.js';
-	import type { OpenTarget, RestoreScope, SavePoint } from '#lib/api/types.js';
+	import { api, isTauri } from '#lib/api/index.js';
+	import type { DroppedFile, OpenTarget, RestoreScope, SavePoint } from '#lib/api/types.js';
 	import SaveBar from '#lib/components/SaveBar.svelte';
 	import type { SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
@@ -14,8 +14,13 @@
 	import { buildTimeline, latestManualPoint } from '#lib/components/timeline.js';
 	import ChangeDetail from '#lib/features/changes/ChangeDetail.svelte';
 	import ChangesPane from '#lib/features/changes/ChangesPane.svelte';
-	import { classifyDropped } from '#lib/features/changes/files.js';
+	import AddFilesResultDialog from '#lib/features/changes/AddFilesResultDialog.svelte';
+	import {
+		summarizeAddFiles,
+		type AddFilesSummary
+	} from '#lib/features/changes/add-files-result.js';
 	import { nextMemo } from '#lib/features/changes/memo.js';
+	import { droppedFromPaths, listenNativeDrop } from '#lib/features/changes/native-drop.js';
 	import { useAddFiles, useSave } from '#lib/features/changes/mutations.js';
 	import { useChanges, useMemoSuggestion } from '#lib/features/changes/queries.js';
 	import CompareView from '#lib/features/compare/CompareView.svelte';
@@ -26,6 +31,7 @@
 	import RestoreDialog from '#lib/features/history/RestoreDialog.svelte';
 	import { useRestore } from '#lib/features/history/mutations.js';
 	import { useHistory } from '#lib/features/history/queries.js';
+	import { useSettings } from '#lib/features/settings/queries.js';
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
 	import { liveStateOf } from './live.svelte.js';
@@ -45,6 +51,7 @@
 	const project = useProject(() => projectId);
 	const changesQuery = useChanges(() => projectId);
 	const historyQuery = useHistory(() => projectId);
+	const settingsQuery = useSettings(() => projectId);
 	const memoQuery = useMemoSuggestion(
 		() => projectId,
 		() => (changesQuery.data?.length ?? 0) > 0
@@ -67,11 +74,15 @@
 	let conflictOpen = $state(false);
 	let dragDepth = $state(0);
 	let tooLarge = $state(false);
+	let addSummary = $state<AddFilesSummary | null>(null);
 
 	const changes = $derived(changesQuery.data ?? []);
 	const history = $derived(historyQuery.data ?? []);
 	const latest = $derived(latestManualPoint(history));
-	const entries = $derived(buildTimeline(history));
+	const snapshotsMode = $derived(
+		settingsQuery.data?.settings.showSnapshotsInTimeline ?? 'collapsed'
+	);
+	const entries = $derived(buildTimeline(history, snapshotsMode));
 	const selectedChange = $derived(changes.find((c) => c.path === selectedPath) ?? null);
 	const selectedPoint = $derived(history.find((p) => p.id === selectedPointId) ?? null);
 	const suggestion = $derived(changes.length > 0 ? (memoQuery.data ?? '') : '');
@@ -90,7 +101,17 @@
 		() => (conflictOpen = true)
 	);
 	const push = usePush(() => projectId);
-	const addFiles = useAddFiles(() => projectId);
+	const addFiles = useAddFiles(
+		() => projectId,
+		(outcome) => {
+			const summary = summarizeAddFiles(outcome);
+			if (summary.hasTooLarge) {
+				tooLarge = true;
+				setTimeout(() => (tooLarge = false), 4000);
+			}
+			if (summary.needsDialog) addSummary = summary;
+		}
+	);
 	const restore = useRestore(
 		() => projectId,
 		() => (restoreRequest = null)
@@ -151,19 +172,47 @@
 		}
 	}
 
+	// 追加できるかどうかの検査（大きさの上限など）は、ブラウザ表示ではモック、アプリ上ではバックエンドが行う
+	function submitFiles(files: DroppedFile[]) {
+		if (files.length === 0) return;
+		tab = 'changes';
+		addFiles.mutate(files);
+	}
+
 	function onFiles(files: File[]) {
-		const { accepted, rejected } = classifyDropped(
-			files.map((f) => ({ name: f.name, size: f.size }))
-		);
-		if (rejected.length > 0) {
-			tooLarge = true;
-			setTimeout(() => (tooLarge = false), 4000);
-		}
-		if (accepted.length > 0) {
-			tab = 'changes';
-			addFiles.mutate(accepted);
+		submitFiles(files.map((f) => ({ name: f.name, size: f.size })));
+	}
+
+	async function pickFiles() {
+		try {
+			const paths = await api.pickFiles();
+			if (paths) submitFiles(droppedFromPaths(paths));
+		} catch (error) {
+			reportError(error);
 		}
 	}
+
+	// アプリ上では HTML のドロップが発生しないため、webview のドロップ（実パス付き）を受け取る
+	$effect(() => {
+		if (!isTauri) return;
+		let disposed = false;
+		let unlisten: (() => void) | undefined;
+		void listenNativeDrop((action) => {
+			if (action.kind === 'enter') dragDepth = 1;
+			else if (action.kind === 'leave') dragDepth = 0;
+			else {
+				dragDepth = 0;
+				submitFiles(action.files);
+			}
+		}).then((fn) => {
+			if (disposed) fn();
+			else unlisten = fn;
+		});
+		return () => {
+			disposed = true;
+			unlisten?.();
+		};
+	});
 
 	function hasFiles(event: DragEvent): boolean {
 		return event.dataTransfer?.types.includes('Files') ?? false;
@@ -229,7 +278,7 @@
 		fetchPendingCount={project.data?.fetchPendingCount ?? 0}
 		lastUploadedAt={project.data?.lastUploadedAt ?? null}
 		onback={() => goto(resolve('/'))}
-		onsettings={() => goto(resolve('/settings'))}
+		onsettings={() => goto(`${resolve('/settings')}?project=${encodeURIComponent(projectId)}`)}
 		onfetch={() => fetchMutation.mutate()}
 		onpush={() => push.mutate()}
 		onretry={() => fetchMutation.mutate()}
@@ -265,6 +314,7 @@
 						dragDepth = 0;
 						onFiles(files);
 					}}
+					onpick={isTauri ? pickFiles : undefined}
 				/>
 			{:else}
 				<HistoryPane
@@ -272,6 +322,7 @@
 					loading={historyQuery.isPending}
 					selectedId={selectedPointId}
 					{expanded}
+					showAutos={snapshotsMode === 'shown'}
 					onselect={(id) => (selectedPointId = id)}
 					ontoggle={toggleExpanded}
 				/>
@@ -368,5 +419,7 @@
 		restoreRequest &&
 		restore.mutate({ targetId: restoreRequest.point.id, scope: restoreRequest.scope })}
 />
+
+<AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />
 
 <ConflictModal open={conflictOpen} {projectId} onclose={() => (conflictOpen = false)} />

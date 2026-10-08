@@ -8,6 +8,8 @@
 		tooLarge?: boolean;
 		disabled?: boolean;
 		onfiles?: (files: File[]) => void;
+		/** 指定すると、「ファイルを選ぶ」でブラウザの選択欄の代わりにこれを呼ぶ（アプリ上で実パスを得るため） */
+		onpick?: () => void;
 		class?: string;
 	}
 
@@ -16,6 +18,7 @@
 		tooLarge = false,
 		disabled = false,
 		onfiles,
+		onpick,
 		class: className = ''
 	}: Props = $props();
 
@@ -81,7 +84,12 @@
 		<Upload size={24} class="fg:fg-muted" aria-hidden="true" />
 		<p class="m:0 type-small fg:fg-muted white-space:pre-line">{t('dropzone.text')}</p>
 		<input bind:this={input} type="file" multiple class="hidden" tabindex="-1" onchange={pick} />
-		<Button size="sm" variant="secondary" {disabled} onclick={() => input?.click()}>
+		<Button
+			size="sm"
+			variant="secondary"
+			{disabled}
+			onclick={() => (onpick ? onpick() : input?.click())}
+		>
 			{t('dropzone.pick')}
 		</Button>
 	{/if}

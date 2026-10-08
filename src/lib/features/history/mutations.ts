@@ -28,11 +28,14 @@ export function useRestore(getProjectId: () => string, onRestored?: () => void) 
 			api.restore(getProjectId(), variables.targetId, variables.scope),
 		onSuccess: async (result) => {
 			await invalidateProject(client, getProjectId());
+			// 取り消し用の復元点が無い（何も変えていない）ときは、取り消しの操作を出さない
+			const undoToken = result.undoToken;
 			pushToast({
 				type: 'success',
 				message: t('toast.restored', { count: result.changedCount }),
-				actionLabel: t('toast.undo'),
-				onaction: () => undo.mutate(result.undoToken)
+				...(undoToken
+					? { actionLabel: t('toast.undo'), onaction: () => undo.mutate(undoToken) }
+					: {})
 			});
 			onRestored?.();
 		},

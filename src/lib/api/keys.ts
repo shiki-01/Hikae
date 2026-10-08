@@ -13,5 +13,7 @@ export const keys = {
 	conflicts: (id: string) => ['conflicts', id] as const,
 	owners: ['owners'] as const,
 	remoteProjects: (query: string) => ['remote-projects', query] as const,
-	settings: ['settings'] as const
+	/** プロジェクトを指定しない場合は全体設定 */
+	settings: (projectId: string | null) => ['settings', projectId ?? 'global'] as const,
+	settingsAll: ['settings'] as const
 };

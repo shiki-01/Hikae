@@ -34,7 +34,9 @@ export interface SavePoint {
 
 export interface PointFile {
 	path: string;
-	type: Exclude<ChangeType, 'renamed'>;
+	type: ChangeType;
+	/** 名前変更の場合の元のパス */
+	oldPath?: string;
 }
 
 /** ある保存時点に存在するファイル（全ファイル表示用） */
@@ -90,7 +92,8 @@ export interface ImpactItem {
 }
 
 export interface RestoreResult {
-	undoToken: string;
+	/** 取り消しに使う復元点。戻していない（取り消すものが無い）場合は null */
+	undoToken: string | null;
 	changedCount: number;
 }
 
@@ -107,10 +110,21 @@ export interface Owner {
 }
 
 export interface RemoteProject {
+	/** 取得に使う識別子（`所有者/名前`） */
 	id: string;
 	name: string;
 	ownerId: string;
+	isPrivate: boolean;
 }
+
+export interface RemoteProjectList {
+	projects: RemoteProject[];
+	/** 件数が多く、一部しか取得していない */
+	truncated: boolean;
+}
+
+/** GitHub からの取得の段階。割合は取得できない */
+export type ClonePhase = 'preparing' | 'downloading' | 'finishing' | 'done' | 'failed';
 
 export type AddProjectMode = 'existing' | 'github' | 'new';
 export type Visibility = 'private' | 'public';
@@ -126,25 +140,87 @@ export interface AddProjectInput {
 
 export interface DroppedFile {
 	name: string;
-	size: number;
+	/** バイト数。実パスだけ分かる場合（アプリ上のドロップ）は null */
+	size: number | null;
+	/** 実際のパス。アプリ上のドロップ・ファイル選択でのみ得られる */
+	path?: string;
+}
+
+export type RejectReason = 'too_large' | 'not_a_file' | 'unreadable';
+
+export interface AddedFile {
+	path: string;
+	/** 同名があったため別名にした */
+	renamed: boolean;
+	/** 大きいファイル。アップロードに時間がかかる */
+	large: boolean;
+}
+
+export interface RejectedFile {
+	name: string;
+	reason: RejectReason;
+	/** `too_large` のときの元のサイズ（バイト） */
+	size: number | null;
+}
+
+export interface AddFilesOutcome {
+	added: AddedFile[];
+	rejected: RejectedFile[];
 }
 
 export type OpenTarget = 'default' | 'vscode' | 'folder' | 'copy_path';
 
+export type ConflictMode = 'show-dialog' | 'notify-only';
+export type TimelineSnapshots = 'collapsed' | 'shown' | 'hidden';
+
+/** 画面から変更できる設定（一般・取り込み・アップロード・自動保存） */
 export interface AppSettings {
-	autoSaveBeforeFetch: boolean;
-	autoFetchOnLaunch: boolean;
-	autoUploadOnSave: boolean;
+	pullOnStartup: boolean;
+	/** 定期的に取り込む間隔（分）。0 はオフ */
+	pullIntervalMinutes: number;
+	/** 取り込む前に未保存の変更を保存する（false は「確認する」） */
+	saveBeforePull: boolean;
+	conflictMode: ConflictMode;
+	autoPushAfterSave: boolean;
+	/** アップロード待ちの通知間隔（時間）。0 はオフ */
+	pushReminderHours: number;
+	autoSnapshotEnabled: boolean;
+	/** 最後の変更からこの秒数だけ静止してから記録する */
+	autoSnapshotDelaySecs: number;
+	/** 自動保存の保持期間（日） */
+	snapshotRetentionDays: number;
 	autoSaveAfterRestore: boolean;
+	/** 大きいファイルの警告閾値（MB） */
+	largeFileWarnMb: number;
+	showSnapshotsInTimeline: TimelineSnapshots;
+}
+
+export type SettingKey = keyof AppSettings;
+
+/** 設定の値と、プロジェクトを指定した場合にそのプロジェクトで上書きしている項目 */
+export interface SettingsView {
+	settings: AppSettings;
+	overridden: SettingKey[];
 }
 
 export interface DeviceFlow {
+	/** GitHub の画面で入力するコード */
 	userCode: string;
+	/** コードを入力するページの URL */
+	verificationUri: string;
+	/** 有効期限（秒） */
+	expiresInSecs: number;
 }
+
+export type LoginOutcome = 'succeeded' | 'denied' | 'expired' | 'canceled';
 
 export interface Session {
 	loggedIn: boolean;
 	onboarded: boolean;
+	/** トークンが失効しており、もう一度ログインが必要 */
+	reauthRequired: boolean;
+	/** ログイン中の GitHub ユーザー名 */
+	userLogin: string | null;
 }
 
 /** バックエンドが対応している操作。未対応の操作は画面に出さない */
@@ -158,16 +234,21 @@ export interface ProjectApi {
 
 	getSession(): Promise<Session>;
 	startLogin(): Promise<DeviceFlow>;
-	waitLogin(): Promise<void>;
+	/** ユーザーが GitHub で許可するまで待つ。キャンセルされた場合は `canceled` で戻る */
+	waitLogin(): Promise<LoginOutcome>;
+	cancelLogin(): Promise<void>;
 	completeOnboarding(): Promise<void>;
 
 	listProjects(): Promise<Project[]>;
 	getProject(id: string): Promise<Project>;
 	listOwners(): Promise<Owner[]>;
-	listRemoteProjects(query: string): Promise<RemoteProject[]>;
+	listRemoteProjects(query: string): Promise<RemoteProjectList>;
 	/** フォルダ選択。キャンセル時は null */
 	pickFolder(): Promise<string | null>;
-	addProject(input: AddProjectInput): Promise<Project>;
+	/** ファイル選択（アプリ上のみ実パスを得られる）。キャンセル時は null */
+	pickFiles(): Promise<string[] | null>;
+	/** GitHub から取得する場合、`onProgress` に取得の段階が通知される */
+	addProject(input: AddProjectInput, onProgress?: (phase: ClonePhase) => void): Promise<Project>;
 	removeProject(id: string): Promise<void>;
 	relocateProject(id: string, folder: string): Promise<Project>;
 
@@ -190,9 +271,11 @@ export interface ProjectApi {
 	resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void>;
 	abortMerge(projectId: string): Promise<void>;
 
-	addFiles(projectId: string, files: DroppedFile[]): Promise<number>;
+	addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome>;
 	openFile(projectId: string, path: string, target: OpenTarget): Promise<void>;
 
-	getSettings(): Promise<AppSettings>;
-	updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+	/** `projectId` を指定すると、そのプロジェクトの上書きを反映した設定を返す */
+	getSettings(projectId: string | null): Promise<SettingsView>;
+	/** `projectId` を指定すると、そのプロジェクトだけの上書きとして保存する */
+	updateSettings(projectId: string | null, patch: Partial<AppSettings>): Promise<SettingsView>;
 }

@@ -1,13 +1,16 @@
 import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
-import type { AddProjectInput, Project } from '#lib/api/types.js';
+import type { AddProjectInput, ClonePhase, Project } from '#lib/api/types.js';
 import { reportError } from '#lib/features/notifications/store.svelte.js';
 
-export function useAddProject(onAdded?: (project: Project) => void) {
+export function useAddProject(
+	onAdded?: (project: Project) => void,
+	onProgress?: (phase: ClonePhase) => void
+) {
 	const client = useQueryClient();
 	return createMutation(() => ({
-		mutationFn: (input: AddProjectInput) => api.addProject(input),
+		mutationFn: (input: AddProjectInput) => api.addProject(input, onProgress),
 		onSuccess: async (project) => {
 			await client.invalidateQueries({ queryKey: keys.projects });
 			onAdded?.(project);

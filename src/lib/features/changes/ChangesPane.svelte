@@ -15,6 +15,7 @@
 		tooLarge: boolean;
 		onselect: (path: string) => void;
 		onfiles: (files: File[]) => void;
+		onpick?: () => void;
 	}
 
 	let {
@@ -25,7 +26,8 @@
 		dragging,
 		tooLarge,
 		onselect,
-		onfiles
+		onfiles,
+		onpick
 	}: Props = $props();
 </script>
 
@@ -61,6 +63,6 @@
 		{/if}
 	</div>
 	<div class="p:3 flex-shrink:0 bt:1px|solid|border">
-		<DropZone {dragging} {tooLarge} {onfiles} />
+		<DropZone {dragging} {tooLarge} {onfiles} {onpick} />
 	</div>
 </div>

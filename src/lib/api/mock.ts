@@ -3,10 +3,13 @@ import { formatDateTime } from '#lib/i18n/format.js';
 import { AppError } from './errors';
 import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
+import { classifyDropped, LARGE_WARN_BYTES } from '#lib/features/changes/files.js';
 import type {
+	AddFilesOutcome,
 	AddProjectInput,
 	AppSettings,
 	Change,
+	ClonePhase,
 	ConflictFile,
 	ConflictResolution,
 	DeviceFlow,
@@ -15,21 +18,25 @@ import type {
 	FileDiff,
 	FileEntry,
 	ImpactItem,
+	LoginOutcome,
 	Owner,
 	PointFile,
 	Project,
 	ProjectApi,
 	RemoteProject,
+	RemoteProjectList,
 	RestoreResult,
 	RestoreScope,
 	SavePoint,
-	Session
+	Session,
+	SettingKey,
+	SettingsView
 } from './types';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
-const LARGE_FILE_BYTES = 72 * 1024 * 1024;
+const PSD_BYTES = 72 * 1024 * 1024;
 const WAIT_SHORT = 350;
 const WAIT_LONG = 900;
 
@@ -235,11 +242,30 @@ const undoSnapshots = new Map<string, Snapshot>();
 let sequence = 100;
 
 const DEFAULT_SETTINGS: AppSettings = {
-	autoSaveBeforeFetch: true,
-	autoFetchOnLaunch: true,
-	autoUploadOnSave: false,
-	autoSaveAfterRestore: true
+	pullOnStartup: true,
+	pullIntervalMinutes: 15,
+	saveBeforePull: true,
+	conflictMode: 'notify-only',
+	autoPushAfterSave: true,
+	pushReminderHours: 24,
+	autoSnapshotEnabled: true,
+	autoSnapshotDelaySecs: 120,
+	snapshotRetentionDays: 90,
+	autoSaveAfterRestore: true,
+	largeFileWarnMb: 50,
+	showSnapshotsInTimeline: 'collapsed'
 };
+
+// 画面確認用: localStorage の 'hikae.mock.login' に denied / expired / setup を入れると、ログインの結末を再現できる
+function loginScenario(): string | null {
+	try {
+		return localStorage.getItem('hikae.mock.login');
+	} catch {
+		return null;
+	}
+}
+
+let cancelLoginWait: (() => void) | null = null;
 
 function readStorage<T extends object>(key: string, fallback: T): T {
 	try {
@@ -256,6 +282,10 @@ function writeStorage(key: string, value: unknown): void {
 	} catch {
 		return;
 	}
+}
+
+function readOverrides(): Record<string, Partial<AppSettings>> {
+	return readStorage<Record<string, Partial<AppSettings>>>('hikae.settings.projects', {});
 }
 
 function stateOf(projectId: string): ProjectState {
@@ -342,17 +372,54 @@ export const mockApi: ProjectApi = {
 
 	async getSession(): Promise<Session> {
 		await sleep(80);
-		return readStorage<Session>('hikae.session', { loggedIn: false, onboarded: false });
+		const stored = readStorage('hikae.session', { loggedIn: false, onboarded: false });
+		return {
+			loggedIn: stored.loggedIn,
+			onboarded: stored.onboarded,
+			reauthRequired: false,
+			userLogin: stored.loggedIn ? 'shiki-01' : null
+		};
 	},
 
 	async startLogin(): Promise<DeviceFlow> {
 		await sleep(WAIT_SHORT);
-		return { userCode: 'WDJB-MJHT' };
+		if (loginScenario() === 'setup') {
+			throw new AppError(
+				'backend',
+				'MissingClientId',
+				{},
+				{
+					whatHappened: t('mock.login.setup_missing'),
+					dataIsSafe: t('login.error.data_is_safe'),
+					nextAction: t('login.error.setup.next')
+				}
+			);
+		}
+		return {
+			userCode: 'WDJB-MJHT',
+			verificationUri: 'https://github.com/login/device',
+			expiresInSecs: 900
+		};
 	},
 
-	async waitLogin(): Promise<void> {
-		await sleep(3000);
+	async waitLogin(): Promise<LoginOutcome> {
+		const scenario = loginScenario();
+		const canceled = await new Promise<boolean>((done) => {
+			const timer = setTimeout(() => done(false), 3000);
+			cancelLoginWait = () => {
+				clearTimeout(timer);
+				done(true);
+			};
+		});
+		cancelLoginWait = null;
+		if (canceled) return 'canceled';
+		if (scenario === 'denied' || scenario === 'expired') return scenario;
 		writeStorage('hikae.session', { loggedIn: true, onboarded: false });
+		return 'succeeded';
+	},
+
+	async cancelLogin(): Promise<void> {
+		cancelLoginWait?.();
 	},
 
 	async completeOnboarding(): Promise<void> {
@@ -372,22 +439,49 @@ export const mockApi: ProjectApi = {
 	async listOwners(): Promise<Owner[]> {
 		await sleep(150);
 		return [
-			{ id: 'personal', name: 'shiki-01', kind: 'personal', canCreate: true },
-			{ id: 'org-hikae', name: 'hikae-app', kind: 'org', canCreate: true },
-			{ id: 'org-campus', name: 'campus-lab', kind: 'org', canCreate: false }
+			{ id: 'shiki-01', name: 'shiki-01', kind: 'personal', canCreate: true },
+			{ id: 'hikae-app', name: 'hikae-app', kind: 'org', canCreate: true },
+			{ id: 'campus-lab', name: 'campus-lab', kind: 'org', canCreate: false }
 		];
 	},
 
-	async listRemoteProjects(query: string): Promise<RemoteProject[]> {
+	async listRemoteProjects(query: string): Promise<RemoteProjectList> {
 		await sleep(WAIT_SHORT);
 		const all: RemoteProject[] = [
-			{ id: 'r1', name: t('mock.remote.research'), ownerId: 'personal' },
-			{ id: 'r2', name: t('mock.remote.recipes'), ownerId: 'personal' },
-			{ id: 'r3', name: t('mock.remote.novel'), ownerId: 'org-hikae' },
-			{ id: 'r4', name: t('mock.remote.minutes'), ownerId: 'org-campus' }
+			{
+				id: 'shiki-01/research',
+				name: t('mock.remote.research'),
+				ownerId: 'shiki-01',
+				isPrivate: true
+			},
+			{
+				id: 'shiki-01/recipes',
+				name: t('mock.remote.recipes'),
+				ownerId: 'shiki-01',
+				isPrivate: true
+			},
+			{
+				id: 'hikae-app/novel',
+				name: t('mock.remote.novel'),
+				ownerId: 'hikae-app',
+				isPrivate: false
+			},
+			{
+				id: 'campus-lab/minutes',
+				name: t('mock.remote.minutes'),
+				ownerId: 'campus-lab',
+				isPrivate: true
+			}
 		];
 		const needle = query.trim().toLowerCase();
-		return needle ? all.filter((r) => r.name.toLowerCase().includes(needle)) : all;
+		return {
+			projects: needle ? all.filter((r) => r.name.toLowerCase().includes(needle)) : all,
+			truncated: false
+		};
+	},
+
+	async pickFiles(): Promise<string[] | null> {
+		return null;
 	},
 
 	async pickFolder(): Promise<string | null> {
@@ -395,8 +489,19 @@ export const mockApi: ProjectApi = {
 		return 'C:\\Users\\student\\Documents\\NewFolder';
 	},
 
-	async addProject(input: AddProjectInput): Promise<Project> {
-		await sleep(WAIT_LONG);
+	async addProject(
+		input: AddProjectInput,
+		onProgress?: (phase: ClonePhase) => void
+	): Promise<Project> {
+		if (input.mode === 'github') {
+			for (const phase of ['preparing', 'downloading', 'finishing'] as const) {
+				onProgress?.(phase);
+				await sleep(WAIT_LONG / 2);
+			}
+			onProgress?.('done');
+		} else {
+			await sleep(WAIT_LONG);
+		}
 		const id = nextId('proj');
 		const owners = await mockApi.listOwners();
 		const owner = owners.find((o) => o.id === input.ownerId) ?? owners[0];
@@ -492,7 +597,7 @@ export const mockApi: ProjectApi = {
 	async compare(projectId, path, fromId, toId): Promise<FileDiff> {
 		await sleep(WAIT_SHORT);
 		const state = stateOf(projectId);
-		if (path.endsWith('.psd')) return { kind: 'too_large', sizeBytes: LARGE_FILE_BYTES };
+		if (path.endsWith('.psd')) return { kind: 'too_large', sizeBytes: PSD_BYTES };
 		if (path.endsWith('.png')) {
 			return { kind: 'info', fileKind: 'image', sizeBytes: 184_320, modifiedAt: ago(2 * HOUR) };
 		}
@@ -556,7 +661,7 @@ export const mockApi: ProjectApi = {
 		await sleep(WAIT_LONG + 300);
 		const state = stateOf(projectId);
 		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
-		if (state.changes.length > 0 && settings.autoSaveBeforeFetch) {
+		if (state.changes.length > 0 && settings.saveBeforePull) {
 			addSavePoint(state, t('mock.memo.before_fetch'), 3);
 		}
 		if (state.conflictsOnNextFetch && state.conflicts.length > 0) {
@@ -605,27 +710,72 @@ export const mockApi: ProjectApi = {
 		state.conflictsOnNextFetch = true;
 	},
 
-	async addFiles(projectId: string, files: DroppedFile[]): Promise<number> {
+	async addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome> {
 		await sleep(WAIT_SHORT);
 		const state = stateOf(projectId);
-		for (const file of files) {
-			state.changes.push({ id: nextId('c'), path: file.name, type: 'added', isConflict: false });
-		}
+		const { accepted, rejected } = classifyDropped(files);
+		const taken = new Set([
+			...state.changes.map((c) => c.path),
+			...[t('mock.file.chapter3'), t('mock.file.memo')]
+		]);
+		const added = accepted.map((file) => {
+			let path = file.name;
+			let counter = 1;
+			while (taken.has(path)) {
+				counter += 1;
+				const dot = file.name.lastIndexOf('.');
+				path =
+					dot > 0
+						? `${file.name.slice(0, dot)} (${counter})${file.name.slice(dot)}`
+						: `${file.name} (${counter})`;
+			}
+			taken.add(path);
+			state.changes.push({ id: nextId('c'), path, type: 'added', isConflict: false });
+			return {
+				path,
+				renamed: path !== file.name,
+				large: (file.size ?? 0) >= LARGE_WARN_BYTES
+			};
+		});
 		state.project.unsavedCount = state.changes.length;
-		return files.length;
+		return {
+			added,
+			rejected: rejected.map((file) => ({
+				name: file.name,
+				reason: 'too_large' as const,
+				size: file.size
+			}))
+		};
 	},
 
 	async openFile(): Promise<void> {
 		await sleep(80);
 	},
 
-	async getSettings(): Promise<AppSettings> {
-		return readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
+	async getSettings(projectId: string | null): Promise<SettingsView> {
+		const global = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
+		if (projectId === null) return { settings: global, overridden: [] };
+		const override = readOverrides()[projectId] ?? {};
+		return {
+			settings: { ...global, ...override },
+			overridden: Object.keys(override) as SettingKey[]
+		};
 	},
 
-	async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-		const next = { ...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS), ...patch };
-		writeStorage('hikae.settings', next);
-		return next;
+	async updateSettings(
+		projectId: string | null,
+		patch: Partial<AppSettings>
+	): Promise<SettingsView> {
+		if (projectId === null) {
+			const next = { ...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS), ...patch };
+			writeStorage('hikae.settings', next);
+		} else {
+			const all = readOverrides();
+			writeStorage('hikae.settings.projects', {
+				...all,
+				[projectId]: { ...(all[projectId] ?? {}), ...patch }
+			});
+		}
+		return mockApi.getSettings(projectId);
 	}
 };

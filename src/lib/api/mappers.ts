@@ -1,5 +1,9 @@
+import { t } from '#lib/i18n/index.js';
 import type {
+	AddFilesResult,
+	AddRejectKind,
 	AppError as BackendError,
+	AppSettings as BackendSettings,
 	ChangeFile,
 	ChangeKind,
 	ConflictChoice,
@@ -8,26 +12,45 @@ import type {
 	DiffLine,
 	FileEntry as BackendFileEntry,
 	HistoryItem,
+	LoginStart,
+	OwnerInfo,
+	PointChangeItem,
 	ProjectInfo,
 	PullResult,
+	RemoteProjectList as BackendRemoteProjectList,
+	RestoreFilePreviewData,
+	RestoreFileResult,
 	RestorePreviewData,
+	SessionInfo,
+	SettingsPatch_Deserialize,
+	SettingsView as BackendSettingsView,
 	SyncStatus
 } from '#lib/bindings.js';
 import { AppError } from './errors';
 import type {
+	AddFilesOutcome,
+	AppSettings,
 	Change,
 	ChangeType,
 	Choice,
 	ConflictFile,
 	ConflictKind,
 	ConflictResolution,
+	DeviceFlow,
 	DiffRow,
 	FetchResult,
 	FileDiff,
 	FileEntry,
 	ImpactItem,
+	Owner,
+	PointFile,
 	Project,
-	SavePoint
+	RejectReason,
+	RemoteProjectList,
+	SavePoint,
+	SettingKey,
+	SettingsView,
+	Session
 } from './types';
 
 /** バックエンドのエラー（3 要素）を画面側の AppError に変換する */
@@ -175,4 +198,153 @@ export function mapFileEntries(items: BackendFileEntry[]): FileEntry[] {
 	return items
 		.map((item) => ({ path: item.path.replaceAll('\\', '/'), size: item.size }))
 		.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** ログイン状態。トークンはバックエンドが返さない */
+export function mapSession(info: SessionInfo): Session {
+	return {
+		loggedIn: info.logged_in,
+		onboarded: info.onboarded,
+		reauthRequired: info.reauth_required,
+		userLogin: info.user?.login ?? null
+	};
+}
+
+export function mapDeviceFlow(start: LoginStart): DeviceFlow {
+	return {
+		userCode: start.user_code,
+		verificationUri: start.verification_uri,
+		expiresInSecs: start.expires_in
+	};
+}
+
+export function mapOwner(info: OwnerInfo): Owner {
+	return { id: info.id, name: info.name, kind: info.kind, canCreate: info.can_create };
+}
+
+export function mapRemoteProjects(list: BackendRemoteProjectList): RemoteProjectList {
+	return {
+		projects: list.projects.map((item) => ({
+			id: item.id,
+			name: item.name,
+			ownerId: item.owner_id,
+			isPrivate: item.private
+		})),
+		truncated: list.truncated
+	};
+}
+
+/** 保存時点で変更されたファイル。名前変更のときだけ元のパスを持つ */
+export function mapPointChange(item: PointChangeItem): PointFile {
+	return {
+		path: item.path,
+		type: item.kind,
+		...(item.old_path !== null ? { oldPath: item.old_path } : {})
+	};
+}
+
+/** 1 ファイルだけ戻した場合の影響。変わらない・戻せない場合は空 */
+export function mapFileImpact(path: string, preview: RestoreFilePreviewData): ImpactItem[] {
+	switch (preview.kind) {
+		case 'overwrite':
+			return [{ path, type: 'modified' }];
+		case 'recreate':
+			return [{ path, type: 'restored' }];
+		case 'unchanged':
+		case 'not-in-that-point':
+			return [];
+	}
+}
+
+/** 1 ファイルを戻せなかった場合のエラー。何も変更していない */
+export function restoreFileFailure(
+	outcome: Exclude<RestoreFileResult['outcome'], 'restored'>,
+	path: string
+): AppError {
+	const key =
+		outcome === 'not-in-that-point' ? 'restore.error_not_in_point' : 'restore.error_ignored';
+	return new AppError(
+		'backend',
+		outcome,
+		{},
+		{
+			whatHappened: t(`${key}.title`, { name: path }),
+			dataIsSafe: t('restore.error_unchanged'),
+			nextAction: t(`${key}.next`)
+		}
+	);
+}
+
+const REJECT_REASONS: Record<AddRejectKind, RejectReason> = {
+	'too-large': 'too_large',
+	'not-a-file': 'not_a_file',
+	unreadable: 'unreadable'
+};
+
+export function mapAddFilesResult(result: AddFilesResult): AddFilesOutcome {
+	return {
+		added: result.added.map((item) => ({
+			path: item.path.replaceAll('\\', '/'),
+			renamed: item.renamed,
+			large: item.large
+		})),
+		rejected: result.rejected.map((item) => ({
+			name: item.name,
+			reason: REJECT_REASONS[item.reason],
+			size: item.size
+		}))
+	};
+}
+
+/** 画面側の設定名とバックエンドの項目名の対応 */
+export const SETTING_BACKEND_KEYS = {
+	pullOnStartup: 'pull_on_startup',
+	pullIntervalMinutes: 'pull_interval_minutes',
+	saveBeforePull: 'save_before_pull',
+	conflictMode: 'conflict_mode',
+	autoPushAfterSave: 'auto_push_after_save',
+	pushReminderHours: 'push_reminder_hours',
+	autoSnapshotEnabled: 'auto_snapshot_enabled',
+	autoSnapshotDelaySecs: 'auto_snapshot_delay_secs',
+	snapshotRetentionDays: 'snapshot_retention_days',
+	autoSaveAfterRestore: 'auto_save_after_restore',
+	largeFileWarnMb: 'large_file_warn_mb',
+	showSnapshotsInTimeline: 'show_snapshots_in_timeline'
+} as const satisfies Record<SettingKey, keyof BackendSettings>;
+
+export function mapSettings(settings: BackendSettings): AppSettings {
+	return {
+		pullOnStartup: settings.pull_on_startup,
+		pullIntervalMinutes: settings.pull_interval_minutes,
+		saveBeforePull: settings.save_before_pull,
+		conflictMode: settings.conflict_mode,
+		autoPushAfterSave: settings.auto_push_after_save,
+		pushReminderHours: settings.push_reminder_hours,
+		autoSnapshotEnabled: settings.auto_snapshot_enabled,
+		autoSnapshotDelaySecs: settings.auto_snapshot_delay_secs,
+		snapshotRetentionDays: settings.snapshot_retention_days,
+		autoSaveAfterRestore: settings.auto_save_after_restore,
+		largeFileWarnMb: settings.large_file_warn_mb,
+		showSnapshotsInTimeline: settings.show_snapshots_in_timeline
+	};
+}
+
+/** 上書きしている項目のキー名（バックエンド側）を画面側の名前にする。画面で扱わない項目は除く */
+export function mapOverridden(keys: string[]): SettingKey[] {
+	const entries = Object.entries(SETTING_BACKEND_KEYS) as [SettingKey, string][];
+	return entries.filter(([, backend]) => keys.includes(backend)).map(([key]) => key);
+}
+
+export function mapSettingsView(view: BackendSettingsView): SettingsView {
+	return { settings: mapSettings(view.settings), overridden: mapOverridden(view.overridden) };
+}
+
+/** 画面側の変更内容を、指定された項目だけのバックエンド用の更新内容にする */
+export function toBackendPatch(patch: Partial<AppSettings>): SettingsPatch_Deserialize {
+	const result: Record<string, unknown> = {};
+	for (const key of Object.keys(patch) as SettingKey[]) {
+		const value = patch[key];
+		if (value !== undefined) result[SETTING_BACKEND_KEYS[key]] = value;
+	}
+	return result as SettingsPatch_Deserialize;
 }

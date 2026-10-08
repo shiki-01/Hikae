@@ -18,6 +18,17 @@ function point(
 }
 
 describe('タイムラインの組み立て', () => {
+	it('自動保存を表示しない設定では、自動保存を含めない', () => {
+		const points = [point('s1', 1, 'save'), point('a1', 2, 'auto'), point('s2', 3, 'save')];
+		expect(buildTimeline(points, 'hidden').map((e) => e.kind)).toEqual(['now', 'save', 'save']);
+		expect(buildTimeline(points, 'shown').map((e) => e.kind)).toEqual([
+			'now',
+			'save',
+			'autos',
+			'save'
+		]);
+	});
+
 	it('先頭は「いま」で、保存ポイントは新しい順に並ぶ', () => {
 		const entries = buildTimeline([point('b', 10, 'save'), point('a', 1, 'save')]);
 		expect(entries.map((e) => e.id)).toEqual(['now', 'a', 'b']);

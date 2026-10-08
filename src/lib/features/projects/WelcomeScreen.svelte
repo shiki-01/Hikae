@@ -1,38 +1,108 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { createMutation } from '@tanstack/svelte-query';
-	import { Check, CheckCircle2, CloudDownload, Copy, FolderOpen, FolderPlus } from '@lucide/svelte';
-	import type { Component } from 'svelte';
+	import { useQueryClient } from '@tanstack/svelte-query';
+	import {
+		AlertTriangle,
+		Check,
+		CheckCircle2,
+		CloudDownload,
+		Copy,
+		ExternalLink,
+		FolderOpen,
+		FolderPlus
+	} from '@lucide/svelte';
+	import { onDestroy, type Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import { api } from '#lib/api/index.js';
-	import type { AddProjectMode, Project } from '#lib/api/types.js';
+	import { keys } from '#lib/api/keys.js';
+	import type { AddProjectMode, DeviceFlow, Project } from '#lib/api/types.js';
+	import Badge from '#lib/components/Badge.svelte';
 	import Button from '#lib/components/Button.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
 	import AddProjectDialog from './AddProjectDialog.svelte';
+	import {
+		failureForOutcome,
+		formatCountdown,
+		isHttpsUrl,
+		isLoginSetupError,
+		setupFailure,
+		type LoginFailureView
+	} from './login-flow';
 	import { useCompleteOnboarding } from './mutations';
+	import { useSession } from './queries';
+
+	const client = useQueryClient();
+	const session = useSession();
 
 	let step = $state<1 | 2 | 3>(1);
-	let userCode = $state('');
-	let loggedIn = $state(false);
+	let phase = $state<'idle' | 'starting' | 'waiting' | 'done'>('idle');
+	let flow = $state<DeviceFlow | null>(null);
+	let failure = $state<LoginFailureView | null>(null);
+	let remaining = $state(0);
 	let copied = $state(false);
 	let mode = $state<AddProjectMode | null>(null);
 	let added = $state<Project | null>(null);
 
-	const waitLogin = createMutation(() => ({
-		mutationFn: () => api.waitLogin(),
-		onSuccess: () => (loggedIn = true),
-		onError: (error) => reportError(error)
-	}));
-	const startLogin = createMutation(() => ({
-		mutationFn: () => api.startLogin(),
-		onSuccess: (flow) => {
-			userCode = flow.userCode;
-			waitLogin.mutate();
-		},
-		onError: (error) => reportError(error)
-	}));
+	// すでにログイン済み（アプリを開き直した場合など）なら、ログインの手順は飛ばす
+	const loggedIn = $derived(
+		phase === 'done' || (session.data?.loggedIn === true && !session.data.reauthRequired)
+	);
+
+	$effect(() => {
+		if (phase !== 'waiting' || !flow) return;
+		const end = Date.now() + flow.expiresInSecs * 1000;
+		remaining = flow.expiresInSecs;
+		const timer = setInterval(() => {
+			remaining = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+		}, 1000);
+		return () => clearInterval(timer);
+	});
+
+	onDestroy(() => {
+		// 待機中に画面を離れたら、バックエンドの待機も止める
+		if (phase === 'waiting') void api.cancelLogin().catch(() => {});
+	});
+
+	async function beginLogin() {
+		if (phase === 'starting' || phase === 'waiting') return;
+		failure = null;
+		phase = 'starting';
+		try {
+			flow = await api.startLogin();
+		} catch (error) {
+			phase = 'idle';
+			if (isLoginSetupError(error)) failure = setupFailure();
+			else reportError(error);
+			return;
+		}
+		phase = 'waiting';
+		try {
+			const outcome = await api.waitLogin();
+			if (outcome === 'succeeded') {
+				phase = 'done';
+				await client.invalidateQueries({ queryKey: keys.session });
+			} else {
+				phase = 'idle';
+				failure = failureForOutcome(outcome);
+			}
+		} catch (error) {
+			phase = 'idle';
+			reportError(error);
+		} finally {
+			flow = null;
+		}
+	}
+
+	async function cancelLogin() {
+		try {
+			await api.cancelLogin();
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
 	const complete = useCompleteOnboarding();
 
 	const steps: MessageKey[] = ['wizard.step1', 'wizard.step2', 'wizard.step3'];
@@ -56,7 +126,7 @@
 
 	async function copyCode() {
 		try {
-			await navigator.clipboard.writeText(userCode);
+			await navigator.clipboard.writeText(flow?.userCode ?? '');
 			copied = true;
 			setTimeout(() => (copied = false), 2000);
 		} catch {
@@ -120,43 +190,102 @@
 				<h2 class="m:0 type-heading">{t('wizard.step1')}</h2>
 				<p class="m:0 type-body fg:fg-muted">{t('wizard.login.description')}</p>
 
-				{#if !userCode}
-					<Button loading={startLogin.isPending} onclick={() => startLogin.mutate()}>
-						{t('wizard.login.button')}
-					</Button>
-				{:else}
-					<div class="flex flex-direction:column align-items:center gap:2 p:4 r:md bg:bg-subtle">
-						<span class="type-small fg:fg-muted">{t('wizard.login.code_label')}</span>
-						<div class="flex align-items:center gap:3">
-							<span
-								class="type-title font-family:mono letter-spacing:.15em"
-								data-testid="user-code"
-							>
-								{userCode}
-							</span>
-							<Button size="sm" variant="secondary" onclick={copyCode}>
-								{#if copied}
-									<Check size={14} aria-hidden="true" />
-									{t('wizard.login.copied')}
-								{:else}
-									<Copy size={14} aria-hidden="true" />
-									{t('wizard.login.copy')}
-								{/if}
-							</Button>
-						</div>
-						<span class="type-small fg:fg-muted text-align:center"
-							>{t('wizard.login.instruction')}</span
-						>
-					</div>
+				{#if loggedIn}
 					<p class="m:0 flex align-items:center gap:2 type-body" role="status">
-						{#if loggedIn}
-							<CheckCircle2 size={18} class="fg:state-saved" aria-hidden="true" />
-							{t('wizard.login.done')}
-						{:else}
-							<Spinner size="sm" />
-							{t('wizard.login.waiting')}
-						{/if}
+						<CheckCircle2 size={18} class="fg:state-saved" aria-hidden="true" />
+						{session.data?.userLogin
+							? t('login.logged_in_as', { name: session.data.userLogin })
+							: t('wizard.login.done')}
 					</p>
+				{:else}
+					{#if failure}
+						<div
+							class="flex flex-direction:column gap:2 p:4 r:md bg:bg-subtle b:1px|solid|state-danger"
+							role="alert"
+							data-testid="login-failure"
+						>
+							<div class="flex align-items:start gap:2">
+								<AlertTriangle
+									size={18}
+									class="fg:state-danger flex-shrink:0 mt:2px"
+									aria-hidden="true"
+								/>
+								<p class="m:0 type-body font-weight:700">{t(failure.title)}</p>
+							</div>
+							{#if failure.kind === 'setup'}
+								<Badge
+									variant="danger"
+									label={t('login.setup_badge')}
+									class="align-self:flex-start"
+								/>
+							{/if}
+							<p class="m:0 type-body">{t(failure.dataIsSafe)}</p>
+							<p class="m:0 type-body fg:fg-muted">{t(failure.nextAction)}</p>
+						</div>
+					{:else if session.data?.reauthRequired && phase === 'idle'}
+						<div
+							class="flex flex-direction:column gap:1 p:4 r:md bg:bg-subtle b:1px|solid|state-unsaved"
+							role="alert"
+						>
+							<p class="m:0 type-body font-weight:700">{t('error.E01.title')}</p>
+							<p class="m:0 type-body fg:fg-muted">{t('error.E01.message')}</p>
+						</div>
+					{/if}
+
+					{#if phase === 'waiting' && flow}
+						<div class="flex flex-direction:column align-items:center gap:2 p:4 r:md bg:bg-subtle">
+							<span class="type-small fg:fg-muted">{t('wizard.login.code_label')}</span>
+							<div class="flex align-items:center gap:3">
+								<span
+									class="type-title font-family:mono letter-spacing:.15em"
+									data-testid="user-code"
+								>
+									{flow.userCode}
+								</span>
+								<Button size="sm" variant="secondary" onclick={copyCode}>
+									{#if copied}
+										<Check size={14} aria-hidden="true" />
+										{t('wizard.login.copied')}
+									{:else}
+										<Copy size={14} aria-hidden="true" />
+										{t('wizard.login.copy')}
+									{/if}
+								</Button>
+							</div>
+							<span class="type-small fg:fg-muted text-align:center"
+								>{t('wizard.login.instruction')}</span
+							>
+							{#if isHttpsUrl(flow.verificationUri)}
+								<a
+									href={flow.verificationUri}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="inline-flex align-items:center gap:2 px:3 py:1 r:md bg:bg-raised fg:fg b:1px|solid|border-strong type-small font-weight:500 text-decoration:none"
+								>
+									<ExternalLink size={14} aria-hidden="true" />
+									{t('login.open_browser')}
+								</a>
+								<span class="type-small fg:fg-muted text-align:center overflow-wrap:anywhere">
+									{t('login.url_hint')}<br />
+									<span class="font-family:mono">{flow.verificationUri}</span>
+								</span>
+							{/if}
+						</div>
+						<div class="flex align-items:center justify-content:space-between gap:3">
+							<p class="m:0 flex align-items:center gap:2 type-body" role="status">
+								<Spinner size="sm" />
+								{t('wizard.login.waiting')}
+							</p>
+							<Button variant="ghost" size="sm" onclick={cancelLogin}>{t('login.cancel')}</Button>
+						</div>
+						<p class="m:0 type-small fg:fg-muted">
+							{t('login.expires', { time: formatCountdown(remaining) })}
+						</p>
+					{:else if !failure || failure.retryable}
+						<Button loading={phase === 'starting'} onclick={beginLogin}>
+							{failure ? t('login.retry') : t('wizard.login.button')}
+						</Button>
+					{/if}
 				{/if}
 			{:else if step === 2}
 				<h2 class="m:0 type-heading">{t('wizard.step2')}</h2>
