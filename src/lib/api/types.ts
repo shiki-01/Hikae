@@ -17,6 +17,10 @@ export interface Project {
 	folderMissing: boolean;
 	/** 前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null */
 	interruptedOperation: string | null;
+	/** ファイル監視が動いている。true の間、変更一覧は定期的に取り直さず、変更の通知で更新する */
+	watching: boolean;
+	/** 最後に自動保存を作った時刻。まだ一度も作っていなければ null */
+	lastAutoSnapshotAt: Date | null;
 }
 
 /** 保存前の検査で見つかった大きいファイル */

@@ -195,7 +195,9 @@ function createThesis(): ProjectState {
 			fetchPendingCount: 2,
 			hasConflict: false,
 			folderMissing: false,
-			interruptedOperation: null
+			interruptedOperation: null,
+			watching: false,
+			lastAutoSnapshotAt: ago(7 * MINUTE)
 		},
 		savePoints: [
 			{
@@ -279,7 +281,9 @@ function createMaterials(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
-			interruptedOperation: 'pull'
+			interruptedOperation: 'pull',
+			watching: false,
+			lastAutoSnapshotAt: null
 		},
 		changes: [],
 		savePoints: [
@@ -317,7 +321,9 @@ function createAlbum(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: true,
-			interruptedOperation: null
+			interruptedOperation: null,
+			watching: false,
+			lastAutoSnapshotAt: null
 		},
 		changes: [],
 		savePoints: [],
@@ -347,7 +353,9 @@ function createLocalNotes(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
-			interruptedOperation: null
+			interruptedOperation: null,
+			watching: false,
+			lastAutoSnapshotAt: null
 		},
 		changes: [],
 		savePoints: [
@@ -680,7 +688,9 @@ export const mockApi: ProjectApi = {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
-			interruptedOperation: null
+			interruptedOperation: null,
+			watching: false,
+			lastAutoSnapshotAt: null
 		};
 		states.set(id, {
 			project,

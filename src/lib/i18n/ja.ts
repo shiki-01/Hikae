@@ -383,10 +383,13 @@ const messages = {
 	'settings.confirm_retention_title': '自動保存を残す期間を短くしますか',
 	'settings.confirm_retention_text':
 		'短くした期間を過ぎた古い自動保存は、整理されて取り出せなくなることがあります。',
+	'settings.confirm_auto_snapshot_off_title': '自動保存をオフにしますか',
+	'settings.confirm_auto_snapshot_off_text':
+		'ファイルを間違って消したり上書きしたときに、自動保存から戻せなくなります。「保存」した内容は、これまでどおり戻せます。',
 
 	'settings.large_file_warn': '大きいファイルを知らせるサイズ',
 	'settings.large_file_warn_text':
-		'このサイズ以上のファイルは、アップロードに時間がかかることをお知らせします。',
+		'このサイズを超えるファイルは、アップロードに時間がかかることをお知らせします。自動保存にも含めません。',
 	'settings.show_snapshots': '履歴での自動保存の表示',
 	'settings.show_snapshots_text': '履歴タブで、自動保存をどのように見せるかを選びます。',
 	'settings.auto_fetch_on_launch': '起動時に自動で取り込む',
@@ -398,6 +401,12 @@ const messages = {
 		'未保存の変更があるときは、保存してから取り込みます。オフのときは取り込む前に確認します。',
 	'settings.auto_upload_on_save': '保存したら自動でアップロードする',
 	'settings.auto_upload_on_save_text': '保存と同時に、クラウドへ控えを置きます。',
+	'settings.auto_snapshot': 'ファイルの変更を自動で残す',
+	'settings.auto_snapshot_text':
+		'ファイルを変更して、しばらく操作しなかったときに、自動で控えを残します。間違って消したり上書きしたときに、履歴の「自動保存」から戻せます。',
+	'settings.auto_snapshot_delay': '自動保存するまでの待ち時間',
+	'settings.auto_snapshot_delay_text':
+		'ファイルを変更してから、この時間だけ操作しなかったときに、自動で控えを残します。変更を続けている間は、操作が止まるまで待ちます。',
 	'settings.snapshot_retention': '自動保存を残す期間',
 	'settings.snapshot_retention_text': 'この期間を過ぎた自動保存は整理されます。',
 
@@ -414,6 +423,15 @@ const messages = {
 	'settings.opt_snap_collapsed': '折りたたむ',
 	'settings.opt_snap_shown': '表示する',
 	'settings.opt_snap_hidden': '表示しない',
+	'settings.opt_delay_30': '30 秒',
+	'settings.opt_delay_120': '2 分',
+	'settings.opt_delay_600': '10 分',
+	'settings.opt_custom': 'カスタム',
+	'settings.unit_minutes': '分',
+	'settings.unit_seconds': '秒',
+	'settings.unit_days': '日',
+	'settings.unit_mb': 'MB',
+	'settings.custom_range': '{min}〜{max} {unit}の整数で入力してください',
 
 	'settings.note_ignore': '保存しないファイルの設定は、今後のバージョンで利用できます。',
 	'settings.note_ai':
@@ -421,6 +439,16 @@ const messages = {
 	'settings.note_extensions': '拡張機能の設定は、今後のバージョンで利用できます。',
 	'settings.advanced_toggle': '詳細設定を表示',
 	'settings.advanced_empty': '現在、変更できる詳細設定はありません。',
+
+	'autosave.rule': 'ファイルを変更して {when}操作しないと、自動で控えを残します。',
+	'autosave.last': '最後の自動保存: {when}',
+	'autosave.none': 'まだ自動保存はありません',
+	'autosave.off': '自動保存はオフです。',
+	'autosave.open_settings': '設定を開く',
+	'autosave.duration_seconds': '{n} 秒',
+	'autosave.duration_minutes': '{n} 分',
+	'autosave.duration_minutes_seconds': '{n} 分 {count} 秒',
+	'autosave.duration_hours': '{n} 時間',
 
 	'error.generic.title': '操作を完了できませんでした',
 	'error.generic.message': '操作の前の状態は、自動保存として残っています。',

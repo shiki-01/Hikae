@@ -19,6 +19,8 @@ function project(overrides: Partial<Project> = {}): Project {
 		hasConflict: false,
 		folderMissing: false,
 		interruptedOperation: null,
+		watching: false,
+		lastAutoSnapshotAt: null,
 		...overrides
 	};
 }

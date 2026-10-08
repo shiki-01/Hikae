@@ -296,7 +296,9 @@ describe('プロジェクトの変換', () => {
 		has_conflicts: false,
 		is_syncing: false,
 		interrupted_operation: null,
-		folder_missing: false
+		folder_missing: false,
+		watching: false,
+		last_auto_snapshot_at: null
 	};
 
 	it('途中で止まった操作の名前を引き継ぐ', () => {
@@ -315,6 +317,19 @@ describe('プロジェクトの変換', () => {
 		expect(local.remoteConnected).toBe(false);
 		expect(local.lastUploadedAt).toBeNull();
 		expect(mapProject({ ...info, remote_url: '' }, status, null).remoteConnected).toBe(false);
+	});
+
+	it('ファイル監視の状態と、最後の自動保存の時刻を引き継ぐ', () => {
+		const idle = mapProject(info, status, null);
+		expect(idle.watching).toBe(false);
+		expect(idle.lastAutoSnapshotAt).toBeNull();
+		const watched = mapProject(
+			info,
+			{ ...status, watching: true, last_auto_snapshot_at: '2026-10-08T03:00:00Z' },
+			null
+		);
+		expect(watched.watching).toBe(true);
+		expect(watched.lastAutoSnapshotAt?.toISOString()).toBe('2026-10-08T03:00:00.000Z');
 	});
 
 	it('フォルダが見つからない状態を、一覧の情報と状態のどちらからでも拾う', () => {

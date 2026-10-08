@@ -178,6 +178,7 @@ export const commands = {
 /** Events */
 export const events = {
 	cloneProgress: makeEvent<CloneProgress>("clone-progress"),
+	filesChanged: makeEvent<FilesChanged>("files-changed"),
 	needsAttention: makeEvent<NeedsAttention>("needs-attention"),
 	opFinished: makeEvent<OpFinished>("op-finished"),
 	opProgress: makeEvent<OpProgress>("op-progress"),
@@ -286,7 +287,7 @@ export type AppSettings = {
 	onboarded: boolean,
 	/**  起動時に取り込む */
 	pull_on_startup: boolean,
-	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	/**  定期的に取り込む間隔（分）。0 はオフ。1〜1440 の任意の値（画面の選択肢は 0 / 5 / 15 / 60 とカスタム） */
 	pull_interval_minutes: number,
 	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
 	save_before_pull: boolean,
@@ -298,15 +299,15 @@ export type AppSettings = {
 	push_reminder_hours: number,
 	/**  ファイル監視による自動保存 */
 	auto_snapshot_enabled: boolean,
-	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	/**  最後の変更からこの秒数だけ静止してから記録する。10〜3600 の任意の値（画面の選択肢は 30 / 120 / 600 とカスタム） */
 	auto_snapshot_delay_secs: number,
-	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days: number,
 	/**  メモの自動提案の方式 */
 	memo_suggestion: MemoSuggestion,
 	/**  元に戻した後に自動で保存する */
 	auto_save_after_restore: boolean,
-	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	/**  大きいファイルの警告閾値（MB）。1〜100 の任意の値（画面の選択肢は 25 / 50 / 100 とカスタム） */
 	large_file_warn_mb: number,
 	/**  自動保存をタイムラインに表示するか */
 	show_snapshots_in_timeline: TimelineSnapshots,
@@ -431,6 +432,14 @@ export type FileEntry = {
 	path: string,
 	/**  ファイルサイズ（バイト） */
 	size: number | null,
+};
+
+/**
+ *  プロジェクトのフォルダでファイルが変わった（ファイル監視。保存の対象になりうる変更だけ）。
+ *  UI は変更一覧のキャッシュだけを無効化して取り直す（重い再取得を避けるため `status_changed` とは分ける）。
+ */
+export type FilesChanged = {
+	project_id: string,
 };
 
 /**  git 実行ファイルの種類 */
@@ -762,7 +771,7 @@ export type SettingsPatch_Deserialize = {
 	onboarded?: boolean | null,
 	/**  起動時に取り込む */
 	pull_on_startup?: boolean | null,
-	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	/**  定期的に取り込む間隔（分）。0 はオフ。1〜1440 の任意の値（画面の選択肢は 0 / 5 / 15 / 60 とカスタム） */
 	pull_interval_minutes?: number | null,
 	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
 	save_before_pull?: boolean | null,
@@ -774,15 +783,15 @@ export type SettingsPatch_Deserialize = {
 	push_reminder_hours?: number | null,
 	/**  ファイル監視による自動保存 */
 	auto_snapshot_enabled?: boolean | null,
-	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	/**  最後の変更からこの秒数だけ静止してから記録する。10〜3600 の任意の値（画面の選択肢は 30 / 120 / 600 とカスタム） */
 	auto_snapshot_delay_secs?: number | null,
-	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days?: number | null,
 	/**  メモの自動提案の方式 */
 	memo_suggestion?: MemoSuggestion | null,
 	/**  元に戻した後に自動で保存する */
 	auto_save_after_restore?: boolean | null,
-	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	/**  大きいファイルの警告閾値（MB）。1〜100 の任意の値（画面の選択肢は 25 / 50 / 100 とカスタム） */
 	large_file_warn_mb?: number | null,
 	/**  自動保存をタイムラインに表示するか */
 	show_snapshots_in_timeline?: TimelineSnapshots | null,
@@ -824,7 +833,7 @@ export type SettingsPatch_Serialize = {
 	onboarded?: boolean | null,
 	/**  起動時に取り込む */
 	pull_on_startup?: boolean | null,
-	/**  定期的に取り込む間隔（分）。0 はオフ。選択肢は 0 / 5 / 15 / 60 */
+	/**  定期的に取り込む間隔（分）。0 はオフ。1〜1440 の任意の値（画面の選択肢は 0 / 5 / 15 / 60 とカスタム） */
 	pull_interval_minutes?: number | null,
 	/**  取り込む前に未保存の変更を保存する（false は「確認する」） */
 	save_before_pull?: boolean | null,
@@ -836,15 +845,15 @@ export type SettingsPatch_Serialize = {
 	push_reminder_hours?: number | null,
 	/**  ファイル監視による自動保存 */
 	auto_snapshot_enabled?: boolean | null,
-	/**  最後の変更からこの秒数だけ静止してから記録する。選択肢は 30 / 120 / 600 */
+	/**  最後の変更からこの秒数だけ静止してから記録する。10〜3600 の任意の値（画面の選択肢は 30 / 120 / 600 とカスタム） */
 	auto_snapshot_delay_secs?: number | null,
-	/**  自動保存の保持期間（日）。選択肢は 30 / 90 / 365 */
+	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days?: number | null,
 	/**  メモの自動提案の方式 */
 	memo_suggestion?: MemoSuggestion | null,
 	/**  元に戻した後に自動で保存する */
 	auto_save_after_restore?: boolean | null,
-	/**  大きいファイルの警告閾値（MB）。選択肢は 25 / 50 / 100 */
+	/**  大きいファイルの警告閾値（MB）。1〜100 の任意の値（画面の選択肢は 25 / 50 / 100 とカスタム） */
 	large_file_warn_mb?: number | null,
 	/**  自動保存をタイムラインに表示するか */
 	show_snapshots_in_timeline?: TimelineSnapshots | null,
@@ -931,6 +940,10 @@ export type SyncStatus = {
 	interrupted_operation: string | null,
 	/**  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない */
 	folder_missing: boolean,
+	/**  ファイル監視が動いている。true の間、UI は変更一覧の定期的な取り直しをやめる（変更は `files_changed` で届く） */
+	watching: boolean,
+	/**  最後に自動保存を作った時刻（RFC3339）。まだ一度も作っていなければ null */
+	last_auto_snapshot_at: string | null,
 };
 
 /**  用語の表示 */

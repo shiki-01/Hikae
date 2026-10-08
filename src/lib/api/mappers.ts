@@ -173,7 +173,10 @@ export function mapProject(
 		fetchPendingCount: status.pull_pending,
 		hasConflict: status.has_conflicts,
 		folderMissing: info.folder_missing || status.folder_missing,
-		interruptedOperation: status.interrupted_operation
+		interruptedOperation: status.interrupted_operation,
+		watching: status.watching,
+		lastAutoSnapshotAt:
+			status.last_auto_snapshot_at === null ? null : parseDate(status.last_auto_snapshot_at)
 	};
 }
 

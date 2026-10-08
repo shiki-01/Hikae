@@ -18,6 +18,9 @@
 		readonly?: boolean;
 		required?: boolean;
 		oninput?: (value: string) => void;
+		onblur?: () => void;
+		onkeydown?: (event: KeyboardEvent) => void;
+		inputmode?: 'text' | 'numeric';
 		class?: string;
 	}
 
@@ -37,6 +40,9 @@
 		readonly = false,
 		required = false,
 		oninput,
+		onblur,
+		onkeydown,
+		inputmode,
 		class: className = ''
 	}: Props = $props();
 
@@ -111,6 +117,9 @@
 			aria-invalid={error ? true : undefined}
 			aria-describedby={describedBy}
 			oninput={handleInput}
+			{onblur}
+			{onkeydown}
+			{inputmode}
 			class={control}
 		/>
 	{/if}

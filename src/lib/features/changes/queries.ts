@@ -1,9 +1,7 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { api, isTauri } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
-
-/** 変更一覧を自動で取り直す間隔（ms）。外部アプリでのファイル編集に追従するため */
-export const CHANGES_REFETCH_INTERVAL_MS = 5000;
+import { changesRefetchInterval } from './refetch';
 
 export function useMemoSuggestion(getProjectId: () => string, getEnabled: () => boolean) {
 	return createQuery(() => ({
@@ -14,15 +12,17 @@ export function useMemoSuggestion(getProjectId: () => string, getEnabled: () => 
 }
 
 /**
- * 変更一覧。画面を開いている間は一定間隔で取り直し、ウィンドウに戻ったときにも取り直す
- * （ファイル監視を使うまでの代わり）。裏に隠れている間は止まる。モックでは取り直さない。
+ * 変更一覧。ファイル監視が動いている間は、バックエンドの通知（`files-changed`）で取り直すため
+ * 定期的には取り直さない。監視が動いていない（失敗・未開始・非対応）ときだけ、フォールバックとして
+ * 30 秒間隔で取り直す。ウィンドウに戻ったときは常に取り直す。裏に隠れている間は止まる。
+ * モックでは取り直さない。
  */
-export function useChanges(getProjectId: () => string) {
+export function useChanges(getProjectId: () => string, getWatching: () => boolean) {
 	return createQuery(() => ({
 		queryKey: keys.changes(getProjectId()),
 		queryFn: () => api.listChanges(getProjectId()),
 		enabled: getProjectId() !== '',
-		refetchInterval: isTauri ? CHANGES_REFETCH_INTERVAL_MS : false,
+		refetchInterval: changesRefetchInterval(isTauri, getWatching()),
 		refetchOnWindowFocus: isTauri
 	}));
 }

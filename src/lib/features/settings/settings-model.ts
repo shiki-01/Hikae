@@ -1,5 +1,6 @@
 import type { AppSettings, SettingKey, SettingsView } from '#lib/api/types.js';
 import type { MessageKey } from '#lib/i18n/index.js';
+import type { NumberSettingKey } from './number-input';
 
 /** 設定画面で項目を並べるタブ（保存しないファイル・AI・拡張機能・詳細は別の段階で追加する） */
 export type SettingsTab = 'general' | 'fetch' | 'push' | 'auto_save';
@@ -26,21 +27,34 @@ export interface SelectRow {
 	options: SelectOptionRow[];
 }
 
-export type SettingRow = ToggleRow | SelectRow;
+/** 数値の項目。よく使う値の選択肢に加えて、「カスタム」で範囲内の好きな数値を入力できる */
+export interface NumberRow {
+	type: 'number';
+	key: NumberSettingKey;
+	label: MessageKey;
+	text: MessageKey;
+	/** 選択肢（値と表示名）。値 0 を含められる（「オフ」など。カスタムでは入力できない） */
+	presets: { value: number; label: MessageKey }[];
+	/** カスタム入力欄の横に出す単位 */
+	unit: MessageKey;
+}
 
-/** 設計書 7章の選択肢と一致させる */
+export type SettingRow = ToggleRow | SelectRow | NumberRow;
+
+/** 設計書 7章の選択肢と一致させる（数値の項目は、選択肢 + カスタム） */
 export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 	general: [
 		{
-			type: 'select',
+			type: 'number',
 			key: 'largeFileWarnMb',
 			label: 'settings.large_file_warn',
 			text: 'settings.large_file_warn_text',
-			options: [
+			presets: [
 				{ value: 25, label: 'settings.opt_mb_25' },
 				{ value: 50, label: 'settings.opt_mb_50' },
 				{ value: 100, label: 'settings.opt_mb_100' }
-			]
+			],
+			unit: 'settings.unit_mb'
 		},
 		{
 			type: 'select',
@@ -62,16 +76,17 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 			text: 'settings.auto_fetch_on_launch_text'
 		},
 		{
-			type: 'select',
+			type: 'number',
 			key: 'pullIntervalMinutes',
 			label: 'settings.pull_interval',
 			text: 'settings.pull_interval_text',
-			options: [
+			presets: [
 				{ value: 0, label: 'settings.opt_off' },
 				{ value: 5, label: 'settings.opt_interval_5' },
 				{ value: 15, label: 'settings.opt_interval_15' },
 				{ value: 60, label: 'settings.opt_interval_60' }
-			]
+			],
+			unit: 'settings.unit_minutes'
 		},
 		{
 			type: 'toggle',
@@ -90,15 +105,34 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 	],
 	auto_save: [
 		{
-			type: 'select',
+			type: 'toggle',
+			key: 'autoSnapshotEnabled',
+			label: 'settings.auto_snapshot',
+			text: 'settings.auto_snapshot_text'
+		},
+		{
+			type: 'number',
+			key: 'autoSnapshotDelaySecs',
+			label: 'settings.auto_snapshot_delay',
+			text: 'settings.auto_snapshot_delay_text',
+			presets: [
+				{ value: 30, label: 'settings.opt_delay_30' },
+				{ value: 120, label: 'settings.opt_delay_120' },
+				{ value: 600, label: 'settings.opt_delay_600' }
+			],
+			unit: 'settings.unit_seconds'
+		},
+		{
+			type: 'number',
 			key: 'snapshotRetentionDays',
 			label: 'settings.snapshot_retention',
 			text: 'settings.snapshot_retention_text',
-			options: [
+			presets: [
 				{ value: 30, label: 'settings.opt_keep_30' },
 				{ value: 90, label: 'settings.opt_keep_90' },
 				{ value: 365, label: 'settings.opt_keep_365' }
-			]
+			],
+			unit: 'settings.unit_days'
 		}
 	]
 };
@@ -127,6 +161,12 @@ export function confirmationFor(
 		return {
 			title: 'settings.confirm_auto_push_off_title',
 			text: 'settings.confirm_auto_push_off_text'
+		};
+	}
+	if (key === 'autoSnapshotEnabled' && current.autoSnapshotEnabled && next === false) {
+		return {
+			title: 'settings.confirm_auto_snapshot_off_title',
+			text: 'settings.confirm_auto_snapshot_off_text'
 		};
 	}
 	if (
@@ -163,4 +203,19 @@ export function applyPatch(
 		settings: { ...view.settings, ...patch },
 		overridden: isProject ? [...new Set([...view.overridden, ...changed])] : view.overridden
 	};
+}
+
+/** 数値の項目の「カスタム」を表す、選択欄の値 */
+export const CUSTOM_OPTION = 'custom';
+
+/** 現在の値が選択肢のどれかと一致するか */
+export function matchesPreset(row: NumberRow, value: number): boolean {
+	return row.presets.some((preset) => preset.value === value);
+}
+
+/**
+ * 数値の項目で、選択欄に出す値。カスタム入力中、または現在の値が選択肢に無いときは「カスタム」。
+ */
+export function numberSelectValue(row: NumberRow, value: number, customMode: boolean): string {
+	return customMode || !matchesPreset(row, value) ? CUSTOM_OPTION : String(value);
 }

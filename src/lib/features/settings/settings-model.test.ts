@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { t } from '#lib/i18n/index.js';
+import { NUMBER_RANGES } from './number-input';
 import type { AppSettings } from '#lib/api/types.js';
 import {
 	SETTINGS_TABS,
 	SETTING_ROWS,
 	applyPatch,
+	CUSTOM_OPTION,
 	confirmationFor,
+	matchesPreset,
+	numberSelectValue,
 	optionValue
 } from './settings-model';
-import type { SelectRow } from './settings-model';
+import type { NumberRow, SelectRow } from './settings-model';
 
 const current: AppSettings = {
 	pullOnStartup: true,
@@ -40,6 +44,8 @@ describe('設定項目の定義', () => {
 		expect(keys).toEqual(
 			[
 				'autoPushAfterSave',
+				'autoSnapshotDelaySecs',
+				'autoSnapshotEnabled',
 				'largeFileWarnMb',
 				'pullIntervalMinutes',
 				'pullOnStartup',
@@ -59,10 +65,14 @@ describe('設定項目の定義', () => {
 		}
 	});
 
-	it('選択肢に現在の既定値を含む', () => {
+	it('選択肢（数値の項目は選択肢とカスタム）に現在の既定値を含む', () => {
 		for (const tab of SETTINGS_TABS) {
 			for (const row of SETTING_ROWS[tab]) {
-				if (row.type !== 'select') continue;
+				if (row.type === 'toggle') continue;
+				if (row.type === 'number') {
+					expect(row.presets.map((p) => p.value)).toContain(current[row.key]);
+					continue;
+				}
 				expect(row.options.map((o) => o.value)).toContain(current[row.key]);
 			}
 		}
@@ -70,15 +80,57 @@ describe('設定項目の定義', () => {
 });
 
 describe('選択肢の値の復元', () => {
-	const row = SETTING_ROWS.fetch.find((r) => r.key === 'pullIntervalMinutes') as SelectRow;
+	const row = SETTING_ROWS.general.find((r) => r.key === 'showSnapshotsInTimeline') as SelectRow;
 
-	it('文字列から数値の選択肢を引く', () => {
-		expect(optionValue(row, '5')).toBe(5);
-		expect(optionValue(row, '0')).toBe(0);
+	it('文字列から選択肢の値を引く', () => {
+		expect(optionValue(row, 'shown')).toBe('shown');
+		expect(optionValue(row, 'hidden')).toBe('hidden');
 	});
 
 	it('選択肢に無い値は undefined', () => {
-		expect(optionValue(row, '7')).toBeUndefined();
+		expect(optionValue(row, 'unknown')).toBeUndefined();
+	});
+});
+
+describe('数値の項目（選択肢 + カスタム）', () => {
+	const rows = SETTINGS_TABS.flatMap((tab) => SETTING_ROWS[tab]).filter(
+		(row): row is NumberRow => row.type === 'number'
+	);
+	const byKey = (key: string) => rows.find((r) => r.key === key) as NumberRow;
+
+	it('取り込み間隔・自動保存の待ち時間・保持期間・警告サイズがカスタムできる', () => {
+		expect(rows.map((r) => r.key).sort()).toEqual([
+			'autoSnapshotDelaySecs',
+			'largeFileWarnMb',
+			'pullIntervalMinutes',
+			'snapshotRetentionDays'
+		]);
+	});
+
+	it('選択肢の値はすべてカスタムの範囲に収まる（0 の「オフ」だけは範囲外）', () => {
+		for (const row of rows) {
+			const range = NUMBER_RANGES[row.key];
+			for (const preset of row.presets) {
+				const inRange = preset.value >= range.min && preset.value <= range.max;
+				expect(inRange || preset.value === 0, `${row.key}: ${preset.value}`).toBe(true);
+			}
+			expect(t(row.unit)).not.toBe('');
+		}
+	});
+
+	it('現在の値が選択肢にあれば選択肢を、なければ「カスタム」を選んだ状態にする', () => {
+		const row = byKey('autoSnapshotDelaySecs');
+		expect(matchesPreset(row, 120)).toBe(true);
+		expect(numberSelectValue(row, 120, false)).toBe('120');
+		expect(numberSelectValue(row, 45, false)).toBe(CUSTOM_OPTION);
+		// 「カスタム」を選んだ直後は、値が選択肢と同じでも入力欄を出す
+		expect(numberSelectValue(row, 120, true)).toBe(CUSTOM_OPTION);
+	});
+
+	it('取り込み間隔の 0 は「オフ」の選択肢として選べる', () => {
+		const row = byKey('pullIntervalMinutes');
+		expect(matchesPreset(row, 0)).toBe(true);
+		expect(numberSelectValue(row, 0, false)).toBe('0');
 	});
 });
 
@@ -86,6 +138,11 @@ describe('確認ダイアログが必要な変更', () => {
 	it('自動アップロードをオフにするときだけ確認する', () => {
 		expect(confirmationFor('autoPushAfterSave', current, false)).not.toBeNull();
 		expect(confirmationFor('autoPushAfterSave', current, true)).toBeNull();
+	});
+
+	it('自動保存をオフにするときだけ確認する', () => {
+		expect(confirmationFor('autoSnapshotEnabled', current, false)).not.toBeNull();
+		expect(confirmationFor('autoSnapshotEnabled', current, true)).toBeNull();
 	});
 
 	it('自動保存を残す期間を短くするときだけ確認する', () => {

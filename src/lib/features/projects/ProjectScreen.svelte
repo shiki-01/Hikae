@@ -53,6 +53,7 @@
 	import type { SyncSizeRequest } from './sync-size';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
+	import AutoSaveStatus from './AutoSaveStatus.svelte';
 
 	interface Props {
 		projectId: string;
@@ -64,7 +65,10 @@
 	const PANE_MAX = 360;
 
 	const project = useProject(() => projectId);
-	const changesQuery = useChanges(() => projectId);
+	const changesQuery = useChanges(
+		() => projectId,
+		() => project.data?.watching ?? false
+	);
 	const historyQuery = useHistory(() => projectId);
 	const settingsQuery = useSettings(() => projectId);
 	const memoQuery = useMemoSuggestion(
@@ -363,6 +367,15 @@
 					]}
 				/>
 			</div>
+			{#if settingsQuery.data}
+				<AutoSaveStatus
+					enabled={settingsQuery.data.settings.autoSnapshotEnabled}
+					delaySecs={settingsQuery.data.settings.autoSnapshotDelaySecs}
+					lastAt={project.data?.lastAutoSnapshotAt ?? null}
+					onsettings={() =>
+						goto(`${resolve('/settings')}?project=${encodeURIComponent(projectId)}&tab=auto_save`)}
+				/>
+			{/if}
 			{#if tab === 'changes'}
 				<ChangesPane
 					{changes}

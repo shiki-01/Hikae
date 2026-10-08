@@ -4,6 +4,7 @@ import { isTauri } from '#lib/api/index.js';
 import { events } from '#lib/bindings.js';
 import { applyLiveEvent, initialLiveState, type LiveEvent, type LiveState } from './live-state';
 import { invalidateProject } from './sync';
+import { invalidateChanges } from '#lib/features/changes/invalidate.js';
 
 const states = $state<Record<string, LiveState>>({});
 
@@ -39,6 +40,10 @@ export function useBackendEvents(client: QueryClient): void {
 		events.statusChanged.listen((e) =>
 			dispatch(e.payload.project_id, { type: 'status-changed', payload: e.payload })
 		)
+	);
+	// ファイル監視の通知。変更一覧だけを取り直す（履歴などの重い取得は動かさない）
+	subscribe(() =>
+		events.filesChanged.listen((e) => void invalidateChanges(client, e.payload.project_id))
 	);
 	subscribe(() =>
 		events.opProgress.listen((e) =>

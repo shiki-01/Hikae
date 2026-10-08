@@ -10,6 +10,7 @@
 	import Dialog from '#lib/components/Dialog.svelte';
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select from '#lib/components/Select.svelte';
+	import NumberSetting from './NumberSetting.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import Tabs from '#lib/components/Tabs.svelte';
 	import Toggle from '#lib/components/Toggle.svelte';
@@ -36,7 +37,9 @@
 	const settings = useSettings(() => activeProjectId);
 	const update = useUpdateSettings(() => activeProjectId);
 
-	let selected = $state('general');
+	// 他の画面から開くときは、?tab= で最初に開くタブを指定できる
+	const requestedTab = page.url.searchParams.get('tab');
+	let selected = $state(requestedTab && isSettingsTab(requestedTab) ? requestedTab : 'general');
 	// 確認ダイアログで取りやめたとき、見た目だけ先に切り替わった部品を元の値で作り直す
 	let nonce = $state(0);
 	let pending = $state<{
@@ -175,6 +178,12 @@
 					label={t(row.label)}
 					checked={values[row.key] as boolean}
 					onchange={(checked) => change(values, row.key, checked)}
+				/>
+			{:else if row.type === 'number'}
+				<NumberSetting
+					{row}
+					value={values[row.key]}
+					onchange={(next) => change(values, row.key, next)}
 				/>
 			{:else}
 				<Select

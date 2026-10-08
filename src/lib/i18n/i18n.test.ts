@@ -38,6 +38,8 @@ describe('i18n', () => {
 			'current',
 			'total',
 			'path',
+			'min',
+			'unit',
 			'file'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
