@@ -35,7 +35,10 @@ export function setupSmoke(): void {
 	beforeEach(() => {
 		errors = [];
 		consoleSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
-			record('console.error', args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '));
+			record(
+				'console.error',
+				args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ')
+			);
 		});
 		process.on('unhandledRejection', onUnhandledRejection);
 		window.addEventListener('error', onWindowError);

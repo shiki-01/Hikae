@@ -1026,7 +1026,7 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 Phase 1 の範囲の外または終了条件に関わる、**未実装・未確認**の項目:
 
 - 同梱の git: **Windows は実装済み**（MinGit を `tauri.conf.json` の `bundle.resources` で同梱し、実行時に優先して使う。インストーラ生成までは確認。git の無い実機での起動確認は未実施）。**macOS は仕組みのみ**（`scripts/build-git-macos.sh` と CI の手動ジョブ。ビルドの実行は未確認）。同梱 git が見つからない場合は PATH 上の git を使い、それも無い PC では動かない（E17 の検出は未実装）。署名・公証、git の版更新の運用も未着手。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」
-- Windows・macOS の実機での通し確認。CI は両 OS で `svelte-check`・`prettier`・`eslint`・`vitest`・`cargo fmt --check`・`cargo clippy -D warnings`・`cargo test --workspace`・`tauri build --debug` が成功しているが、WebView 上の操作の自動テスト（E2E）は無い。実機での確認の記録は、リポジトリからは確認できなかった
+- Windows・macOS の実機での通し確認。CI は両 OS で `svelte-check`・`prettier`・`eslint`・`vitest`（純関数のテストに加え、jsdom + モック API で画面・ダイアログを描画するスモークテスト。初期化時の例外を検出する）・`cargo fmt --check`・`cargo clippy -D warnings`・`cargo test --workspace`・`tauri build --debug` が成功しているが、WebView 上の操作の自動テスト（E2E）は無い。実機での確認の記録は、リポジトリからは確認できなかった
 - Device Flow の実認証（ブラウザでの手動承認から、トークンの保存、git での取得・アップロードまで）は未確認
 - 終了条件の被験者試験（Git 未経験者 5 人）は未実施
 - 性能の検証（1 万ファイル・5GB で状態表示 1 秒以内、コールドスタート 2 秒以内）は未確認。ファイル監視と自動保存の負荷も含む
