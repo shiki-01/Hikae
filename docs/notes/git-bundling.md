@@ -370,7 +370,7 @@ Hikae がユーザーのシステム git と衝突しないようにするため
 | app | `setup` で `resource_dir` を `OnceLock` に保持し、`git_runner()` が `GitRunner::bundled` を使う。credential helper の設定は従来どおり |
 | Windows の取得 | `scripts/fetch-git-windows.mjs`。公式リリース `v2.56.0.windows.2` の `MinGit-2.56.0.2-64-bit.zip`、SHA-256 `da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be`（`gh api` の digest と一致を確認）をスクリプトに固定。検証に失敗したら破棄して終了コード 1（不一致のハッシュで実際に失敗することを確認）。展開は PowerShell の `Expand-Archive`。展開後に不要ファイルを削り、同梱 git で最小の流れを実行してから `src-tauri/app/resources/git/` に移す。版が一致していれば再取得しない（`.hikae-git-version`）。`tauri.conf.json` の `beforeDevCommand` / `beforeBuildCommand` から呼ぶ |
 | Windows の同梱 | `bundle.resources` で `resources/git` → `git`、`resources/NOTICE.txt` → `NOTICE.txt`。`git/` の中身は `.gitignore` 済み（`.gitkeep` だけ追跡。`tauri-build` が resources の存在を要求するため） |
-| macOS | `scripts/build-git-macos.sh`。kernel.org の `git-2.56.0.tar.xz`（SHA-256 `26c56c29…89d3`。kernel.org の `sha256sums.asc` と一致を確認）を固定。arm64 / x86_64 を別々にビルドして `lipo`。CI は `workflow_dispatch` の `bundle-git-macos` ジョブがビルドしてキャッシュに保存し、`check` ジョブの macOS 脚が復元する |
+| macOS | `scripts/build-git-macos.sh`。kernel.org の `git-2.56.0.tar.xz`（SHA-256 `26c56c29…89d3`。kernel.org の `sha256sums.asc` と一致を確認）を固定。`NO_RUST=YesPlease` で Rust を無効にし（git 2.56 の Makefile の公式の変数。`varint.c` の C 実装に切り替わる）、arm64 / x86_64 を別々にビルドして `lipo`。CI は `workflow_dispatch` の `bundle-git-macos` ジョブがビルドしてキャッシュに保存し、`check` ジョブの macOS 脚が復元する |
 
 ### 7.2 Windows の同梱 git の実測
 
@@ -411,7 +411,7 @@ Hikae がユーザーのシステム git と衝突しないようにするため
 
 ### 7.6 未検証事項
 
-- macOS: `scripts/build-git-macos.sh` は `bash -n` の構文確認のみ。実際のビルド、universal 化、CI の `bundle-git-macos` ジョブとキャッシュの受け渡しは**未確認**。ビルド後のサイズも未測定。Tauri の resources コピーが `libexec/git-core` のシンボリックリンクをどう扱うか（実体に展開されてサイズが増えないか）は**未確認**
+- macOS（CI 実行 37805688264 の `bundle-git-macos` で確認。1 回目の 37802719814 は失敗）: 失敗の原因は、git 2.56 の既定で Rust 製の `libgitcore.a`（varint）が cargo でホスト（arm64）向けにだけビルドされ、x86_64 の C とリンクできなかったこと。Makefile の `NO_RUST` で無効にし（Rust 有効のまま x86_64 を作る方法は `RUST_TARGETS` などの cargo 設定が必要で、同梱・依存が増えるため採らなかった）、`varint.c` の C 実装で解決した。確認できたこと: arm64 / x86_64 のビルド、`lipo` による universal 化（`bin/git` と `git-remote-https` は x86_64 + arm64）、全 Mach-O の動的リンク先が `/usr/lib` と `/System` のみ（`git-remote-https` は `/usr/lib/libcurl.4.dylib`）、universal 版 git での init → add → commit → log、キャッシュへの保存（圧縮 18.4 MB）。universal 化後の配置物は **36 MB**、`libexec/git-core` は 58 エントリ（実体ファイル 50）。未確認: 実 Mac での起動（動作確認は arm64 ランナー上の arm64 側のみ。x86_64 側は未実行）、キャッシュを復元した `check` ジョブの macOS 脚での同梱 git によるテスト、Tauri の resources コピーが `libexec/git-core` のシンボリックリンクをどう扱うか（実体に展開されてサイズが増えないか）、同梱後の Tauri バンドルのサイズ、署名・公証
 - Windows: git が入っていない実機での起動確認は未実施。インストール後のアプリや `tauri dev` で `resource_dir` が想定のフォルダを指し、同梱 git が使われることの画面上の確認も未実施（`tauri build --debug` の成功と、resources が `target/debug/git` とインストーラに含まれることまで）
 - `resource_dir` が `\\?\` 付きのパスで返る場合に備え、接頭辞を外す処理を入れたが、実際にその形で返るかは未確認
 - 実際の GitHub に対する HTTPS の clone / fetch / push（同梱の libcurl と OpenSSL、Windows の証明書ストア）は未確認
