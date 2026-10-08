@@ -169,6 +169,7 @@ impl DeviceFlowClient {
         let response = self
             .client
             .post(&self.token_endpoint)
+            .header("Accept", "application/json")
             .form(&params)
             .send()
             .await
@@ -365,6 +366,56 @@ mod tests {
 
         assert_eq!(token.expose_secret(), "test_access_token");
         mock.assert();
+    }
+
+    /// GitHub は `Accept: application/json` が無いと、トークン応答を form 形式
+    /// （`access_token=...&scope=...`）で返す。ヘッダ付きのときだけ JSON を返すモックで、
+    /// ヘッダの付け忘れ（InvalidTokenResponse になる不具合）を検出する。
+    #[tokio::test]
+    async fn test_poll_for_token_requests_json_response() {
+        let server = MockServer::start();
+
+        let json_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/login/oauth/access_token")
+                .header("accept", "application/json");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({
+                    "access_token": "test_access_token",
+                    "token_type": "bearer",
+                    "scope": "repo,read:org",
+                }));
+        });
+        let form_mock = server.mock(|when, then| {
+            when.method(POST).path("/login/oauth/access_token");
+            then.status(200)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body("access_token=test_access_token&token_type=bearer");
+        });
+
+        let base_url = server.url("");
+        let client = DeviceFlowClient::with_endpoints(
+            "test_client_id".to_string(),
+            format!("{}/login/device/code", base_url),
+            format!("{}/login/oauth/access_token", base_url),
+        );
+        let device = DeviceCode::new(
+            "test_device_code".to_string(),
+            "ABC-1234".to_string(),
+            "https://github.com/login/device".to_string(),
+            10,
+            1,
+        );
+
+        let token = client
+            .poll_for_token(&device, None)
+            .await
+            .expect("Accept ヘッダ付きで JSON を受け取れるはず");
+
+        assert_eq!(token.expose_secret(), "test_access_token");
+        json_mock.assert();
+        form_mock.assert_calls(0);
     }
 
     #[tokio::test]
