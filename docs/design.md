@@ -331,7 +331,7 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 
 1. `git push origin HEAD`（`--force` 系は内部でも使わない）
 2. 拒否（相手側が先に進んでいる）: 4.3 を実行してから1回だけ再試行。再度失敗したらエラー表示
-3. upstream 未設定時のみ `git push -u origin HEAD`
+3. upstream 未設定時のみ `git push -u origin HEAD`。保存が 1 つも無いときは何もしない（`push` が失敗するため）。保存先（remote）は設定済みで一度もアップロードしていない（upstream なし）ときの「アップロード待ち」は、作った保存の総数とする（`project_status`）
 
 ### 4.6 リポジトリの作成・取得
 
@@ -349,7 +349,17 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 
 - 保存先の一覧は実装済み。個人と `GET /user/orgs` の Organization を並べ、各 Organization について memberships（承認待ちの検出）と `GET /orgs/{org}` の `members_can_create_repositories` を確認し、作れない理由（参加の承認待ち・メンバーによる作成が不許可・情報を確認できない）を返す
 - GitHub から取得（`git clone`）は実装済み。一覧は `GET /user/repos?affiliation=owner,organization_member` をページ送りで取得し、件数が多いときは `truncated` で知らせる。取得先 URL は常に `https://github.com/<owner>/<name>.git` に固定し（owner と name は英数字・`-`・`_`・`.` のみ）、任意の URL は受け付けない。取得先のフォルダは存在しないか空である必要があり、空でなければ中身に触れず拒否する。新しいフォルダを作るだけなので復元点は作らない。git の待ち時間は 30 分に延ばし、完了後に署名と `core.autocrlf=false` / `core.precomposeUnicode=true` をリポジトリ単位で設定して登録し、操作ジャーナルへ `clone` を記録する
-- 既存フォルダの登録・新規作成のうち、**GitHub 上のリポジトリ作成（`POST /user/repos`、`POST /orgs/{org}/repos`）と `push -u` は未実装**。いまの画面からの登録は、`git init -b main`（既存の `.git` があっても同じ手順を通す）とリポジトリ単位の設定だけを行い、保存先（remote）は設定しない。保存先の無いプロジェクトは、取り込み・アップロードの自動実行の対象にならない
+- 既存フォルダの登録・新規作成（`add_project`）は、`git init -b main`（既存の `.git` があっても同じ手順を通す）とリポジトリ単位の設定でローカルに登録したあと、画面が保存先を選んでいて（`remote` を渡したとき）ログイン済みなら、続けて GitHub 上のリポジトリを作り、保存先として接続する。既存の `.git` がすでに `origin` を持っているときは、それを保存先として登録し、新しくは作らない。保存先の無いプロジェクトは、取り込み・アップロードの自動実行の対象にならない
+- **リポジトリの作成と接続**（`core-github` の `GithubApi::create_repository`、`app/src/remote.rs` の `connect_flow`。新規の追加と、あとから接続する `connect_remote` で共通）:
+  1. 公開（`private: false`）は、画面の警告に同意した明示のフラグ（`public_confirmed`）が無ければ、何も作らずに拒否する（`remote_public_not_confirmed`）。画面の既定は非公開
+  2. 保存先が個人（ログイン名と同じ）なら `POST /user/repos`、それ以外は Organization として `POST /orgs/{org}/repos`。送る前に所有者名（英数字と `-`、39 文字以内）とリポジトリ名（英数字と `-`・`_`・`.`、100 文字以内。`.` / `..`、`.git` / `.wiki` で終わる名前は予約名として拒否）を検証する。名前を指定しないときは、プロジェクト名から ASCII の英数字だけを残して作り、日本語の名前などで何も残らなければ `hikae-<ID の先頭 8 文字>` にする
+  3. 失敗の分類: 401 は E01、403 と Organization が見えない 404 は E02（`github_forbidden`）、レート制限、通信できないは E03（`network_unavailable`）、5xx は E04、同名がすでにある 422 は専用の `remote_name_taken`（GitHub にもローカルにも何も変わらない）。応答の本文・URL・トークンはエラーに含めない
+  4. 作成できたら、`run_op`（直列キュー、操作名 `connect-remote`）の中で `origin` を `https://github.com/<owner>/<name>.git`（認証情報を含めない。認証は credential helper）に設定し、プロジェクトの保存先 URL と所有者を記録する。`add_project` では、まだ 1 つも保存が無く変更があるときだけ、通常の保存（復元点とサイズ検査を通る。メモは「最初の保存」）を作る。大きいファイルがあれば保存を見送り、結果の `size_check` で知らせる
+  5. 続けて通常のアップロード（`run_op`、操作名 `push`。upstream が無いので `push -u origin HEAD`）を実行する。保存が 1 つも無いときは何もしない
+  - 途中で失敗した場合: リポジトリの作成に失敗したときは、ローカルの登録だけが残り（保存先なし）、`add_project` は `AddProjectResult.remote.error` に E02 / E03 などの 3 要素のエラーを入れて成功で返す。`connect_remote` は作成前の失敗をエラーで返す。作成後のアップロードの失敗は、保存先は接続済みのまま `error` に入れて返し、ヘッダーは「アップロード待ち」になる（スケジューラまたは手動のアップロードが `push -u` をやり直す）
+  - 未ログインのときは、画面がローカルだけで登録し（保存先と公開範囲の入力を求めない）、ログイン後に `connect_remote` で接続できる。実機で保存先なしのまま作ったプロジェクトも同じ。すでに保存先がある場合は `remote_already_connected`
+  - ジャーナルの対象は `<owner>/<name>` だけで、トークンも認証情報付きの URL も残さない（不変条件 9）
+- 画面（`ConnectRemoteDialog`、`RemoteTargetFields`）: 保存先（OwnerPicker）、公開範囲（初期は非公開。公開を選ぶと警告文と確認のチェックが必要）、任意の GitHub 上の名前（同名の衝突のときに指定し直せる）。保存先に接続していないプロジェクトは、一覧のカードとプロジェクト画面のヘッダーに「GitHub に接続していません」と「接続する」を出す
 
 ### 4.7 ファイルの追加・外部で開く
 
@@ -424,6 +434,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
 - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、`network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、`keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、`github_error`
 - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、`destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、`clone_failed`、`clone_timeout`、`clone_register_failed`
+- 保存先の作成・接続: `remote_name_taken`（同名のリポジトリがすでにある。ja.ts に文言は無く、Rust 側の 3 要素を表示する）、`remote_name_invalid`、`remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、`project_folder_missing`、`remote_connect_failed`（リポジトリは作成したが、このプロジェクトに接続できなかった）。権限不足は `github_forbidden`（E02）、通信できないは `network_unavailable`（E03）
 - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、`project_list_failed`、`project_register_failed`、`project_remove_failed`、`relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、`relocate_failed`
 - 内部: `database_error`、`task_failed`、`lock_failed`、`settings_io_failed`、`invalid_settings`、`status_failed`、`history_failed`、`diff_failed`、`change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`
 
@@ -440,7 +451,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E05 | `conflict`（params: `count`）。解消は D3 |
 | E06 | 自動の取り込みを見送る場合のみ（4.3 の補足）。確認ダイアログは未接続 |
 | E07 / E08 | 上記の構造化した結果 |
-| E11 | 画面（一覧）のダイアログと、フォルダの付け替え（`relocate_project`。`relocate_*`）は実装済み。**起動時のパス確認によるフォルダ不明の検出は未実装**で、画面の `folderMissing` は常に偽 |
+| E11 | 画面（一覧）のダイアログと、フォルダの付け替え（`relocate_project`。`relocate_*`）は実装済み。登録パスが存在しない・フォルダでない・リポジトリ（`.git`）でないときは、`list_projects`（`ProjectInfo.folder_missing`）と `project_status`（`SyncStatus.folder_missing`）が真を返し、**git を実行しない**（`list_history` は空を返す）。スケジューラは該当プロジェクトの自動の取り込み・アップロードを見送り、見つからなくなった最初の巡回で `NeedsAttention`（理由 `folder-missing`）を通知する。判定はファイルシステムだけで行う（`core-ops` の `project_folder_state`） |
 | E12 | `file_in_use`（下記） |
 | E15 | 操作ジャーナル（6.3） |
 | E16 | `remote_not_found`。取得（clone）の失敗時のみ。既存のプロジェクトの fetch の 404 は見分けず「その他」に分類する |
@@ -518,7 +529,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | --- | --- |
 | `id` | 連番 |
 | `project_id` | プロジェクト。外部キーは張らず、プロジェクトの登録を外しても記録は残す |
-| `operation` | 操作名（`save`、`pull`、`push`、`resolve`、`restore`、`restore-file`、`undo-restore`、`abort-merge`、`add-files`、`recover`、`clone`） |
+| `operation` | 操作名（`save`、`pull`、`push`、`resolve`、`restore`、`restore-file`、`undo-restore`、`abort-merge`、`add-files`、`recover`、`clone`、`connect-remote`） |
 | `triggered_by` | `manual`（利用者の操作）または `auto`（スケジューラ） |
 | `started_at` / `finished_at` | RFC3339。実行中は `finished_at` が空 |
 | `outcome` | `running`（実行中）、`success`、`failure`、`interrupted`（中断） |
@@ -673,7 +684,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | --- | --- | --- |
 | `tauri-plugin-dialog` 2.8.1（画面側は `@tauri-apps/plugin-dialog` 2.8.1） | `app`、画面 | フォルダ・ファイルの選択ダイアログ（`pickFolder`、`pickFiles`）。`capabilities/default.json` で `main` ウィンドウにだけ `dialog:default` を許可する |
 | `tauri-plugin-opener` 2.7.0 | `app`（Rust 側のみ） | 既定のアプリで開く（`open_path`）と、ログインの確認ページを開く（`open_url`）。**画面側には権限を与えない**（capability に `opener:*` を含めない）。開くのは、Rust 側で検証したプロジェクト内のファイルと過去の版の一時ファイル（4.7）、および固定の URL `https://github.com/login/device` だけ |
-| `reqwest` 0.13（`default-features = false`、`json`・`form`・`rustls`） | `core-github` | Device Flow の POST と、GitHub REST API の GET（`/user`、`/user/orgs`、`/orgs/{org}`、`/orgs/{org}/memberships/{login}`、`/user/repos`）。User-Agent は `Hikae`。TLS は rustls |
+| `reqwest` 0.13（`default-features = false`、`json`・`form`・`rustls`） | `core-github` | Device Flow の POST と、GitHub REST API の GET（`/user`、`/user/orgs`、`/orgs/{org}`、`/orgs/{org}/memberships/{login}`、`/user/repos`）と POST（`/user/repos`、`/orgs/{org}/repos`。リポジトリの作成）。User-Agent は `Hikae`。TLS は rustls |
 | `keyring` 3（`windows-native`、`apple-native`） | `core-github` | トークンの保管（サービス名 `com.shiki01.hikae`、ユーザー名 `github`） |
 | `tokio`（`time`、`sync`）、`tokio-util` | `core-github` | ログイン待機のポーリングと、待機中の中断（`CancellationToken`） |
 | `rusqlite` 0.32（`bundled`）、`chrono` | `core-store` | SQLite（9.1）。`bundled` のため OS の SQLite に依存しない |
@@ -700,7 +711,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - git への受け渡しは、アプリ自身を credential helper として使う。`clone` / `fetch` / `push` / `ls-remote` の実行時だけ、`-c credential.helper=`（既存の helper の無効化）に続けて `-c credential.helper=!'<アプリ>' credential` を付ける。git が `<アプリ> credential get` を呼ぶと、アプリは画面を起動せずに応答して終了する。応答するのは `https` で `github.com` 宛ての `get` だけで（ユーザー名 `x-access-token`、パスワードはトークン）、それ以外のホスト・操作（`store`、`erase`）には何も出力しない。トークンを URL やコマンドライン引数には載せない。実行ファイルのパスに引用符や制御文字が含まれるときは helper を設定せず、認証なしで実行して認証エラーとして失敗させる。ユーザーのグローバル git 設定には書き込まない（6.1）
 - リモートは GitHub の `origin` のみ。取得先は `https://github.com/<owner>/<name>.git` に固定する（4.6）。トークンが失効・取り消しされると API は 401 を返し、セッション情報は「再認証が必要」になる（E01）。オフラインや GitHub 側の障害のときはログイン状態を変えず、ユーザー情報だけを空にして返す
 - 署名に使うユーザー情報（数値 ID とログイン名）はメモリ上に控え、保存のたびに通信しない。トークンは含めない
-- **未実装・未確認**: 新しいリポジトリの作成（4.6）。Device Flow の実認証（ブラウザでの手動承認）は未確認
+- **未確認**: Device Flow の実認証（ブラウザでの手動承認）と、実際の GitHub でのリポジトリ作成（`POST /user/repos`、`POST /orgs/{org}/repos`）。リポジトリの作成は、モックの HTTP サーバーとローカルの bare リポジトリを使うテストだけで確認している
 
 ### 8.3 モジュール分割
 
@@ -799,16 +810,16 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 
 ### 9.3 フロントエンドとの通信
 
-- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 39 個）:
+- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 40 個）:
   - プロジェクト: `list_projects`、`add_project`、`remove_project`、`relocate_project`、`project_status`
   - 変更・保存: `list_changes`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
   - 履歴・比較: `list_history`、`list_point_changes`、`list_files_at`、`diff`
   - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`
   - 同期: `pull`、`push`、`list_conflicts`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
   - ファイルを開く: `open_project_file`、`open_file_at`
-  - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`
+  - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
   - 設定: `get_settings`、`update_settings`、`complete_onboarding`
-  - 設計の `create_repo` と `open_with` に相当するものは未実装（4.6、4.7）
+  - 設計の `create_repo` は `add_project`（新規作成・既存フォルダの登録で `remote` を渡す）と `connect_remote`（あとから接続）で実装済み（4.6）。`open_with` に相当するものは未実装（4.7）
 - **イベント**（Rust → UI。名前は kebab-case）: `status-changed`、`op-progress`、`op-finished`、`sync-state-changed`、`needs-attention`、`clone-progress`。`llm_download_progress` は未実装（Phase 2）
 - 状態を変える操作は `run_op`（直列キューの内側）で実行し、読み取りは `run_blocking` でキューを通さずに実行する
 - TanStack Query のキーは、実装では `['changes', projectId]`、`['history', projectId]`、`['compare', projectId, ...]` のように**種別を先頭**にしている（`src/lib/api/keys.ts`）。操作の完了後は `status-changed` を受けて、プロジェクトに関わるキーをまとめて無効化する
@@ -938,10 +949,10 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 | 範囲 | 状況 |
 | --- | --- |
 | S0 初回ウィザード | 実装済み（ログイン → 最初のプロジェクト → 完了の 3 ステップ） |
-| S1 プロジェクト一覧、S2 変更タブ、S3 履歴タブ | 実装済み。S3 の「この時点の全ファイルを見る」（ファイルツリー）と自動保存の折りたたみを含む。ただし「ここまでクラウド」の線は、部品はあるものの、画面側が履歴の各点を「クラウドに未アップロード」として扱っているため実際には表示されない。ヘッダーの最終アップロード日時も同様に空 |
+| S1 プロジェクト一覧、S2 変更タブ、S3 履歴タブ | 実装済み。S3 の「この時点の全ファイルを見る」（ファイルツリー）と自動保存の折りたたみを含む。「ここまでクラウド」の線は、履歴の各項目の `cloud_synced`（`@{u}` から辿れる手動の保存。自動保存は常に偽）から出す。ヘッダーの最終アップロード日時は `ProjectInfo.last_uploaded_at`（`@{u}` が指す保存の日時）。保存先に接続していないプロジェクトには「GitHub に接続していません」と「接続する」を出す |
 | S4 比較ビュー | テキストの行差分のみ実装済み（左右／統合の切り替え）。画像・docx・xlsx は Phase 2 |
 | S5 設定 | 4 タブ（一般・取り込み・アップロード・自動保存）が実装済み。詳細設定は空。多くの項目が「保存のみ」（7.2） |
-| D1 プロジェクト追加 | 既存フォルダの登録と GitHub から取得は実装済み。新規作成はローカルの登録のみで、**GitHub 上のリポジトリ作成は未実装**（4.6） |
+| D1 プロジェクト追加 | 既存フォルダの登録・GitHub から取得・新規作成を実装済み。新規作成と既存フォルダの登録は、ログイン済みなら GitHub 上にリポジトリを作って接続し、初回のアップロードまで行う（4.6）。公開範囲は初期が非公開で、公開は警告と確認のチェックが必要 |
 | D2 元に戻す確認、D3 変更のぶつかり解消、D4 エラー表示 | 実装済み。D3 は 2 択と「別名で残す」。エラーの文言は 5.1 |
 | 保存、履歴、元に戻す | 実装済み（全体・ファイル単位・取り消し）。保存前のサイズ検査と選択ダイアログを含む。「戻した後に自動で保存」は未実装（4.2） |
 | 取り込み（起動時・定期）、アップロード（自動・手動） | 実装済み（スケジューラ、失敗時の自動再試行、オフライン・再認証の状態表示）。取り込み前の自動保存のサイズ検査と見送りを含む |
