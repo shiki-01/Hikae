@@ -47,13 +47,18 @@ describe('日時の変換', () => {
 describe('変更種別の変換', () => {
 	it('種別を保ち、競合中のファイルに印を付ける', () => {
 		const conflicts = new Set(['b.txt']);
-		expect(mapChange({ path: 'a.txt', kind: 'added' }, conflicts)).toEqual({
+		expect(mapChange({ path: 'a.txt', kind: 'added', conflicted: false }, conflicts)).toEqual({
 			id: 'a.txt',
 			path: 'a.txt',
 			type: 'added',
 			isConflict: false
 		});
-		expect(mapChange({ path: 'b.txt', kind: 'modified' }, conflicts).isConflict).toBe(true);
+		expect(
+			mapChange({ path: 'b.txt', kind: 'modified', conflicted: false }, conflicts).isConflict
+		).toBe(true);
+		expect(
+			mapChange({ path: 'c.txt', kind: 'modified', conflicted: true }, conflicts).isConflict
+		).toBe(true);
 	});
 
 	it('復元の影響を 3 種に振り分ける', () => {

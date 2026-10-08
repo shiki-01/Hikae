@@ -13,7 +13,7 @@ export const commands = {
 	removeProject: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { id })),
 	/**  プロジェクトの状態を取得（未保存の変更、アップロード待ち、競合など）。 */
 	projectStatus: (id: string) => typedError<SyncStatus, AppError>(__TAURI_INVOKE("project_status", { id })),
-	/**  変更ファイル一覧を取得。 */
+	/**  変更ファイル一覧を取得（読み取りのみ。解析は core-ops）。 */
 	listChanges: (id: string) => typedError<ChangeFile[], AppError>(__TAURI_INVOKE("list_changes", { id })),
 	/**
 	 *  保存（commit）を実行。
@@ -300,6 +300,8 @@ export type AttentionReason =
 export type ChangeFile = {
 	path: string,
 	kind: ChangeKind,
+	/**  変更のぶつかり中のファイルか */
+	conflicted: boolean,
 };
 
 export type ChangeKind = "modified" | "added" | "deleted" | "renamed";

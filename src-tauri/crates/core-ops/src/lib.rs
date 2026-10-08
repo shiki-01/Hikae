@@ -1,6 +1,7 @@
 // 保存・取り込み・アップロード・ぶつかり解消などの高層操作 API。
 
 mod add_files;
+mod changes;
 mod clone_dest;
 mod file_in_use;
 mod history;
@@ -17,6 +18,7 @@ mod restore_file;
 mod size_check;
 
 pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
+pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
@@ -184,6 +186,12 @@ impl Ops {
             limits,
             self.meta(),
         )
+    }
+
+    /// 未保存の変更を 1 ファイルずつ返す（読み取りのみ）。
+    /// 追加（未追跡を含む）・変更・削除・名前変更を区別し、ぶつかり中のファイルには印が付く。
+    pub fn list_changes(&self, repo: &Path) -> Result<Vec<ChangedFile>, OpsError> {
+        changes::list_changes(self.runner(), repo)
     }
 
     /// 現在の競合ファイル一覧を返す。

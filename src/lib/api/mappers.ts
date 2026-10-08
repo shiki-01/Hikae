@@ -98,7 +98,7 @@ export function mapChange(file: ChangeFile, conflictPaths: ReadonlySet<string>):
 		id: file.path,
 		path: file.path,
 		type: mapChangeKind(file.kind),
-		isConflict: conflictPaths.has(file.path)
+		isConflict: file.conflicted || conflictPaths.has(file.path)
 	};
 }
 

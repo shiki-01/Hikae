@@ -563,9 +563,14 @@ async fn project_status(
         let conflicts = ops
             .conflicts(&project.path)
             .map_err(AppError::from_ops_error)?;
+        // 件数は変更ファイル一覧と同じ関数から出す（一覧と件数がずれない）
+        let unsaved_changes = ops
+            .list_changes(&project.path)
+            .map_err(AppError::from_ops_error)?
+            .len();
 
         Ok(SyncStatus {
-            unsaved_changes: 0,
+            unsaved_changes: u32::try_from(unsaved_changes).unwrap_or(u32::MAX),
             upload_pending: sync.ahead,
             pull_pending: sync.behind,
             has_conflicts: !conflicts.is_empty(),
@@ -584,91 +589,23 @@ async fn project_status(
     })?
 }
 
-/// 変更ファイル一覧を取得。
+/// 変更ファイル一覧を取得（読み取りのみ。解析は core-ops）。
 #[tauri::command]
 #[specta::specta]
 async fn list_changes(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<Vec<ChangeFile>, AppError> {
-    let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let store_guard = store.lock().map_err(|e| AppError {
-            code: "change_list_failed".to_string(),
-            params: Vec::new(),
-            what_happened: "変更一覧取得に失敗しました".to_string(),
-            data_is_safe: "ファイルは安全です".to_string(),
-            next_action: "もう一度試してください".to_string(),
-            technical_info: Some(e.to_string()),
-        })?;
-
-        let project = store_guard.get_project(&id).map_err(|e| AppError {
-            code: "project_not_found".to_string(),
-            params: Vec::new(),
-            what_happened: "プロジェクトが見つかりません".to_string(),
-            data_is_safe: "何も変更されていません".to_string(),
-            next_action: "プロジェクト一覧から確認してください".to_string(),
-            technical_info: Some(format!("{:?}", e)),
-        })?;
-
-        drop(store_guard);
-
-        let runner = crate::git_runner();
-
-        let out = runner
-            .run_ok(
-                &project.path,
-                &["status", "--porcelain=v2", "-z", "--branch"],
-            )
-            .map_err(|e| AppError {
-                code: "change_list_failed".to_string(),
-                params: Vec::new(),
-                what_happened: "変更一覧の取得に失敗しました".to_string(),
-                data_is_safe: "ファイルは安全です".to_string(),
-                next_action: "もう一度試してください".to_string(),
-                technical_info: Some(format!("{:?}", e)),
-            })?;
-
-        let output = String::from_utf8_lossy(&out.stdout);
-        let mut changes = Vec::new();
-
-        for line in output.lines() {
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 2 {
-                continue;
-            }
-
-            let status = parts[1];
-            let kind = match status {
-                "M" => ChangeKind::Modified,
-                "A" => ChangeKind::Added,
-                "D" => ChangeKind::Deleted,
-                "R" => ChangeKind::Renamed,
-                _ => continue,
-            };
-
-            if let Some(last_part) = parts.last() {
-                changes.push(ChangeFile {
-                    path: last_part.to_string(),
-                    kind,
-                });
-            }
-        }
-
-        Ok(changes)
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(crate::git_runner());
+        let changes = ops
+            .list_changes(&project.path)
+            .map_err(AppError::from_ops_error)?;
+        Ok(changes.into_iter().map(ChangeFile::from).collect())
     })
     .await
-    .map_err(|e| AppError {
-        code: "task_failed".to_string(),
-        params: Vec::new(),
-        what_happened: "タスク実行に失敗しました".to_string(),
-        data_is_safe: "ファイルは安全です".to_string(),
-        next_action: "もう一度試してください".to_string(),
-        technical_info: Some(e.to_string()),
-    })?
 }
 
 /// 保存（commit）を実行。
@@ -1795,6 +1732,23 @@ pub struct ProjectInfo {
 pub struct ChangeFile {
     pub path: String,
     pub kind: ChangeKind,
+    /// 変更のぶつかり中のファイルか
+    pub conflicted: bool,
+}
+
+impl From<core_ops::ChangedFile> for ChangeFile {
+    fn from(file: core_ops::ChangedFile) -> Self {
+        ChangeFile {
+            path: file.path,
+            kind: match file.kind {
+                core_ops::ChangedKind::Added => ChangeKind::Added,
+                core_ops::ChangedKind::Modified => ChangeKind::Modified,
+                core_ops::ChangedKind::Deleted => ChangeKind::Deleted,
+                core_ops::ChangedKind::Renamed => ChangeKind::Renamed,
+            },
+            conflicted: file.conflicted,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]

@@ -593,59 +593,89 @@ pub(crate) fn diff_with(
     to: &str,
     path: Option<&str>,
 ) -> Result<Vec<DiffLine>, OpsError> {
-    let mut cmd = vec!["diff", "-U3", from, to];
+    // 先頭が `-` の値はオプションとして解釈されるため受け付けない
+    if [from, to]
+        .iter()
+        .any(|r| r.is_empty() || r.starts_with('-'))
+    {
+        return Err(OpsError::Unexpected("invalid commit".to_string()));
+    }
+    // 画面は「いま」の作業フォルダを `current` で指す。その場合は作業フォルダとの差分を取る
+    let mut cmd = vec!["diff", "--unified=3", from];
+    if to != "current" {
+        cmd.push(to);
+    }
     if let Some(p) = path {
         cmd.push("--");
         cmd.push(p);
     }
 
     let out = runner.run_ok(repo, &cmd)?;
-    let diff_output = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_unified_diff(&String::from_utf8_lossy(&out.stdout)))
+}
 
-    // 簡易的な diff 解析（本来は proper な parser が必要）
+/// unified diff の本文を行ごとの差分に変換する。
+/// ファイルの見出し（`diff --git` から最初の `@@` まで）は読み飛ばし、`@@` の後は先頭 1 文字で
+/// 種別を決める（内容が `--` や `++` で始まる行も取りこぼさない）。行番号は `@@` の値から振る。
+pub(crate) fn parse_unified_diff(text: &str) -> Vec<DiffLine> {
     let mut lines = Vec::new();
-    let mut line_num_old = 0;
-    let mut line_num_new = 0;
+    let mut in_hunk = false;
+    let mut old_no: u32 = 0;
+    let mut new_no: u32 = 0;
 
-    for line in diff_output.lines() {
-        if line.starts_with("@@") {
-            // ハンク開始行
+    for line in text.lines() {
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+            continue;
+        }
+        if let Some(header) = line.strip_prefix("@@ ") {
+            // "-<旧開始>[,<行数>] +<新開始>[,<行数>] @@ ..."
+            let mut it = header.split(' ');
+            let start = |s: Option<&str>, sign: char| {
+                s.and_then(|v| v.strip_prefix(sign))
+                    .and_then(|v| v.split(',').next())
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(1)
+            };
+            old_no = start(it.next(), '-');
+            new_no = start(it.next(), '+');
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
             continue;
         }
 
-        if let Some(content) = line.strip_prefix("-") {
-            if !line.starts_with("---") {
-                lines.push(DiffLine {
-                    kind: DiffLineKind::Removed,
-                    line_number_old: Some(line_num_old),
-                    line_number_new: None,
-                    content: content.to_string(),
-                });
-                line_num_old += 1;
-            }
-        } else if let Some(content) = line.strip_prefix("+") {
-            if !line.starts_with("+++") {
-                lines.push(DiffLine {
-                    kind: DiffLineKind::Added,
-                    line_number_old: None,
-                    line_number_new: Some(line_num_new),
-                    content: content.to_string(),
-                });
-                line_num_new += 1;
-            }
-        } else if let Some(content) = line.strip_prefix(" ") {
+        if let Some(content) = line.strip_prefix('-') {
             lines.push(DiffLine {
-                kind: DiffLineKind::Context,
-                line_number_old: Some(line_num_old),
-                line_number_new: Some(line_num_new),
+                kind: DiffLineKind::Removed,
+                line_number_old: Some(old_no),
+                line_number_new: None,
                 content: content.to_string(),
             });
-            line_num_old += 1;
-            line_num_new += 1;
+            old_no += 1;
+        } else if let Some(content) = line.strip_prefix('+') {
+            lines.push(DiffLine {
+                kind: DiffLineKind::Added,
+                line_number_old: None,
+                line_number_new: Some(new_no),
+                content: content.to_string(),
+            });
+            new_no += 1;
+        } else if let Some(content) = line.strip_prefix(' ') {
+            lines.push(DiffLine {
+                kind: DiffLineKind::Context,
+                line_number_old: Some(old_no),
+                line_number_new: Some(new_no),
+                content: content.to_string(),
+            });
+            old_no += 1;
+            new_no += 1;
         }
+        // "\ No newline at end of file" などは行として扱わない
     }
 
-    Ok(lines)
+    lines
 }
 
 /// 元に戻す操作のプレビュー（影響ファイル一覧）。
@@ -654,41 +684,40 @@ pub(crate) fn restore_preview(
     repo: &Path,
     target_commit: &str,
 ) -> Result<RestorePreview, OpsError> {
-    // 現在の状態と target_commit の差分を取得
-    let diff_out = runner.run_ok(repo, &["diff", "--name-status", target_commit])?;
-    let diff_output = String::from_utf8_lossy(&diff_out.stdout);
+    // 先頭が `-` の値はオプションとして解釈されるため受け付けない
+    if target_commit.is_empty() || target_commit.starts_with('-') {
+        return Err(OpsError::Unexpected("invalid commit".to_string()));
+    }
+    // 現在の状態と target_commit の差分を取得。`-z` でパスを引用符なしの生の値で受け取る
+    // （日本語名・空白を含む名前も正しく扱える）。名前変更は削除と追加として扱う
+    let diff_out = runner.run_ok(
+        repo,
+        &["diff", "--name-status", "-z", "--no-renames", target_commit],
+    )?;
 
     let mut modified = Vec::new();
     let mut deleted = Vec::new();
     let mut created = Vec::new();
 
-    for line in diff_output.lines() {
-        let parts: Vec<&str> = line.splitn(2, '\t').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-
-        let status = parts[0];
-        let path = parts[1];
-
-        match status {
-            "M" => {
-                // 変更：サイズは 0 で固定（詳細は phase 2）
-                modified.push(RestoreFileChange {
-                    path: path.to_string(),
-                    size_from: 0,
-                    size_to: 0,
-                });
-            }
-            "A" => {
-                // 追加（元に戻すと削除される）
-                deleted.push(path.to_string());
-            }
-            "D" => {
-                // 削除（元に戻すと復活する）
-                created.push(path.to_string());
-            }
-            _ => {} // R, C などは簡略化のため無視
+    // `<状態>\0<パス>\0` の繰り返し
+    let mut tokens = diff_out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|t| !t.is_empty())
+        .map(|t| String::from_utf8_lossy(t).into_owned());
+    while let (Some(status), Some(path)) = (tokens.next(), tokens.next()) {
+        match status.as_str() {
+            // 変更：サイズは 0 で固定（詳細は phase 2）
+            "M" | "T" => modified.push(RestoreFileChange {
+                path,
+                size_from: 0,
+                size_to: 0,
+            }),
+            // 追加（元に戻すと削除される）
+            "A" => deleted.push(path),
+            // 削除（元に戻すと復活する）
+            "D" => created.push(path),
+            _ => {}
         }
     }
 
