@@ -31,6 +31,8 @@ core-github = { workspace = true }
 core-preview = { workspace = true }
 core-llm = { workspace = true }
 core-store = { workspace = true, features = ["specta"] }
+# 新規ファイルの「元に戻す（作成しない）」でごみ箱へ移す。バージョンは固定する
+trash = "=5.2.9"
 
 [[bin]]
 name = "hikae"

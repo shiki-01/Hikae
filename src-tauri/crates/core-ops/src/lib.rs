@@ -4,15 +4,18 @@ mod add_files;
 mod auto_snapshot;
 mod changes;
 mod clone_dest;
+mod discard_new_file;
 mod file_in_use;
 mod history;
 mod identity;
 mod memo;
 mod models;
+mod new_file_diff;
 mod open_path;
 mod operations;
 mod pc_name;
 mod preview_file;
+mod project_tree;
 mod recover;
 mod relocate;
 mod remote;
@@ -23,18 +26,22 @@ pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
 pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
+pub use discard_new_file::{DiscardedNewFile, Trasher};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
     new_restore_points, AddFilesOutcome, AddRejectReason, AddedFile, Choice, ConflictFile,
-    ConflictKind, DiffLine, DiffLineKind, FileInHistory, HistoryEntry, HistoryKind, Identity,
-    Labels, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile, RelocateCheck,
-    ResolveOutcome, RestoreFileChange, RestoreFileKind, RestoreFileOutcome, RestoreFilePreview,
-    RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UnsavedPolicy, UploadOutcome,
+    ConflictKind, DiffLine, DiffLineKind, DiscardRefusal, FileInHistory, HistoryEntry, HistoryKind,
+    Identity, Labels, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile,
+    RelocateCheck, ResolveOutcome, RestoreFileChange, RestoreFileKind, RestoreFileOutcome,
+    RestoreFilePreview, RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UnsavedPolicy,
+    UploadOutcome,
 };
+pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};
 pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
 pub use preview_file::{cleanup_old_previews, PREVIEW_MAX_AGE};
+pub use project_tree::{ProjectTree, ProjectTreeEntry, PROJECT_TREE_MAX_ENTRIES};
 pub use recover::is_recoverable_operation;
 pub use remote::{
     project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
@@ -308,6 +315,48 @@ impl Ops {
         path: Option<&str>,
     ) -> Result<Vec<DiffLine>, OpsError> {
         operations::diff_with(self.runner(), repo, from, to, path)
+    }
+
+    /// `diff_with` に、新規（未追跡）ファイルの扱いを加えた版。`to` が `current` で `path` が
+    /// 新規ファイルのときは、`git diff` ではなく作業フォルダのファイルを読み、全行を追加の
+    /// 差分行として返す。バイナリ・大きすぎるものは本文を返さずサイズと更新日時だけにする。
+    pub fn diff_file(
+        &self,
+        repo: &Path,
+        from: &str,
+        to: &str,
+        path: Option<&str>,
+    ) -> Result<FileDiffOutcome, OpsError> {
+        new_file_diff::diff_file(self.runner(), repo, from, to, path)
+    }
+
+    /// プロジェクトフォルダ全体のファイル一覧（保存対象のみ。`.git` と保存対象外は除く）。
+    /// 変更のあるファイルには種類が付く。`max_entries` を超えたら打ち切る（変更のあるファイルは先に含める）。
+    /// 読み取りのみ。
+    pub fn project_tree(&self, repo: &Path, max_entries: usize) -> Result<ProjectTree, OpsError> {
+        project_tree::list_project_tree(self.runner(), repo, max_entries)
+    }
+
+    /// 新規（未追跡）ファイル 1 件を、作成する前の状態に戻す（OS のごみ箱へ移す）。
+    /// 復元点（自動保存）にファイルの内容が入っていることを確かめてから、`trasher` でごみ箱へ移す。
+    /// 大きすぎて復元点に入らないファイル、追跡済みのファイル、フォルダ・リンクは拒否する（何も削除しない）。
+    /// 戻り値の `undo_ref` は `undo_restore` に渡せる。
+    pub fn discard_new_file(
+        &self,
+        repo: &Path,
+        path: &str,
+        limits: SizeLimits,
+        trasher: &dyn Trasher,
+    ) -> Result<DiscardedNewFile, OpsError> {
+        discard_new_file::discard_new_file(
+            self.runner(),
+            repo,
+            path,
+            limits,
+            trasher,
+            self.now(),
+            self.meta(),
+        )
     }
 
     /// 元に戻す操作のプレビュー（影響ファイル一覧）。

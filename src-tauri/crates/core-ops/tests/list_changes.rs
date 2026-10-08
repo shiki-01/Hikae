@@ -234,3 +234,23 @@ fn files_in_conflict_are_marked() -> TestResult {
     assert_eq!(plain.kind, ChangedKind::Added);
     Ok(())
 }
+
+#[test]
+fn only_files_never_saved_or_staged_are_marked_untracked() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let repo = new_repo(tmp.path())?;
+    write_test_file(&repo, "saved.txt", "v1")?;
+    save_all(&repo, "first")?;
+    write_test_file(&repo, "saved.txt", "v2")?;
+    write_test_file(&repo, "新規.txt", "new")?;
+    write_test_file(&repo, "staged.txt", "s")?;
+    run_git(&repo, &["add", "staged.txt"]);
+
+    let changes = ops().list_changes(&repo)?;
+    let untracked = |path: &str| changes.iter().find(|c| c.path == path).map(|c| c.untracked);
+    assert_eq!(untracked("新規.txt"), Some(true));
+    assert_eq!(untracked("saved.txt"), Some(false));
+    // インデックスに登録済みのファイルは、未追跡ではない
+    assert_eq!(untracked("staged.txt"), Some(false));
+    Ok(())
+}

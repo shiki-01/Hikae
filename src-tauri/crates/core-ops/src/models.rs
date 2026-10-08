@@ -179,9 +179,32 @@ pub enum OpsError {
     #[error("restore point for the interrupted operation was not found")]
     RestorePointNotFound,
 
+    /// 新規ファイルを「作成しない」状態に戻せなかった（何も削除していない）
+    #[error("new file cannot be discarded: {reason:?}")]
+    DiscardRefused {
+        reason: DiscardRefusal,
+        /// 対象のファイル名（パスは含めない）
+        file: String,
+    },
+
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
     Unexpected(String),
+}
+
+/// 新規ファイルを「作成しない」状態に戻せない理由（設計書 4.2、5.1）。どれも何も削除していない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscardRefusal {
+    /// すでに保存の対象（追跡済み、またはインデックスに入っている）か、保存対象外のファイル
+    NotUntracked,
+    /// 通常のファイルではない（フォルダ・リンク）、または見つからない
+    NotAFile,
+    /// 復元点（自動保存）に含められない大きさ。復元できないため削除しない
+    TooLarge { size: u64 },
+    /// 復元点にファイルの内容が入っていることを確認できなかった
+    NotBackedUp,
+    /// ごみ箱へ移せなかった（ごみ箱が使えない環境を含む）
+    TrashFailed,
 }
 
 /// 履歴メモや別名コピーに使う文言。UI の言語リソースから呼び出し側が渡す。
@@ -369,7 +392,7 @@ pub enum RelocateCheck {
 }
 
 /// 差分の行
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
     pub line_number_old: Option<u32>,
@@ -440,6 +463,7 @@ impl OpsError {
             OpsError::Conflict(_) => "conflict",
             OpsError::InvalidInput(_) => "invalid-input",
             OpsError::RestorePointNotFound => "restore-point-not-found",
+            OpsError::DiscardRefused { .. } => "discard-refused",
             OpsError::Unexpected(_) => "unexpected",
         }
     }

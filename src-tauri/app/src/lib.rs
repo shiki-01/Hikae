@@ -21,6 +21,7 @@ mod events;
 mod github;
 mod maintenance;
 mod ops_runner;
+mod os_trash;
 mod remote;
 mod scheduler;
 mod watch;
@@ -47,6 +48,10 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 /// - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
 ///   `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
 ///   `restore_point_not_found`、`unexpected`
+/// - 新規ファイルの「元に戻す（作成しない）」: `discard_not_untracked`（保存の対象になっている）、
+///   `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
+///   入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
+///   （ごみ箱へ移せない）。どれも params は `file`（ファイル名のみ）で、ファイルは削除していない
 /// - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
 /// - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
 ///   `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
@@ -165,6 +170,44 @@ impl AppError {
                 "選び直してからもう一度試してください".to_string(),
                 Some(msg),
             ),
+            // 新規ファイルの「元に戻す（作成しない）」を断った（どれもファイルは削除していない）
+            OpsError::DiscardRefused { reason, file } => {
+                params.push(("file".to_string(), file.clone()));
+                let (code, what_happened, next_action) = match reason {
+                    core_ops::DiscardRefusal::NotUntracked => (
+                        "discard_not_untracked",
+                        format!("「{file}」はすでに保存の対象になっているため、作成する前の状態には戻せません"),
+                        "以前の版に戻したいときは、履歴の「この版に戻す」を使ってください",
+                    ),
+                    core_ops::DiscardRefusal::NotAFile => (
+                        "discard_not_a_file",
+                        format!("「{file}」は見つからないか、通常のファイルではないため、元に戻せません"),
+                        "通常のファイルを選んでください",
+                    ),
+                    core_ops::DiscardRefusal::TooLarge { .. } => (
+                        "discard_file_too_large",
+                        format!("「{file}」は大きいファイルのため、元に戻せません"),
+                        "そのまま残すか、保存するときに「保存対象から外す」を選んでください",
+                    ),
+                    core_ops::DiscardRefusal::NotBackedUp => (
+                        "discard_not_backed_up",
+                        format!("「{file}」の控えを残せなかったため、元に戻せません"),
+                        "もう一度お試しください",
+                    ),
+                    core_ops::DiscardRefusal::TrashFailed => (
+                        "trash_failed",
+                        format!("「{file}」をごみ箱へ移せなかったため、元に戻せません"),
+                        "ファイルを開いているアプリを閉じるか、ごみ箱が使えるか確認してください",
+                    ),
+                };
+                (
+                    code,
+                    what_happened,
+                    "ファイルは削除されていません。".to_string(),
+                    next_action.to_string(),
+                    Some(format!("{reason:?}")),
+                )
+            }
             OpsError::RestorePointNotFound => (
                 "restore_point_not_found",
                 "中断された操作の前の状態が見つかりませんでした".to_string(),
@@ -1139,7 +1182,7 @@ async fn diff(
     from: String,
     to: String,
     path: Option<String>,
-) -> Result<Vec<DiffLine>, AppError> {
+) -> Result<DiffResult, AppError> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
@@ -1165,21 +1208,12 @@ async fn diff(
         let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
-        let lines = ops
-            .diff_with(&project.path, &from, &to, path.as_deref())
+        // 「いま」と比べるときに対象が新規（未追跡）ファイルなら、作業フォルダのファイルを読んで
+        // 全行を追加として返す（`git diff` は未追跡ファイルを出力しないため）
+        let outcome = ops
+            .diff_file(&project.path, &from, &to, path.as_deref())
             .map_err(AppError::from_ops_error)?;
-
-        Ok(lines
-            .into_iter()
-            .map(|l| DiffLine {
-                kind: match l.kind {
-                    core_ops::DiffLineKind::Added => DiffLineKind::Added,
-                    core_ops::DiffLineKind::Removed => DiffLineKind::Removed,
-                    core_ops::DiffLineKind::Context => DiffLineKind::Context,
-                },
-                content: l.content,
-            })
-            .collect())
+        Ok(DiffResult::from(outcome))
     })
     .await
     .map_err(|e| AppError {
@@ -1479,6 +1513,68 @@ async fn undo_restore(
     )
     .await?;
     Ok(())
+}
+
+/// 新規（未追跡）ファイル 1 件を「元に戻す（作成しない）」。ファイルは OS のごみ箱へ移す。
+///
+/// 安全上の不変条件 6 の唯一の例外。復元点（自動保存）にファイルの内容が入っていることを確かめて
+/// から移し、大きすぎて復元点に入らないファイル・追跡済みのファイル・フォルダ・リンク・プロジェクト外は
+/// 拒否する（core-ops の `discard_new_file`）。直列キュー（不変条件 7）とジャーナルを通す。
+/// 戻り値の `undo_token` は `undo_restore` に渡すと、この操作の前の状態に戻せる。
+#[tauri::command]
+#[specta::specta]
+async fn discard_new_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<DiscardNewFileResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    // 復元点に入らない大きさ（自動保存から除外される大きさ）の判断は、保存前の検査と同じ閾値を使う
+    let limits = size_limits_for(&ctx.store, &id);
+    // ジャーナルには対象のパスだけを残す（ファイルの内容は記録しない）
+    let target = path.clone();
+    let done = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "discard-new-file",
+            trigger: OpTrigger::Manual,
+            target: Some(target),
+            data_is_safe: "ファイルは削除されていません",
+        },
+        move |ops, project_path| {
+            ops.discard_new_file(project_path, &path, limits, &os_trash::OsTrash)
+        },
+        |_| OpSummary {
+            detail: "discarded".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(DiscardNewFileResult {
+        undo_token: done.undo_ref,
+    })
+}
+
+/// プロジェクトフォルダ全体のファイル一覧（保存対象のみ。読み取りのみのため直列キューは通さない）。
+/// 上限（1 万件）を超えたら打ち切り、`truncated` を立てる。
+#[tauri::command]
+#[specta::specta]
+async fn list_project_tree(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<ProjectTreeData, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(crate::git_runner());
+        let tree = ops
+            .project_tree(&project.path, core_ops::PROJECT_TREE_MAX_ENTRIES)
+            .map_err(AppError::from_ops_error)?;
+        Ok(ProjectTreeData::from(tree))
+    })
+    .await
 }
 
 /// 変更のぶつかり解消を中断し、取り込む前の状態に戻す。
@@ -1881,6 +1977,9 @@ pub struct ChangeFile {
     pub kind: ChangeKind,
     /// 変更のぶつかり中のファイルか
     pub conflicted: bool,
+    /// 一度も保存されておらず、インデックスにも入っていない新規ファイルか。
+    /// 「元に戻す（作成しない）」を出せるのはこのファイルだけ
+    pub untracked: bool,
 }
 
 impl From<core_ops::ChangedFile> for ChangeFile {
@@ -1894,6 +1993,7 @@ impl From<core_ops::ChangedFile> for ChangeFile {
                 core_ops::ChangedKind::Renamed => ChangeKind::Renamed,
             },
             conflicted: file.conflicted,
+            untracked: file.untracked,
         }
     }
 }
@@ -1996,6 +2096,136 @@ pub enum DiffLineKind {
     Removed,
     #[serde(rename = "context")]
     Context,
+}
+
+/// 差分の取得結果の種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffResultKind {
+    /// 差分の行（`lines`）。新規ファイルは全行が追加。空なら差分なし
+    Lines,
+    /// 内容が空の新規ファイル
+    NewFileEmpty,
+    /// 本文を出せない新規ファイル（バイナリ・リンク）。`size` と `modified_at` だけを持つ
+    Binary,
+    /// 大きすぎて本文を省略した新規ファイル。`size` と `modified_at` だけを持つ
+    TooLarge,
+}
+
+/// 差分の取得結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct DiffResult {
+    pub kind: DiffResultKind,
+    /// 差分の行。`kind` が `lines` のときだけ入る
+    pub lines: Vec<DiffLine>,
+    /// ファイルサイズ（バイト）。`binary` と `too-large` のときだけ入る
+    pub size: Option<f64>,
+    /// 最終更新（Unix 秒）。`binary` と `too-large` のとき、取得できれば入る
+    pub modified_at: Option<f64>,
+}
+
+impl From<core_ops::FileDiffOutcome> for DiffResult {
+    fn from(outcome: core_ops::FileDiffOutcome) -> Self {
+        use core_ops::FileDiffOutcome as O;
+        let lines = |lines: Vec<core_ops::DiffLine>| -> Vec<DiffLine> {
+            lines
+                .into_iter()
+                .map(|l| DiffLine {
+                    kind: match l.kind {
+                        core_ops::DiffLineKind::Added => DiffLineKind::Added,
+                        core_ops::DiffLineKind::Removed => DiffLineKind::Removed,
+                        core_ops::DiffLineKind::Context => DiffLineKind::Context,
+                    },
+                    content: l.content,
+                })
+                .collect()
+        };
+        let info = |kind, size: u64, modified: Option<i64>| DiffResult {
+            kind,
+            lines: Vec::new(),
+            size: Some(size as f64),
+            modified_at: modified.map(|m| m as f64),
+        };
+        match outcome {
+            O::Lines(l) | O::NewFileLines(l) => DiffResult {
+                kind: DiffResultKind::Lines,
+                lines: lines(l),
+                size: None,
+                modified_at: None,
+            },
+            O::NewFileEmpty => DiffResult {
+                kind: DiffResultKind::NewFileEmpty,
+                lines: Vec::new(),
+                size: None,
+                modified_at: None,
+            },
+            O::NewFileBinary {
+                size,
+                modified_unix,
+            } => info(DiffResultKind::Binary, size, modified_unix),
+            O::NewFileTooLarge {
+                size,
+                modified_unix,
+            } => info(DiffResultKind::TooLarge, size, modified_unix),
+        }
+    }
+}
+
+/// 新規ファイルを「元に戻す（作成しない）」結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct DiscardNewFileResult {
+    /// 取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）
+    pub undo_token: Option<String>,
+}
+
+/// プロジェクトフォルダ内のファイル 1 件
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct ProjectFileItem {
+    /// プロジェクト内の相対パス（`/` 区切り）
+    pub path: String,
+    /// ファイルサイズ（バイト）。作業フォルダに無い（削除された）ときは null
+    pub size: Option<f64>,
+    /// 最終更新（Unix 秒）。取得できなければ null
+    pub modified_at: Option<f64>,
+    /// 未保存の変更の種類。変更が無ければ null
+    pub change: Option<ChangeKind>,
+    /// 変更のぶつかり中のファイルか
+    pub conflicted: bool,
+}
+
+/// プロジェクトフォルダ全体のファイル一覧
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct ProjectTreeData {
+    pub entries: Vec<ProjectFileItem>,
+    /// 上限を超えたため、一部のみを含む
+    pub truncated: bool,
+    /// 一覧に含めるファイル数の上限
+    pub limit: u32,
+}
+
+impl From<core_ops::ProjectTree> for ProjectTreeData {
+    fn from(tree: core_ops::ProjectTree) -> Self {
+        ProjectTreeData {
+            entries: tree
+                .entries
+                .into_iter()
+                .map(|e| ProjectFileItem {
+                    path: e.path,
+                    size: e.size.map(|s| s as f64),
+                    modified_at: e.modified_unix.map(|m| m as f64),
+                    change: e.change.map(|kind| match kind {
+                        core_ops::ChangedKind::Added => ChangeKind::Added,
+                        core_ops::ChangedKind::Modified => ChangeKind::Modified,
+                        core_ops::ChangedKind::Deleted => ChangeKind::Deleted,
+                        core_ops::ChangedKind::Renamed => ChangeKind::Renamed,
+                    }),
+                    conflicted: e.conflicted,
+                })
+                .collect(),
+            truncated: tree.truncated,
+            limit: u32::try_from(core_ops::PROJECT_TREE_MAX_ENTRIES).unwrap_or(u32::MAX),
+        }
+    }
 }
 
 /// 元に戻すプレビュー
@@ -2207,6 +2437,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             restore_file_preview,
             restore_file,
             undo_restore,
+            discard_new_file,
+            list_project_tree,
             abort_merge,
             add_files,
             relocate_project,

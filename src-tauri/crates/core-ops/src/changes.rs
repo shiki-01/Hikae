@@ -25,6 +25,9 @@ pub struct ChangedFile {
     pub conflicted: bool,
     /// 名前変更の場合の元のパス
     pub original_path: Option<String>,
+    /// 一度も保存されておらず、インデックスにも入っていない新規ファイル（`git status` の `?`）。
+    /// 「元に戻す（作成しない）」の対象になれるのはこれだけ
+    pub untracked: bool,
 }
 
 /// 未保存の変更を 1 ファイルずつ列挙する。
@@ -73,6 +76,7 @@ pub(crate) fn list_changes(runner: &GitRunner, repo: &Path) -> Result<Vec<Change
                 kind,
                 conflicted,
                 original_path,
+                untracked: matches!(entry.kind, StatusKind::Untracked),
             })
         })
         .collect())

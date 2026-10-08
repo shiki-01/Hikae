@@ -54,6 +54,39 @@ pub fn resolve_in_project(root: &Path, relative: &str) -> Result<PathBuf, OpenPa
     Ok(target)
 }
 
+/// `root` 配下の `relative` が指す「エントリそのもの」の絶対パスを返す。最後の成分は解決しない。
+///
+/// `resolve_in_project` は最後の成分がシンボリックリンクだとリンク先まで解決する。新規ファイルの
+/// 差分表示や「元に戻す（作成しない）」は、リンクをたどらずリンクそのものを扱いたいため、
+/// 親フォルダだけを `canonicalize` してプロジェクトの配下であることを確認し、最後の成分は
+/// そのまま結合して返す（リンクかどうかは呼び出し側が `symlink_metadata` で調べる）。
+pub(crate) fn resolve_entry_in_project(
+    root: &Path,
+    relative: &str,
+) -> Result<PathBuf, OpenPathError> {
+    validate_relative(relative)?;
+
+    let root_real = root
+        .canonicalize()
+        .map_err(OpenPathError::RootUnavailable)?;
+    let joined = root_real.join(relative);
+    let (Some(parent), Some(name)) = (joined.parent(), joined.file_name()) else {
+        return Err(OpenPathError::Invalid);
+    };
+    let parent_real = parent.canonicalize().map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            OpenPathError::NotFound
+        } else {
+            OpenPathError::Io(e)
+        }
+    })?;
+    // 親がルート自身（プロジェクト直下のファイル）か、ルートの配下であること
+    if !parent_real.starts_with(&root_real) {
+        return Err(OpenPathError::Outside);
+    }
+    Ok(parent_real.join(name))
+}
+
 /// 字句検査のみ行う（実体は見ない）。まだ存在しないパスの入力検査にも使う。
 pub(crate) fn validate_relative(relative: &str) -> Result<(), OpenPathError> {
     if relative.is_empty() || relative.contains('\0') {
