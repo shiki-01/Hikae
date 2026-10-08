@@ -43,6 +43,7 @@
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
 	import { liveStateOf } from './live.svelte.js';
+	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import InterruptedDialog from './InterruptedDialog.svelte';
 	import SyncSizeDialog from './SyncSizeDialog.svelte';
 	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
@@ -90,6 +91,7 @@
 	// 大きいファイルの確認待ち。保存のやり直しに同じメモを使うため、メモも持つ
 	let sizeRequest = $state<{ memo: string; check: SizeCheck } | null>(null);
 	let interruptedOpen = $state(false);
+	let connectOpen = $state(false);
 	// 大きいファイルのため、取り込み・アップロードを見送った内容
 	let syncSize = $state<SyncSizeRequest | null>(null);
 
@@ -322,6 +324,7 @@
 		{attention}
 		{interrupted}
 		{largeFiles}
+		notConnected={project.data !== undefined && !project.data.remoteConnected}
 		isOnline={network.online && live.sync !== 'offline'}
 		unsavedCount={changesQuery.data ? changes.length : (project.data?.unsavedCount ?? 0)}
 		uploadPendingCount={project.data?.uploadPendingCount ?? 0}
@@ -335,6 +338,7 @@
 		onreview={() => (conflictOpen = true)}
 		oninterrupted={() => (interruptedOpen = true)}
 		onlargefiles={() => fetchMutation.mutate()}
+		onconnect={() => (connectOpen = true)}
 	/>
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
@@ -485,6 +489,13 @@
 	recovering={recover.isPending}
 	onrecover={() => recover.mutate()}
 	onclose={() => (interruptedOpen = false)}
+/>
+
+<ConnectRemoteDialog
+	open={connectOpen}
+	{projectId}
+	projectName={project.data?.name ?? ''}
+	onclose={() => (connectOpen = false)}
 />
 
 <SyncSizeDialog request={syncSize} onclose={() => (syncSize = null)} />

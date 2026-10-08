@@ -20,3 +20,8 @@ export function cardStatus(project: Project): CardStatus {
 export function needsAttention(project: Project): boolean {
 	return project.folderMissing || project.hasConflict || project.interruptedOperation !== null;
 }
+
+/** GitHub に接続していないプロジェクトか（フォルダが見つからないものは、先にフォルダの対応が必要なので除く） */
+export function needsConnection(project: Project): boolean {
+	return !project.remoteConnected && !project.folderMissing;
+}

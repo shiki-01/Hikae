@@ -70,6 +70,8 @@ const messages = {
 	'header.status_interrupted_review': '確認する',
 	'header.status_large_files': '大きいファイルがあるため、取り込みを見送りました',
 	'header.status_large_files_review': '確認する',
+	'header.status_not_connected': 'GitHub に接続していません',
+	'header.connect': '接続する',
 
 	'tabs.label': '表示の切り替え',
 	'tabs.changes': '変更',
@@ -292,6 +294,9 @@ const messages = {
 	'add_project.visibility_private_hint': 'あなたと招待した人だけが見られます。',
 	'add_project.visibility_warning':
 		'公開すると、インターネット上の誰でもこのプロジェクトの内容を見られます。パスワードや個人情報を含むファイルがないか確認してください。',
+	'add_project.visibility_confirm': '誰でも内容を見られることを確認しました',
+	'add_project.local_only_hint':
+		'GitHub にログインしていないため、この PC だけに登録します。ログインすると、あとから GitHub に接続できます。',
 	'add_project.github_search': 'プロジェクトを検索',
 	'add_project.github_search_placeholder': 'プロジェクト名で絞り込み',
 	'add_project.github_empty': '該当するプロジェクトがありません',
@@ -310,12 +315,22 @@ const messages = {
 	'add_project.error_name': 'プロジェクト名を入力してください',
 	'add_project.error_name_chars': '名前に使えない文字が含まれています',
 	'add_project.error_owner': '保存先を選んでください',
+	'add_project.error_public_confirm': '公開する場合は、確認にチェックを入れてください',
 	'add_project.back': '戻る',
 	'add_project.cancel': 'キャンセル',
 	'add_project.button': '追加',
 
+	'connect.title': '「{name}」を GitHub に接続',
+	'connect.description': 'ファイルの控えを GitHub に置き、別の PC からも取り込めるようにします。',
+	'connect.need_login':
+		'GitHub にログインしていません。ログインしてから、もう一度接続してください。',
+	'connect.name': 'GitHub 上の名前',
+	'connect.name_hint': '省略すると、プロジェクト名から自動で決めます。英数字と - _ . が使えます。',
+	'connect.name_placeholder': '例: thesis-2026',
+
 	'project_card.last_saved': '最終保存 {when}',
 	'project_card.never_saved': 'まだ保存していません',
+	'project_card.not_connected': 'GitHub に接続していません',
 
 	'badge.saved': 'すべて保存済み',
 	'badge.unsaved': '未保存 {count} 件',
@@ -657,6 +672,9 @@ const messages = {
 	'toast.undo': '取り消す',
 	'toast.saved': '保存しました',
 	'toast.pushed': 'アップロードしました',
+	'toast.connected': 'GitHub に接続しました',
+	'toast.first_save_skipped':
+		'大きいファイルがあるため、最初の保存は見送りました。変更の一覧から保存してください',
 	'toast.fetched': '別の PC の変更を {count} 件取り込みました',
 	'toast.fetch_none': '取り込む変更はありませんでした',
 	'toast.files_added': 'ファイルを {count} 件追加しました',
@@ -681,6 +699,7 @@ const messages = {
 	'mock.project.thesis': '卒業論文',
 	'mock.project.materials': '素材集',
 	'mock.project.album': '写真アルバム',
+	'mock.project.local_notes': '下書きメモ',
 	'mock.file.chapter3': '第3章.docx',
 	'mock.file.fig4': '図4.png',
 	'mock.file.old_draft': '古い案.txt',

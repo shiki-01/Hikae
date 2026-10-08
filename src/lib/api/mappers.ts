@@ -18,6 +18,7 @@ import type {
 	ProjectInfo,
 	PullResult,
 	PushResult as BackendPushResult,
+	RemoteConnectResult,
 	RemoteProjectList as BackendRemoteProjectList,
 	RestoreFilePreviewData,
 	RestoreFileResult,
@@ -50,6 +51,7 @@ import type {
 	PointFile,
 	Project,
 	PushResult,
+	RemoteOutcome,
 	RejectReason,
 	RemoteProjectList,
 	SaveOutcome,
@@ -147,7 +149,7 @@ export function mapSavePoint(item: HistoryItem): SavePoint {
 		createdAt: parseDate(item.timestamp) ?? new Date(0),
 		message: item.message,
 		kind: item.is_snapshot ? 'auto' : 'save',
-		cloudSynced: false,
+		cloudSynced: item.cloud_synced,
 		...(item.pc_name !== null ? { pcName: item.pc_name } : {})
 	};
 }
@@ -164,12 +166,13 @@ export function mapProject(
 		ownerName: info.owner,
 		ownerKind: 'personal',
 		lastSavedAt,
-		lastUploadedAt: null,
+		remoteConnected: info.remote_url !== null && info.remote_url !== '',
+		lastUploadedAt: info.last_uploaded_at === null ? null : parseDate(info.last_uploaded_at),
 		unsavedCount: status.unsaved_changes,
 		uploadPendingCount: status.upload_pending,
 		fetchPendingCount: status.pull_pending,
 		hasConflict: status.has_conflicts,
-		folderMissing: false,
+		folderMissing: info.folder_missing || status.folder_missing,
 		interruptedOperation: status.interrupted_operation
 	};
 }
@@ -390,4 +393,15 @@ export function toBackendPatch(patch: Partial<AppSettings>): SettingsPatch_Deser
 		if (value !== undefined) result[SETTING_BACKEND_KEYS[key]] = value;
 	}
 	return result as SettingsPatch_Deserialize;
+}
+
+/** 保存先の作成・接続の結果。途中で失敗した場合のエラーは、画面で 3 要素の文言として表示できる形にする */
+export function mapRemoteOutcome(result: RemoteConnectResult): RemoteOutcome {
+	return {
+		repository: result.repository,
+		connected: result.connected,
+		uploaded: result.uploaded,
+		sizeCheck: mapSizeCheck(result.size_check),
+		error: result.error === null ? null : mapError(result.error)
+	};
 }

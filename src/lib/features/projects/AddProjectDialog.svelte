@@ -1,15 +1,13 @@
 <script lang="ts">
-	import { AlertTriangle, CloudDownload, FolderOpen, FolderPlus } from '@lucide/svelte';
+	import { CloudDownload, FolderOpen, FolderPlus } from '@lucide/svelte';
 	import type { Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import { api } from '#lib/api/index.js';
 	import type { AddProjectMode, ClonePhase, Project } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
-	import OwnerPicker from '#lib/components/OwnerPicker.svelte';
 	import ProgressBar from '#lib/components/ProgressBar.svelte';
 	import Radio from '#lib/components/Radio.svelte';
-	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import TextField from '#lib/components/TextField.svelte';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
@@ -23,6 +21,7 @@
 	} from './add-project';
 	import { useAddProject } from './mutations';
 	import { useOwners, useRemoteProjects } from './queries';
+	import RemoteTargetFields from './RemoteTargetFields.svelte';
 
 	interface Props {
 		open: boolean;
@@ -36,6 +35,8 @@
 	const owners = useOwners();
 	const ownerList = $derived(owners.data ?? []);
 	const defaultOwner = $derived(ownerList.find((o) => o.canCreate)?.id ?? 'personal');
+	// 保存先を選べない（未ログインなど）ときは、ローカルだけに登録する
+	const cloudAvailable = $derived(!owners.isError);
 
 	let step = $state<'choose' | 'form'>('choose');
 	let form = $state<AddProjectForm>(emptyForm('existing', 'personal'));
@@ -66,7 +67,7 @@
 		form = emptyForm(initialMode ?? 'existing', defaultOwner);
 	});
 
-	const errors = $derived(submitted ? validateAddProject(form, ownerList) : {});
+	const errors = $derived(submitted ? validateAddProject(form, ownerList, cloudAvailable) : {});
 	const remoteList = $derived(remote.data?.projects ?? []);
 	const pickedRemote = $derived(remoteList.find((r) => r.id === form.remoteId));
 	const cloneTarget = $derived(
@@ -130,7 +131,7 @@
 
 	function submit() {
 		submitted = true;
-		if (!canSubmit(form, ownerList)) return;
+		if (!canSubmit(form, ownerList, cloudAvailable)) return;
 		const picked = pickedRemote;
 		clonePhase = null;
 		add.mutate({
@@ -139,6 +140,8 @@
 			folder: form.folder,
 			ownerId: form.mode === 'github' ? (picked?.ownerId ?? form.ownerId) : form.ownerId,
 			visibility: form.visibility,
+			publicConfirmed: form.visibility === 'public' && form.publicConfirmed,
+			connectCloud: cloudAvailable && form.mode !== 'github',
 			remoteId: form.remoteId ?? undefined
 		});
 	}
@@ -285,49 +288,19 @@
 			{/if}
 
 			{#if form.mode !== 'github'}
-				<div class="flex flex-direction:column gap:2">
-					<span class="type-small font-weight:500" id="owner-label">{t('add_project.owner')}</span>
-					{#if owners.isPending}
-						<Skeleton class="h:48px" />
-					{:else}
-						<OwnerPicker
-							owners={ownerList}
-							bind:value={form.ownerId}
-							ariaLabel={t('add_project.owner')}
-						/>
-					{/if}
-					{#if errors.owner}
-						<p class="m:0 type-small fg:state-danger" role="alert">{t(errors.owner)}</p>
-					{/if}
-				</div>
-
-				<div class="flex flex-direction:column gap:2">
-					<span class="type-small font-weight:500">{t('add_project.visibility')}</span>
-					<SegmentedControl
-						bind:value={form.visibility}
-						ariaLabel={t('add_project.visibility')}
-						options={[
-							{ value: 'private', label: t('add_project.visibility_private') },
-							{ value: 'public', label: t('add_project.visibility_public') }
-						]}
-						class="align-self:flex-start"
+				{#if cloudAvailable}
+					<RemoteTargetFields
+						owners={ownerList}
+						loading={owners.isPending}
+						bind:ownerId={form.ownerId}
+						bind:visibility={form.visibility}
+						bind:publicConfirmed={form.publicConfirmed}
+						ownerError={errors.owner ? t(errors.owner) : undefined}
+						confirmError={errors.confirm ? t(errors.confirm) : undefined}
 					/>
-					{#if form.visibility === 'public'}
-						<p
-							class="m:0 flex align-items:start gap:2 p:3 r:md bg:bg-subtle b:1px|solid|state-unsaved type-body"
-							role="note"
-						>
-							<AlertTriangle
-								size={18}
-								class="fg:state-unsaved flex-shrink:0 mt:2px"
-								aria-hidden="true"
-							/>
-							{t('add_project.visibility_warning')}
-						</p>
-					{:else}
-						<p class="m:0 type-small fg:fg-muted">{t('add_project.visibility_private_hint')}</p>
-					{/if}
-				</div>
+				{:else}
+					<p class="m:0 type-small fg:fg-muted" role="note">{t('add_project.local_only_hint')}</p>
+				{/if}
 			{/if}
 		</form>
 	{/if}

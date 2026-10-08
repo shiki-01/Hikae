@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Project } from '#lib/api/types.js';
-import { cardStatus, needsAttention } from './project-card';
+import { cardStatus, needsAttention, needsConnection } from './project-card';
 import { sortProjects } from '#lib/features/projects/sort.js';
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -11,6 +11,7 @@ function project(overrides: Partial<Project> = {}): Project {
 		ownerName: 'me',
 		ownerKind: 'personal',
 		lastSavedAt: new Date('2026-10-01T00:00:00Z'),
+		remoteConnected: true,
 		lastUploadedAt: null,
 		unsavedCount: 0,
 		uploadPendingCount: 0,
@@ -66,5 +67,22 @@ describe('プロジェクト一覧の並び順', () => {
 			project({ id: 'never', lastSavedAt: null })
 		]);
 		expect(sorted.map((p) => p.id)).toEqual(['conflict', 'new', 'old', 'never']);
+	});
+});
+
+describe('GitHub への接続の案内', () => {
+	it('接続していないプロジェクトに案内を出す', () => {
+		expect(needsConnection(project({ remoteConnected: false }))).toBe(true);
+		expect(needsConnection(project({ remoteConnected: true }))).toBe(false);
+	});
+
+	it('フォルダが見つからないときは、先にフォルダの対応が必要なので案内しない', () => {
+		expect(needsConnection(project({ remoteConnected: false, folderMissing: true }))).toBe(false);
+	});
+
+	it('接続していないだけでは要対応にしない（カードの状態も保存済みのまま）', () => {
+		const local = project({ remoteConnected: false });
+		expect(needsAttention(local)).toBe(false);
+		expect(cardStatus(local)).toBe('saved');
 	});
 });

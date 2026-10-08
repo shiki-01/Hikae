@@ -7,11 +7,13 @@ import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features
 import type {
 	AddFilesOutcome,
 	AddProjectInput,
+	AddProjectResult,
 	AppSettings,
 	Change,
 	ClonePhase,
 	ConflictFile,
 	ConflictResolution,
+	ConnectRemoteInput,
 	DeviceFlow,
 	DroppedFile,
 	FetchResult,
@@ -25,6 +27,7 @@ import type {
 	ProjectApi,
 	PushResult,
 	RemoteProject,
+	RemoteOutcome,
 	RemoteProjectList,
 	RestoreResult,
 	RestoreScope,
@@ -141,6 +144,7 @@ function createThesis(): ProjectState {
 			ownerName: 'shiki-01',
 			ownerKind: 'personal',
 			lastSavedAt: ago(HOUR),
+			remoteConnected: true,
 			lastUploadedAt: ago(DAY),
 			unsavedCount: 4,
 			uploadPendingCount: 1,
@@ -224,6 +228,7 @@ function createMaterials(): ProjectState {
 			ownerName: 'hikae-app',
 			ownerKind: 'org',
 			lastSavedAt: ago(2 * DAY),
+			remoteConnected: true,
 			lastUploadedAt: ago(5 * DAY),
 			unsavedCount: 0,
 			uploadPendingCount: 1,
@@ -261,6 +266,7 @@ function createAlbum(): ProjectState {
 			ownerName: 'shiki-01',
 			ownerKind: 'personal',
 			lastSavedAt: ago(9 * DAY),
+			remoteConnected: true,
 			lastUploadedAt: ago(9 * DAY),
 			unsavedCount: 0,
 			uploadPendingCount: 0,
@@ -280,8 +286,46 @@ function createAlbum(): ProjectState {
 	};
 }
 
+/** GitHub に接続していない、ローカルだけのプロジェクト（接続の流れを試すため） */
+function createLocalNotes(): ProjectState {
+	return {
+		project: {
+			id: 'proj4',
+			name: t('mock.project.local_notes'),
+			path: 'C:\\Users\\student\\Documents\\Notes',
+			ownerName: 'shiki-01',
+			ownerKind: 'personal',
+			lastSavedAt: ago(3 * HOUR),
+			remoteConnected: false,
+			lastUploadedAt: null,
+			unsavedCount: 0,
+			uploadPendingCount: 0,
+			fetchPendingCount: 0,
+			hasConflict: false,
+			folderMissing: false,
+			interruptedOperation: null
+		},
+		changes: [],
+		savePoints: [
+			{
+				id: 'n1',
+				createdAt: ago(3 * HOUR),
+				message: t('mock.memo.s5'),
+				kind: 'save',
+				cloudSynced: false
+			}
+		],
+		tiers: new Map([['n1', 3]]),
+		currentTier: 3,
+		conflicts: [],
+		conflictsOnNextFetch: false,
+		pushFailuresLeft: 0,
+		restoreFailuresLeft: 0
+	};
+}
+
 const states = new Map<string, ProjectState>();
-for (const state of [createThesis(), createMaterials(), createAlbum()]) {
+for (const state of [createThesis(), createMaterials(), createAlbum(), createLocalNotes()]) {
 	states.set(state.project.id, state);
 }
 const undoSnapshots = new Map<string, Snapshot>();
@@ -544,7 +588,7 @@ export const mockApi: ProjectApi = {
 	async addProject(
 		input: AddProjectInput,
 		onProgress?: (phase: ClonePhase) => void
-	): Promise<Project> {
+	): Promise<AddProjectResult> {
 		if (input.mode === 'github') {
 			for (const phase of ['preparing', 'downloading', 'finishing'] as const) {
 				onProgress?.(phase);
@@ -557,6 +601,7 @@ export const mockApi: ProjectApi = {
 		const id = nextId('proj');
 		const owners = await mockApi.listOwners();
 		const owner = owners.find((o) => o.id === input.ownerId) ?? owners[0];
+		const connected = input.mode === 'github' || input.connectCloud === true;
 		const project: Project = {
 			id,
 			name: input.name,
@@ -564,9 +609,10 @@ export const mockApi: ProjectApi = {
 			ownerName: owner.name,
 			ownerKind: owner.kind,
 			lastSavedAt: new Date(),
-			lastUploadedAt: input.mode === 'github' ? new Date() : null,
+			remoteConnected: connected,
+			lastUploadedAt: connected ? new Date() : null,
 			unsavedCount: 0,
-			uploadPendingCount: input.mode === 'github' ? 0 : 1,
+			uploadPendingCount: 0,
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
@@ -581,7 +627,7 @@ export const mockApi: ProjectApi = {
 					createdAt: new Date(),
 					message: t('mock.memo.s5'),
 					kind: 'save',
-					cloudSynced: input.mode === 'github'
+					cloudSynced: connected
 				}
 			],
 			tiers: new Map(),
@@ -591,7 +637,43 @@ export const mockApi: ProjectApi = {
 			pushFailuresLeft: 0,
 			restoreFailuresLeft: 0
 		});
-		return { ...project };
+		return {
+			project: { ...project },
+			remote:
+				input.mode !== 'github' && input.connectCloud === true
+					? {
+							repository: `${owner.id}/${input.name}`,
+							connected: true,
+							uploaded: true,
+							sizeCheck: null,
+							error: null
+						}
+					: null
+		};
+	},
+
+	async connectRemote(id: string, input: ConnectRemoteInput): Promise<RemoteOutcome> {
+		await sleep(WAIT_LONG);
+		const state = stateOf(id);
+		const owners = await mockApi.listOwners();
+		const owner = owners.find((o) => o.id === input.ownerId && o.canCreate);
+		if (!owner) throw new AppError('E02', 'owner cannot create');
+		if (input.visibility === 'public' && !input.publicConfirmed) {
+			throw new AppError('E02', 'public is not confirmed');
+		}
+		state.project.remoteConnected = true;
+		state.project.ownerName = owner.name;
+		state.project.ownerKind = owner.kind;
+		state.project.uploadPendingCount = 0;
+		state.project.lastUploadedAt = new Date();
+		state.savePoints = state.savePoints.map((s) => ({ ...s, cloudSynced: s.kind === 'save' }));
+		return {
+			repository: `${owner.id}/${input.name || state.project.name}`,
+			connected: true,
+			uploaded: true,
+			sizeCheck: null,
+			error: null
+		};
 	},
 
 	async removeProject(id: string): Promise<void> {

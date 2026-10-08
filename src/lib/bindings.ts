@@ -7,8 +7,27 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 export const commands = {
 	/**  プロジェクト一覧を取得。 */
 	listProjects: () => typedError<ProjectInfo[], AppError>(__TAURI_INVOKE("list_projects")),
-	/**  プロジェクトを追加（既存フォルダ登録・新規作成・GitHub から clone）。 */
-	addProject: (id: string, displayName: string, path: string, owner: string, remoteUrl: string | null) => typedError<null, AppError>(__TAURI_INVOKE("add_project", { id, displayName, path, owner, remoteUrl })),
+	/**
+	 *  プロジェクトを追加（既存フォルダ登録・新規作成）。GitHub から取得する場合は `clone_project`。
+	 * 
+	 *  `remote` を渡すと、ローカルの登録に続けて GitHub 上にリポジトリを作り、保存先として接続し、
+	 *  初回の保存（変更があれば）と初回のアップロードまで行う（設計書 4.6）。途中で失敗しても
+	 *  ローカルの登録は残る（保存先の無いプロジェクトとして使え、あとから `connect_remote` で接続できる）。
+	 *  その場合は `AddProjectResult.remote.error` に 3 要素のエラーが入る。
+	 */
+	addProject: (id: string, displayName: string, path: string, owner: string, remoteUrl: string | null, remote: {
+	/**  保存先（個人のログイン名、または Organization 名）。`list_owners` の `id` */
+	owner: string,
+	/**
+	 *  リポジトリ名。省略時はプロジェクト名から作る（英数字・`-`・`_`・`.` のみ。日本語の名前などは
+	 *  `hikae-<識別子>` にする）
+	 */
+	name: string | null,
+	/**  非公開にする（既定の選択肢） */
+	private: boolean,
+	/**  公開にすることの警告を確認した。`private` が false のとき、これが true でなければ拒否する */
+	public_confirmed: boolean,
+} | null) => typedError<AddProjectResult, AppError>(__TAURI_INVOKE("add_project", { id, displayName, path, owner, remoteUrl, remote })),
 	/**  プロジェクトを削除（登録のみ。フォルダは消さない）。 */
 	removeProject: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { id })),
 	/**  プロジェクトの状態を取得（未保存の変更、アップロード待ち、競合など）。 */
@@ -118,6 +137,14 @@ export const commands = {
 	 *  - 新しいフォルダを作るだけで既存のファイルを変更しないため、復元点は作らない
 	 */
 	cloneProject: (id: string, repo: string, path: string, displayName: string | null) => typedError<ProjectInfo, AppError>(__TAURI_INVOKE("clone_project", { id, repo, path, displayName })),
+	/**
+	 *  ローカルだけのプロジェクトを、GitHub 上の新しいリポジトリに接続する。
+	 * 
+	 *  新規作成のときと同じ流れだが、初回の保存は作らない（保存は利用者が行う）。すでにある保存は
+	 *  初回のアップロードで上がる。同名のリポジトリが GitHub にすでにある場合は `remote_name_taken`
+	 *  （何も作られず、ローカルも変更されない）。
+	 */
+	connectRemote: (id: string, request: RemoteRequest) => typedError<RemoteConnectResult, AppError>(__TAURI_INVOKE("connect_remote", { id, request })),
 	/**  設定を取得する。`project_id` を指定すると、そのプロジェクトの上書きを反映した設定を返す。 */
 	getSettings: (projectId: string | null) => typedError<SettingsView, AppError>(__TAURI_INVOKE("get_settings", { projectId })),
 	/**
@@ -144,6 +171,12 @@ export const events = {
 export type AddFilesResult = {
 	added: AddedFileItem[],
 	rejected: RejectedFileItem[],
+};
+
+/**  プロジェクト追加の結果 */
+export type AddProjectResult = {
+	/**  保存先の作成を頼まれたときだけ入る */
+	remote: RemoteConnectResult | null,
 };
 
 /**  追加しなかった理由 */
@@ -192,6 +225,10 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *    `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
  *    `keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、
  *    `github_error`
+ *  - 保存先の作成・接続: `remote_name_taken`（同名のリポジトリが既にある）、`remote_name_invalid`、
+ *    `remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、
+ *    `project_folder_missing`、`remote_connect_failed`（権限不足は `github_forbidden`（E02）、
+ *    通信できないは `network_unavailable`（E03））
  *  - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
  *    `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
  *    `clone_failed`、`clone_timeout`、`clone_register_failed`
@@ -294,7 +331,12 @@ export type AttentionReason =
 /**  取り込み前の自動保存に大きいファイルがあるため、自動の取り込みを見送った（E07 / E08） */
 "large-files" | 
 /**  前回のアプリ終了で、途中で止まった操作が見つかった（E15） */
-"interrupted-operation";
+"interrupted-operation" | 
+/**
+ *  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。自動の取り込み・
+ *  アップロードは、フォルダが戻るまで見送る
+ */
+"folder-missing";
 
 /**  変更ファイル */
 export type ChangeFile = {
@@ -381,6 +423,8 @@ export type HistoryItem = {
 	is_snapshot: boolean,
 	/**  この保存を作った PC の名前。記録が無ければ null。`message` には含まれない */
 	pc_name: string | null,
+	/**  クラウドに上がっている保存か。自動保存と、クラウドの保管場所が無い・まだ何も上げていないときは false */
+	cloud_synced: boolean,
 };
 
 /**  大きいファイル */
@@ -498,6 +542,13 @@ export type ProjectInfo = {
 	remote_url: string | null,
 	owner: string,
 	last_viewed_at: string,
+	/**  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない */
+	folder_missing: boolean,
+	/**
+	 *  クラウドに上がっている最新の保存の日時（ISO 8601）。保存先が無い、まだ何も上げていない、
+	 *  フォルダが見つからないときは null
+	 */
+	last_uploaded_at: string | null,
 };
 
 /**  取り込み結果 */
@@ -524,6 +575,20 @@ export type RejectedFileItem = {
 	size: number | null,
 };
 
+/**  保存先の接続の結果 */
+export type RemoteConnectResult = {
+	/**  GitHub 上に作ったリポジトリ（`owner/name`）。作れなかったときは null */
+	repository: string | null,
+	/**  保存先を設定できた（以降は取り込み・アップロードの対象になる） */
+	connected: boolean,
+	/**  初回のアップロードまで完了した（アップロードするものが無かったときは false） */
+	uploaded: boolean,
+	/**  初回の保存に大きいファイルがあり、保存を見送った場合の内容（E07 / E08）。なければ null */
+	size_check: SizeCheckResult | null,
+	/**  途中で失敗した場合の 3 要素のエラー（E02 / E03 など）。ローカルのファイルは無事 */
+	error: AppError | null,
+};
+
 /**  取得できるリポジトリ */
 export type RemoteProjectInfo = {
 	/**  `owner/name`。`clone_project` の `repo` に渡す */
@@ -542,6 +607,21 @@ export type RemoteProjectList = {
 	projects: RemoteProjectInfo[],
 	/**  件数が多く、一部しか取得していない */
 	truncated: boolean,
+};
+
+/**  保存先（GitHub 上のリポジトリ）の作成の要求 */
+export type RemoteRequest = {
+	/**  保存先（個人のログイン名、または Organization 名）。`list_owners` の `id` */
+	owner: string,
+	/**
+	 *  リポジトリ名。省略時はプロジェクト名から作る（英数字・`-`・`_`・`.` のみ。日本語の名前などは
+	 *  `hikae-<識別子>` にする）
+	 */
+	name: string | null,
+	/**  非公開にする（既定の選択肢） */
+	private: boolean,
+	/**  公開にすることの警告を確認した。`private` が false のとき、これが true でなければ拒否する */
+	public_confirmed: boolean,
 };
 
 /**  全体を元に戻した結果 */
@@ -806,6 +886,8 @@ export type SyncStatus = {
 	is_syncing: boolean,
 	/**  前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null（E15） */
 	interrupted_operation: string | null,
+	/**  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない */
+	folder_missing: boolean,
 };
 
 /**  用語の表示 */

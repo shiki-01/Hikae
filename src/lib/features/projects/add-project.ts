@@ -7,15 +7,27 @@ export interface AddProjectForm {
 	folder: string;
 	ownerId: string;
 	visibility: Visibility;
+	/** 公開にすることの警告を確認した（非公開のままなら不要） */
+	publicConfirmed: boolean;
 	remoteId: string | null;
 }
 
-export type FormErrors = Partial<Record<'name' | 'folder' | 'owner' | 'remote', MessageKey>>;
+export type FormErrors = Partial<
+	Record<'name' | 'folder' | 'owner' | 'remote' | 'confirm', MessageKey>
+>;
 
 const INVALID_NAME = /[\\/:*?"<>|]/;
 
 export function emptyForm(mode: AddProjectMode, ownerId: string): AddProjectForm {
-	return { mode, name: '', folder: '', ownerId, visibility: 'private', remoteId: null };
+	return {
+		mode,
+		name: '',
+		folder: '',
+		ownerId,
+		visibility: 'private',
+		publicConfirmed: false,
+		remoteId: null
+	};
 }
 
 export function nameFromFolder(folder: string): string {
@@ -23,7 +35,16 @@ export function nameFromFolder(folder: string): string {
 	return trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1);
 }
 
-export function validateAddProject(form: AddProjectForm, owners: Owner[]): FormErrors {
+/**
+ * フォルダや名前などの入力を検証する。
+ * `cloudAvailable` が false（未ログインなどで保存先を選べない）のときは、ローカルだけで登録するため
+ * 保存先と公開範囲は検証しない。
+ */
+export function validateAddProject(
+	form: AddProjectForm,
+	owners: Owner[],
+	cloudAvailable = true
+): FormErrors {
 	const errors: FormErrors = {};
 	if (!form.folder.trim()) errors.folder = 'add_project.error_folder';
 
@@ -36,11 +57,15 @@ export function validateAddProject(form: AddProjectForm, owners: Owner[]): FormE
 	if (!name) errors.name = 'add_project.error_name';
 	else if (INVALID_NAME.test(name)) errors.name = 'add_project.error_name_chars';
 
+	if (!cloudAvailable) return errors;
 	const owner = owners.find((o) => o.id === form.ownerId);
 	if (!owner || !owner.canCreate) errors.owner = 'add_project.error_owner';
+	if (form.visibility === 'public' && !form.publicConfirmed) {
+		errors.confirm = 'add_project.error_public_confirm';
+	}
 	return errors;
 }
 
-export function canSubmit(form: AddProjectForm, owners: Owner[]): boolean {
-	return Object.keys(validateAddProject(form, owners)).length === 0;
+export function canSubmit(form: AddProjectForm, owners: Owner[], cloudAvailable = true): boolean {
+	return Object.keys(validateAddProject(form, owners, cloudAvailable)).length === 0;
 }

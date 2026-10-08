@@ -30,13 +30,15 @@ describe('日時の変換', () => {
 			...base,
 			changed_files_count: 1,
 			is_snapshot: false,
-			pc_name: null
+			pc_name: null,
+			cloud_synced: false
 		});
 		const auto = mapSavePoint({
 			...base,
 			changed_files_count: 1,
 			is_snapshot: true,
-			pc_name: null
+			pc_name: null,
+			cloud_synced: false
 		});
 		expect(manual).toMatchObject({ id: 'abc', kind: 'save', message: 'm' });
 		expect(manual.createdAt.toISOString()).toBe('2026-01-02T03:04:05.000Z');

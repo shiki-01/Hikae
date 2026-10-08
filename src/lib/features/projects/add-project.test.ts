@@ -56,3 +56,27 @@ describe('プロジェクト追加フォームの検証', () => {
 		expect(nameFromFolder('/Users/me/Thesis/')).toBe('Thesis');
 	});
 });
+
+describe('GitHub への保存先の作成に関する検証', () => {
+	const base = { ...emptyForm('new', 'personal'), folder: 'C:\\Docs', name: 'x' };
+
+	it('公開にするときは、警告を確認するまで追加できない', () => {
+		const form = { ...base, visibility: 'public' as const };
+		expect(validateAddProject(form, owners).confirm).toBe('add_project.error_public_confirm');
+		expect(canSubmit({ ...form, publicConfirmed: true }, owners)).toBe(true);
+	});
+
+	it('非公開なら確認は要らない', () => {
+		expect(validateAddProject(base, owners).confirm).toBeUndefined();
+		expect(canSubmit(base, owners)).toBe(true);
+	});
+
+	it('保存先を選べない（未ログイン）ときは、ローカルだけで登録できる', () => {
+		const form = { ...base, ownerId: 'personal', visibility: 'public' as const };
+		expect(canSubmit(form, [], false)).toBe(true);
+		// 名前とフォルダの検証は残る
+		expect(validateAddProject({ ...form, name: '' }, [], false).name).toBe(
+			'add_project.error_name'
+		);
+	});
+});

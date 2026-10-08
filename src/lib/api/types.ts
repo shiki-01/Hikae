@@ -1,3 +1,5 @@
+import type { AppError } from './errors';
+
 export interface Project {
 	id: string;
 	name: string;
@@ -5,6 +7,8 @@ export interface Project {
 	ownerName: string;
 	ownerKind: 'personal' | 'org';
 	lastSavedAt: Date | null;
+	/** クラウドの保管場所（GitHub）に接続済みか。false のときは取り込み・アップロードの対象にならない */
+	remoteConnected: boolean;
 	lastUploadedAt: Date | null;
 	unsavedCount: number;
 	uploadPendingCount: number;
@@ -171,7 +175,40 @@ export interface AddProjectInput {
 	folder: string;
 	ownerId: string;
 	visibility: Visibility;
+	/** 公開にすることの警告を確認した。`visibility` が公開のときだけ意味を持つ */
+	publicConfirmed?: boolean;
+	/** 追加と同時に、GitHub に保存先を作って接続する（既存フォルダ・新しく作る場合。ログイン済みのとき） */
+	connectCloud?: boolean;
 	remoteId?: string;
+}
+
+/** 保存先（GitHub 上の場所）を作って接続した結果。途中で失敗しても、ローカルのファイルは無事 */
+export interface RemoteOutcome {
+	/** GitHub 上に作った保存先の名前（`所有者/名前`）。作れなかったときは null */
+	repository: string | null;
+	/** 接続できた（以降は取り込み・アップロードの対象になる） */
+	connected: boolean;
+	/** 最初のアップロードまで完了した */
+	uploaded: boolean;
+	/** 最初の保存に大きいファイルがあり、保存を見送った場合の内容。なければ null */
+	sizeCheck: SizeCheck | null;
+	/** 途中で失敗した場合のエラー（3 要素の文言を持つ）。なければ null */
+	error: AppError | null;
+}
+
+/** プロジェクト追加の結果。保存先の作成を頼んだ場合だけ `remote` が入る */
+export interface AddProjectResult {
+	project: Project;
+	remote: RemoteOutcome | null;
+}
+
+/** 既存のローカルだけのプロジェクトを、GitHub に接続する入力 */
+export interface ConnectRemoteInput {
+	ownerId: string;
+	visibility: Visibility;
+	publicConfirmed: boolean;
+	/** GitHub 上の名前。空なら自動で決める */
+	name?: string;
 }
 
 export interface DroppedFile {
@@ -286,7 +323,12 @@ export interface ProjectApi {
 	/** ファイル選択（アプリ上のみ実パスを得られる）。キャンセル時は null */
 	pickFiles(): Promise<string[] | null>;
 	/** GitHub から取得する場合、`onProgress` に取得の段階が通知される */
-	addProject(input: AddProjectInput, onProgress?: (phase: ClonePhase) => void): Promise<Project>;
+	addProject(
+		input: AddProjectInput,
+		onProgress?: (phase: ClonePhase) => void
+	): Promise<AddProjectResult>;
+	/** ローカルだけのプロジェクトを GitHub に接続する。作成前の失敗は例外、作成後のアップロードの失敗は結果の `error` */
+	connectRemote(id: string, input: ConnectRemoteInput): Promise<RemoteOutcome>;
 	removeProject(id: string): Promise<void>;
 	relocateProject(id: string, folder: string): Promise<Project>;
 

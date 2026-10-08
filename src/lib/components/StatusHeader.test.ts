@@ -182,3 +182,27 @@ describe('大きいファイルによる見送り', () => {
 		);
 	});
 });
+
+describe('GitHub に接続していない場合', () => {
+	const unconnected = (
+		...args: [boolean, boolean, boolean, number, number, number, boolean, boolean, boolean]
+	) => calculateStatusPriority(...args, true);
+
+	it('すべて保存済みの代わりに、接続を促す', () => {
+		expect(unconnected(false, false, true, 0, 0, 0, false, false, false)).toBe('not_connected');
+	});
+
+	it('未保存・取り込み待ち・アップロード待ちなどの、ほかの状態が優先される', () => {
+		expect(unconnected(true, false, true, 0, 0, 0, false, false, false)).toBe('conflict');
+		expect(unconnected(false, true, true, 0, 0, 0, false, false, false)).toBe('syncing');
+		expect(unconnected(false, false, true, 3, 0, 0, false, false, false)).toBe('unsaved');
+		expect(unconnected(false, false, true, 0, 2, 0, false, false, false)).toBe('fetch_pending');
+		expect(unconnected(false, false, true, 0, 0, 1, false, false, false)).toBe('push_pending');
+	});
+
+	it('接続していれば従来どおり保存済みになる', () => {
+		expect(calculateStatusPriority(false, false, true, 0, 0, 0, false, false, false, false)).toBe(
+			'saved'
+		);
+	});
+});

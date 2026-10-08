@@ -16,6 +16,7 @@ import {
 	mapProject,
 	mapPull,
 	mapPush,
+	mapRemoteOutcome,
 	mapRemoteProjects,
 	mapResolutions,
 	mapSaveResult,
@@ -30,10 +31,12 @@ import {
 import type {
 	AddFilesOutcome,
 	AddProjectInput,
+	AddProjectResult,
 	AppSettings,
 	Change,
 	ClonePhase,
 	ConflictFile,
+	ConnectRemoteInput,
 	DroppedFile,
 	FileDiff,
 	FileEntry,
@@ -43,6 +46,7 @@ import type {
 	Project,
 	ProjectApi,
 	PushResult,
+	RemoteOutcome,
 	RestoreResult,
 	RestoreScope,
 	SaveOutcome,
@@ -75,6 +79,7 @@ async function loadProject(id: string): Promise<Project> {
 }
 
 async function buildProject(info: Parameters<typeof mapProject>[0]): Promise<Project> {
+	// フォルダが見つからない（E11）プロジェクトは、バックエンドが git を実行せず空の履歴を返す
 	const [status, history] = await Promise.all([
 		unwrap(commands.projectStatus(info.id)),
 		unwrap(commands.listHistory(info.id, HISTORY_LIMIT))
@@ -166,11 +171,42 @@ export const tauriApi: ProjectApi = {
 	async addProject(
 		input: AddProjectInput,
 		onProgress?: (phase: ClonePhase) => void
-	): Promise<Project> {
-		if (input.mode === 'github') return cloneProject(input, onProgress);
+	): Promise<AddProjectResult> {
+		if (input.mode === 'github') {
+			return { project: await cloneProject(input, onProgress), remote: null };
+		}
 		const id = crypto.randomUUID();
-		await unwrap(commands.addProject(id, input.name, input.folder, input.ownerId, null));
-		return loadProject(id);
+		// 保存先の作成を頼むのは、ログイン済みで保存先を選べるときだけ（未ログインはローカルだけで登録する）。
+		// 公開は、警告を確認したことを明示して初めてバックエンドが許可する
+		const request = input.connectCloud
+			? {
+					owner: input.ownerId,
+					name: null,
+					private: input.visibility === 'private',
+					public_confirmed: input.publicConfirmed === true
+				}
+			: null;
+		const added = await unwrap(
+			commands.addProject(id, input.name, input.folder, input.ownerId, null, request)
+		);
+		return {
+			project: await loadProject(id),
+			remote: added.remote === null ? null : mapRemoteOutcome(added.remote)
+		};
+	},
+
+	async connectRemote(id: string, input: ConnectRemoteInput): Promise<RemoteOutcome> {
+		const name = input.name?.trim();
+		return mapRemoteOutcome(
+			await unwrap(
+				commands.connectRemote(id, {
+					owner: input.ownerId,
+					name: name ? name : null,
+					private: input.visibility === 'private',
+					public_confirmed: input.publicConfirmed
+				})
+			)
+		);
 	},
 
 	async removeProject(id: string): Promise<void> {

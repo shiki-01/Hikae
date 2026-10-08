@@ -8,6 +8,7 @@ export type StatusState =
 	| 'unsaved'
 	| 'fetch_pending'
 	| 'push_pending'
+	| 'not_connected'
 	| 'saved';
 
 export function resolveStatus(
@@ -19,7 +20,8 @@ export function resolveStatus(
 	uploadPendingCount: number,
 	hasAttention = false,
 	hasInterrupted = false,
-	hasLargeFiles = false
+	hasLargeFiles = false,
+	notConnected = false
 ): StatusState {
 	if (hasConflict) return 'conflict';
 	if (hasInterrupted) return 'interrupted';
@@ -30,5 +32,7 @@ export function resolveStatus(
 	if (unsavedCount > 0) return 'unsaved';
 	if (fetchPendingCount > 0) return 'fetch_pending';
 	if (uploadPendingCount > 0) return 'push_pending';
+	// 保存先（GitHub）に接続していない。差分も未保存も無いときに、「すべて保存済み」の代わりに知らせる
+	if (notConnected) return 'not_connected';
 	return 'saved';
 }

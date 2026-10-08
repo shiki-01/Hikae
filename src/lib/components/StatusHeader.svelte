@@ -3,6 +3,7 @@
 		AlertTriangle,
 		ArrowLeft,
 		CheckCircle2,
+		Cloud,
 		CloudDownload,
 		CloudOff,
 		CloudUpload,
@@ -28,6 +29,8 @@
 		interrupted?: boolean;
 		/** 大きいファイルがあるため、自動の取り込みを見送った */
 		largeFiles?: boolean;
+		/** クラウドの保管場所（GitHub）に接続していない。差分も未保存も無いときに、接続を促す */
+		notConnected?: boolean;
 		isOnline?: boolean;
 		unsavedCount?: number;
 		uploadPendingCount?: number;
@@ -41,6 +44,7 @@
 		onreview?: () => void;
 		oninterrupted?: () => void;
 		onlargefiles?: () => void;
+		onconnect?: () => void;
 		class?: string;
 	}
 
@@ -51,6 +55,7 @@
 		attention = null,
 		interrupted = false,
 		largeFiles = false,
+		notConnected = false,
 		isOnline = true,
 		unsavedCount = 0,
 		uploadPendingCount = 0,
@@ -64,6 +69,7 @@
 		onreview,
 		oninterrupted,
 		onlargefiles,
+		onconnect,
 		class: className = ''
 	}: Props = $props();
 
@@ -84,7 +90,8 @@
 			uploadPendingCount,
 			attention !== null,
 			interrupted,
-			largeFiles
+			largeFiles,
+			notConnected
 		)
 	);
 
@@ -155,6 +162,12 @@
 			color: 'fg:state-sync',
 			text: t('header.status_push_pending', { count: uploadPendingCount }),
 			action: { label: t('header.push'), run: onpush, variant: 'primary' }
+		},
+		not_connected: {
+			icon: Cloud,
+			color: 'fg:fg-muted',
+			text: t('header.status_not_connected'),
+			action: { label: t('header.connect'), run: onconnect, variant: 'primary' }
 		},
 		saved: {
 			icon: CheckCircle2,

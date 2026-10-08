@@ -8,7 +8,9 @@ import {
 	mapOwner,
 	mapPointChange,
 	mapProject,
+	mapRemoteOutcome,
 	mapRemoteProjects,
+	mapSavePoint,
 	mapSaveResult,
 	mapSession,
 	mapSettings,
@@ -257,16 +259,24 @@ describe('保存結果の変換', () => {
 });
 
 describe('プロジェクトの変換', () => {
-	const info = { id: 'p', display_name: 'P', path: 'C:\\p', owner: 'me' } as Parameters<
-		typeof mapProject
-	>[0];
+	const info: Parameters<typeof mapProject>[0] = {
+		id: 'p',
+		display_name: 'P',
+		path: 'C:\\p',
+		remote_url: 'https://github.com/me/p.git',
+		owner: 'me',
+		last_viewed_at: '2026-10-08T00:00:00Z',
+		folder_missing: false,
+		last_uploaded_at: '2026-10-07T12:14:00+09:00'
+	};
 	const status = {
 		unsaved_changes: 0,
 		upload_pending: 0,
 		pull_pending: 0,
 		has_conflicts: false,
 		is_syncing: false,
-		interrupted_operation: null
+		interrupted_operation: null,
+		folder_missing: false
 	};
 
 	it('途中で止まった操作の名前を引き継ぐ', () => {
@@ -274,5 +284,92 @@ describe('プロジェクトの変換', () => {
 			interruptedOperation: 'pull'
 		});
 		expect(mapProject(info, status, null).interruptedOperation).toBeNull();
+	});
+
+	it('最終アップロード日時と接続の有無を、実際の値から出す', () => {
+		const connected = mapProject(info, status, null);
+		expect(connected.remoteConnected).toBe(true);
+		expect(connected.lastUploadedAt?.toISOString()).toBe('2026-10-07T03:14:00.000Z');
+
+		const local = mapProject({ ...info, remote_url: null, last_uploaded_at: null }, status, null);
+		expect(local.remoteConnected).toBe(false);
+		expect(local.lastUploadedAt).toBeNull();
+		expect(mapProject({ ...info, remote_url: '' }, status, null).remoteConnected).toBe(false);
+	});
+
+	it('フォルダが見つからない状態を、一覧の情報と状態のどちらからでも拾う', () => {
+		expect(mapProject(info, status, null).folderMissing).toBe(false);
+		expect(mapProject({ ...info, folder_missing: true }, status, null).folderMissing).toBe(true);
+		expect(mapProject(info, { ...status, folder_missing: true }, null).folderMissing).toBe(true);
+	});
+});
+
+describe('保存の履歴の変換', () => {
+	const item = {
+		commit: 'abc1234',
+		timestamp: '2026-10-07T21:14:00+09:00',
+		message: 'm',
+		changed_files_count: 1,
+		is_snapshot: false,
+		pc_name: null,
+		cloud_synced: true
+	};
+
+	it('クラウドに上がっているかを、そのまま引き継ぐ', () => {
+		expect(mapSavePoint(item).cloudSynced).toBe(true);
+		expect(mapSavePoint({ ...item, cloud_synced: false }).cloudSynced).toBe(false);
+	});
+});
+
+describe('保存先の作成・接続の結果の変換', () => {
+	const base = {
+		repository: 'me/p',
+		connected: true,
+		uploaded: true,
+		size_check: null,
+		error: null
+	};
+
+	it('成功した結果をそのまま引き継ぐ', () => {
+		expect(mapRemoteOutcome(base)).toEqual({
+			repository: 'me/p',
+			connected: true,
+			uploaded: true,
+			sizeCheck: null,
+			error: null
+		});
+	});
+
+	it('途中で失敗したときは、3 要素の文言を持つエラーにする（データの安否と次の行動を含む）', () => {
+		const outcome = mapRemoteOutcome({
+			...base,
+			repository: null,
+			connected: false,
+			uploaded: false,
+			error: {
+				code: 'remote_name_taken',
+				params: [],
+				what_happened: '同じ名前の保存先がすでに GitHub にあります。',
+				data_is_safe: 'ファイルはこの PC に安全に残っています。',
+				next_action: '別の名前を指定して、もう一度お試しください',
+				technical_info: null
+			}
+		});
+		expect(outcome.connected).toBe(false);
+		expect(outcome.error?.backend).toMatchObject({
+			code: 'remote_name_taken',
+			whatHappened: '同じ名前の保存先がすでに GitHub にあります。',
+			dataIsSafe: 'ファイルはこの PC に安全に残っています。',
+			nextAction: '別の名前を指定して、もう一度お試しください'
+		});
+	});
+
+	it('大きいファイルで最初の保存を見送った場合の内容を引き継ぐ', () => {
+		const outcome = mapRemoteOutcome({
+			...base,
+			uploaded: false,
+			size_check: { blocked: [], warned: [{ path: 'a.psd', size: 72 }] }
+		});
+		expect(outcome.sizeCheck?.warned).toEqual([{ path: 'a.psd', sizeBytes: 72 }]);
 	});
 });

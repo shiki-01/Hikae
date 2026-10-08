@@ -11,6 +11,7 @@
 	import { AppError } from '#lib/api/errors.js';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
 	import AddProjectDialog from './AddProjectDialog.svelte';
+	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import { useRelocateProject, useRemoveProject } from './mutations';
 	import { useProjects, useSession } from './queries';
 	import { sortProjects } from './sort';
@@ -21,6 +22,8 @@
 	const remove = useRemoveProject();
 
 	let adding = $state(false);
+	// GitHub に接続するプロジェクト（ダイアログを開いている間だけ入る）
+	let connecting = $state<Project | null>(null);
 
 	const sorted = $derived(sortProjects(projects.data ?? []));
 
@@ -83,7 +86,11 @@
 			>
 				{#each sorted as project (project.id)}
 					<li>
-						<ProjectCard {project} onclick={() => openProject(project)} />
+						<ProjectCard
+							{project}
+							onclick={() => openProject(project)}
+							onconnect={() => (connecting = project)}
+						/>
 					</li>
 				{/each}
 			</ul>
@@ -95,4 +102,11 @@
 	open={adding}
 	onclose={() => (adding = false)}
 	onadded={(project) => goto(`${resolve('/project')}?id=${encodeURIComponent(project.id)}`)}
+/>
+
+<ConnectRemoteDialog
+	open={connecting !== null}
+	projectId={connecting?.id ?? null}
+	projectName={connecting?.name ?? ''}
+	onclose={() => (connecting = null)}
 />
