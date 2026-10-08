@@ -6,8 +6,8 @@ mod common;
 use common::*;
 use core_git::GitRunner;
 use core_ops::{
-    project_folder_state, FirstSave, FolderState, HistoryKind, Identity, Ops, OpsError,
-    RemoteConnection, SizeLimits, UploadOutcome,
+    project_folder_state, ConnectPreflight, FirstSave, FolderState, HistoryKind, Identity, Ops,
+    OpsError, RemoteConnection, SizeLimits, UploadOutcome,
 };
 use std::path::PathBuf;
 
@@ -298,4 +298,171 @@ fn folder_state_follows_the_real_folder() {
     );
     std::fs::remove_dir_all(&s.work).expect("remove");
     assert_eq!(project_folder_state(&s.work), FolderState::Missing);
+}
+
+#[test]
+fn preflight_is_ready_for_a_plain_project_and_changes_nothing() {
+    let s = setup("preflight-ready");
+    write_test_file(&s.work, "a.txt", "1").expect("write");
+    let outcome = s
+        .ops
+        .preflight_connect(&s.work, &s.url, true, SizeLimits::default())
+        .expect("preflight");
+    assert_eq!(outcome, ConnectPreflight::Ready);
+    // 検査は読み取りのみ: 保存先も復元点も保存も作られていない
+    assert_eq!(remote_url(&s.work), None);
+    let (_, refs, _) = run_git(&s.work, &["for-each-ref", "refs/hikae/"]);
+    assert!(refs.trim().is_empty());
+    assert_eq!(s.ops.commit_count(&s.work).expect("count"), 0);
+}
+
+#[test]
+fn preflight_rejects_an_origin_that_points_elsewhere_and_accepts_the_same_place() {
+    let s = setup("preflight-origin");
+    s.ops
+        .connect_remote(&s.work, "https://github.com/alice/other.git")
+        .expect("connect");
+
+    let elsewhere = s
+        .ops
+        .preflight_connect(
+            &s.work,
+            "https://github.com/alice/thesis.git",
+            true,
+            SizeLimits::default(),
+        )
+        .expect("preflight");
+    assert_eq!(elsewhere, ConnectPreflight::OriginElsewhere);
+
+    // 大文字小文字・末尾の .git の違いは同じ場所として扱う
+    let same = s
+        .ops
+        .preflight_connect(
+            &s.work,
+            "https://github.com/Alice/Other",
+            true,
+            SizeLimits::default(),
+        )
+        .expect("preflight");
+    assert_eq!(same, ConnectPreflight::AlreadyPointsHere);
+    // 付け替えていない
+    assert_eq!(
+        remote_url(&s.work).as_deref(),
+        Some("https://github.com/alice/other.git")
+    );
+}
+
+#[test]
+fn preflight_detects_a_config_that_cannot_be_written() {
+    let s = setup("preflight-config");
+    let config = s.work.join(".git").join("config");
+    let mut perms = std::fs::metadata(&config).expect("meta").permissions();
+    let original = perms.clone();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&config, perms).expect("readonly");
+
+    // 管理者権限などで読み取り専用でも書けてしまう環境では、検査の対象外にする
+    let writable_anyway = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config)
+        .is_ok();
+    let outcome = s
+        .ops
+        .preflight_connect(&s.work, &s.url, false, SizeLimits::default())
+        .expect("preflight");
+    std::fs::set_permissions(&config, original).expect("restore");
+
+    if !writable_anyway {
+        assert_eq!(outcome, ConnectPreflight::ConfigNotWritable);
+    }
+    assert_eq!(remote_url(&s.work), None);
+}
+
+#[test]
+fn preflight_reports_a_missing_or_non_repository_folder() {
+    let s = setup("preflight-folder");
+    let missing = s.work.join("none");
+    assert_eq!(
+        s.ops
+            .preflight_connect(&missing, &s.url, true, SizeLimits::default())
+            .expect("preflight"),
+        ConnectPreflight::FolderUnavailable(FolderState::Missing)
+    );
+    let plain = s.work.parent().expect("parent").join("plain");
+    std::fs::create_dir_all(&plain).expect("mkdir");
+    assert_eq!(
+        s.ops
+            .preflight_connect(&plain, &s.url, true, SizeLimits::default())
+            .expect("preflight"),
+        ConnectPreflight::FolderUnavailable(FolderState::NotARepository)
+    );
+}
+
+#[test]
+fn preflight_asks_for_a_size_decision_before_anything_is_created() {
+    let s = setup("preflight-large");
+    write_test_file(&s.work, "big.bin", &"x".repeat(2000)).expect("write");
+    write_test_file(&s.work, "mid.bin", &"x".repeat(200)).expect("write");
+    let limits = SizeLimits {
+        warn_bytes: 100,
+        block_bytes: 1000,
+    };
+
+    let outcome = s
+        .ops
+        .preflight_connect(&s.work, &s.url, true, limits)
+        .expect("preflight");
+    let ConnectPreflight::NeedsSizeDecision(found) = outcome else {
+        panic!("expected a size decision, got {outcome:?}");
+    };
+    assert_eq!(found.blocked.len(), 1);
+    assert_eq!(found.blocked[0].path, "big.bin");
+    assert_eq!(found.warned.len(), 1);
+    // 何も変更していない（保存先も復元点も保存も無い）
+    assert_eq!(remote_url(&s.work), None);
+    assert_eq!(s.ops.commit_count(&s.work).expect("count"), 0);
+    let (_, refs, _) = run_git(&s.work, &["for-each-ref", "refs/hikae/"]);
+    assert!(refs.trim().is_empty());
+
+    // 初回の保存を頼まないときは、サイズ検査をしない
+    assert_eq!(
+        s.ops
+            .preflight_connect(&s.work, &s.url, false, limits)
+            .expect("preflight"),
+        ConnectPreflight::Ready
+    );
+}
+
+#[test]
+fn preflight_skips_the_size_check_once_a_save_exists() {
+    let s = setup("preflight-saved");
+    write_test_file(&s.work, "a.txt", "1").expect("write");
+    s.ops.save(&s.work, "最初").expect("save");
+    write_test_file(&s.work, "big.bin", &"x".repeat(2000)).expect("write");
+    let limits = SizeLimits {
+        warn_bytes: 100,
+        block_bytes: 1000,
+    };
+    // すでに保存があるプロジェクトの初回の保存は作らないため、検査の対象外
+    assert_eq!(
+        s.ops
+            .preflight_connect(&s.work, &s.url, true, limits)
+            .expect("preflight"),
+        ConnectPreflight::Ready
+    );
+}
+
+#[test]
+fn preflight_rejects_urls_that_could_leak_credentials() {
+    let s = setup("preflight-url");
+    let err = s
+        .ops
+        .preflight_connect(
+            &s.work,
+            "https://x-access-token:secret@github.com/alice/a.git",
+            true,
+            SizeLimits::default(),
+        )
+        .expect_err("credentials");
+    assert!(matches!(err, OpsError::InvalidInput(_)));
 }

@@ -34,7 +34,10 @@ pub use open_path::{resolve_in_project, OpenPathError};
 pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
 pub use preview_file::{cleanup_old_previews, PREVIEW_MAX_AGE};
 pub use recover::is_recoverable_operation;
-pub use remote::{project_folder_state, ConnectOutcome, FirstSave, FolderState, RemoteConnection};
+pub use remote::{
+    project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
+    RemoteConnection,
+};
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
 
 use core_git::GitRunner;
@@ -434,6 +437,18 @@ impl Ops {
             self.now(),
             self.meta(),
         )
+    }
+
+    /// GitHub にリポジトリを作る前の、ローカル側の検査（読み取りのみ）。`url` は接続先になる予定の
+    /// URL。`check_first_save` が真のときは、初回の保存の対象に大きいファイルが無いかも調べる。
+    pub fn preflight_connect(
+        &self,
+        repo: &Path,
+        url: &str,
+        check_first_save: bool,
+        limits: SizeLimits,
+    ) -> Result<ConnectPreflight, OpsError> {
+        remote::preflight_connect(self.runner(), repo, url, check_first_save, limits)
     }
 
     /// `origin` の URL。設定されていなければ None（読み取りのみ）。

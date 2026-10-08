@@ -154,6 +154,85 @@ pub(crate) fn connect(
     Ok(ConnectOutcome { remote, first_save })
 }
 
+/// GitHub にリポジトリを作る前の、ローカル側の検査の結果（設計書 4.6）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectPreflight {
+    /// 問題が無い。リポジトリを作って接続してよい
+    Ready,
+    /// `origin` がすでに接続先と同じ場所を指している（既存の接続として続きから進められる）
+    AlreadyPointsHere,
+    /// `origin` が別の場所を指している（付け替えない）
+    OriginElsewhere,
+    /// `.git/config` に書き込めない（読み取り専用など）。`origin` を設定できない
+    ConfigNotWritable,
+    /// フォルダが見つからない、またはリポジトリではない（E11）
+    FolderUnavailable(FolderState),
+    /// 初回の保存の対象に大きいファイルがあり、利用者の決定が必要
+    NeedsSizeDecision(SizeFindings),
+}
+
+/// `.git/config` に書き込めるか。内容は変えない（追記モードで開くだけ）。
+/// `.git` がフォルダでない（作業ツリーの `.git` ファイルなど）ときは検査せず書けるものとする。
+fn config_writable(repo: &Path) -> bool {
+    let git_dir = repo.join(".git");
+    if !git_dir.is_dir() {
+        return true;
+    }
+    match std::fs::OpenOptions::new()
+        .append(true)
+        .open(git_dir.join("config"))
+    {
+        Ok(_) => true,
+        // `git remote add` が作るため、まだ無いだけなら書けるものとする
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
+/// GitHub にリポジトリを作る前に、ローカル側で失敗しうる点を先に確認する（読み取りのみ。
+/// 作業フォルダにもインデックスにも `.git/config` にも書き込まない）。
+///
+/// 確認の順序: (1) フォルダが存在しリポジトリか（E11）、(2) `origin` が別の場所を指していないか
+/// （同じ場所なら既存の接続）、(3) `.git/config` が書き込めるか、(4) `check_first_save` が真で、まだ
+/// 保存が 1 つも無いときだけ、初回の保存の対象に保存不可・要確認の大きいファイルが無いか。
+pub(crate) fn preflight_connect(
+    runner: &GitRunner,
+    repo: &Path,
+    url: &str,
+    check_first_save: bool,
+    limits: SizeLimits,
+) -> Result<ConnectPreflight, OpsError> {
+    validate_remote_url(url)?;
+    let folder = project_folder_state(repo);
+    if folder.is_missing() {
+        return Ok(ConnectPreflight::FolderUnavailable(folder));
+    }
+    let origin = origin_url(runner, repo)?;
+    let points_here = match &origin {
+        None => false,
+        Some(existing) => {
+            if normalize_remote_url(existing) != normalize_remote_url(url) {
+                return Ok(ConnectPreflight::OriginElsewhere);
+            }
+            true
+        }
+    };
+    // すでに同じ場所なら `origin` は書き換えないため、書き込み検査は不要
+    if !points_here && !config_writable(repo) {
+        return Ok(ConnectPreflight::ConfigNotWritable);
+    }
+    if check_first_save && commit_count(runner, repo)? == 0 {
+        let findings = crate::size_check::scan(runner, repo, limits)?;
+        if !findings.is_empty() {
+            return Ok(ConnectPreflight::NeedsSizeDecision(findings));
+        }
+    }
+    Ok(if points_here {
+        ConnectPreflight::AlreadyPointsHere
+    } else {
+        ConnectPreflight::Ready
+    })
+}
+
 /// `origin` の URL。設定されていなければ None（読み取りのみ）。
 pub(crate) fn origin_url(runner: &GitRunner, repo: &Path) -> Result<Option<String>, OpsError> {
     let out = runner.run(repo, &["remote", "get-url", "origin"])?;

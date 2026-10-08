@@ -52,8 +52,11 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 ///   `github_error`
 /// - 保存先の作成・接続: `remote_name_taken`（同名のリポジトリが既にある）、`remote_name_invalid`、
 ///   `remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、
-///   `project_folder_missing`、`remote_connect_failed`（権限不足は `github_forbidden`（E02）、
-///   通信できないは `network_unavailable`（E03））
+///   `project_folder_missing`、`remote_conflict`（`origin` がすでに別の場所を指している。作成の前の
+///   検査）、`remote_not_writable`（`.git/config` に書き込めない。作成の前の検査）、
+///   `remote_orphaned`（GitHub 上に空の保存先ができたが、プロジェクトに接続できなかった。params:
+///   `name` = 作成済みの `owner/name`）
+///   （権限不足は `github_forbidden`（E02）、通信できないは `network_unavailable`（E03））
 /// - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
 ///   `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
 ///   `clone_failed`、`clone_timeout`、`clone_register_failed`

@@ -49,6 +49,19 @@ pub struct Owner {
     pub block_reason: Option<CreateBlockReason>,
 }
 
+/// 同名の既存リポジトリに接続してよいかの判定結果（設計書 4.6）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepositoryAdoption {
+    /// 保存（commit）が 1 つも無い空のリポジトリで、自分が書き込める。接続を提案してよい
+    Adoptable(RemoteRepo),
+    /// 見つからない（存在しない、または見えない）
+    NotFound,
+    /// 書き込めない（読み取り専用、アーカイブ済みなど）
+    NoWriteAccess,
+    /// すでに保存がある。他のデータを上書きしないため、決して自動では接続しない
+    NotEmpty,
+}
+
 /// 取得できるリポジトリ
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRepo {
@@ -105,6 +118,46 @@ struct RepoResponse {
     pushed_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RepoPermissions {
+    #[serde(default)]
+    admin: bool,
+    #[serde(default)]
+    maintain: bool,
+    #[serde(default)]
+    push: bool,
+}
+
+/// `GET /repos/{owner}/{name}` の応答のうち、接続の判定に使う項目
+#[derive(Deserialize)]
+struct RepoDetail {
+    name: String,
+    full_name: String,
+    private: bool,
+    owner: RepoOwner,
+    #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    disabled: bool,
+    /// 大きさ（KB）。保存が無い空のリポジトリは 0
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    permissions: Option<RepoPermissions>,
+    #[serde(default)]
+    pushed_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+/// 保存の有無の確認結果
+enum EmptyProbe {
+    Empty,
+    NotEmpty,
+    NotFound,
+    NoAccess,
 }
 
 /// GitHub REST API クライアント。
@@ -308,6 +361,119 @@ impl GithubApi {
             query,
         );
         Ok(RepoList { repos, truncated })
+    }
+
+    /// 同名の既存リポジトリに、新規作成の代わりに接続してよいかを調べる（設計書 4.6）。読み取りのみ。
+    ///
+    /// 次をすべて満たすときだけ `Adoptable`:
+    /// 1. `GET /repos/{owner}/{name}` で見え、自分に書き込み権限がある（`permissions`。アーカイブ済みや
+    ///    無効化されたものは不可）
+    /// 2. 保存が 1 つも無い空である（`GET /repos/{owner}/{name}/commits?per_page=1` が 409
+    ///    `Git Repository is empty`、または 200 で空の配列かつ大きさが 0）
+    ///
+    /// 判断に迷うもの（想定外の応答、権限の情報が無い）は接続しない側に倒す。
+    /// 応答本文・URL・トークンはエラーにも結果にも含めない。
+    pub async fn check_adoptable_repository(
+        &self,
+        token: &AccessToken,
+        owner: &str,
+        name: &str,
+    ) -> Result<RepositoryAdoption, AuthError> {
+        validate_owner_login(owner)?;
+        validate_repository_name(name)?;
+
+        let detail = match self
+            .get_json::<RepoDetail>(token, &format!("/repos/{owner}/{name}"))
+            .await
+        {
+            Ok(Some(detail)) => detail,
+            Ok(None) => return Ok(RepositoryAdoption::NotFound),
+            // 権限が無い（Organization の制限など）。書き込めないものとして扱う
+            Err(AuthError::Forbidden) => return Ok(RepositoryAdoption::NoWriteAccess),
+            Err(e) => return Err(e),
+        };
+        let can_write = detail
+            .permissions
+            .as_ref()
+            .is_some_and(|p| p.admin || p.maintain || p.push)
+            && !detail.archived
+            && !detail.disabled;
+        if !can_write {
+            return Ok(RepositoryAdoption::NoWriteAccess);
+        }
+
+        match self
+            .probe_empty(token, owner, name, detail.size == 0)
+            .await?
+        {
+            EmptyProbe::Empty => Ok(RepositoryAdoption::Adoptable(RemoteRepo {
+                full_name: detail.full_name,
+                name: detail.name,
+                owner_login: detail.owner.login,
+                private: detail.private,
+                updated_at: detail.pushed_at.or(detail.updated_at),
+            })),
+            EmptyProbe::NotEmpty => Ok(RepositoryAdoption::NotEmpty),
+            EmptyProbe::NotFound => Ok(RepositoryAdoption::NotFound),
+            EmptyProbe::NoAccess => Ok(RepositoryAdoption::NoWriteAccess),
+        }
+    }
+
+    /// 保存（commit）が 1 つも無いかを調べる。`size_is_zero` は 200 で空の配列が返ったときの補助判定。
+    async fn probe_empty(
+        &self,
+        token: &AccessToken,
+        owner: &str,
+        name: &str,
+        size_is_zero: bool,
+    ) -> Result<EmptyProbe, AuthError> {
+        let url = format!("{}/repos/{owner}/{name}/commits?per_page=1", self.base);
+        let response = http::with_github_headers(self.client.get(url), token)
+            .send()
+            .await
+            .map_err(http::classify_send_error)?;
+        let status = response.status();
+        match status {
+            StatusCode::CONFLICT => {
+                // 空のリポジトリは 409「Git Repository is empty」。それ以外の 409 は空と見なさない
+                #[derive(Deserialize)]
+                struct Body {
+                    #[serde(default)]
+                    message: Option<String>,
+                }
+                let empty = response
+                    .json::<Body>()
+                    .await
+                    .ok()
+                    .and_then(|b| b.message)
+                    .is_some_and(|m| m.to_ascii_lowercase().contains("empty"));
+                Ok(if empty {
+                    EmptyProbe::Empty
+                } else {
+                    EmptyProbe::NotEmpty
+                })
+            }
+            StatusCode::NOT_FOUND => Ok(EmptyProbe::NotFound),
+            s if s.is_success() => {
+                let commits = response
+                    .json::<Vec<serde_json::Value>>()
+                    .await
+                    .map_err(|_| AuthError::JsonError)?;
+                Ok(if commits.is_empty() && size_is_zero {
+                    EmptyProbe::Empty
+                } else {
+                    EmptyProbe::NotEmpty
+                })
+            }
+            _ => {
+                let remaining = http::rate_limit_remaining(&response);
+                match http::classify_status(status, remaining.as_deref()) {
+                    // 保存の一覧を読めない（権限なし）。書き込めないものとして扱う
+                    AuthError::Forbidden => Ok(EmptyProbe::NoAccess),
+                    other => Err(other),
+                }
+            }
+        }
     }
 
     /// 新しいリポジトリを作る（設計書 4.6）。個人は `POST /user/repos`、Organization は
@@ -1037,5 +1203,242 @@ mod tests {
             let name = suggest_repository_name(input, "seed-0001");
             assert!(validate_repository_name(&name).is_ok(), "{input} -> {name}");
         }
+    }
+
+    /// 既存リポジトリの応答。`push` は書き込み権限、`size` は KB
+    fn detail_body(owner: &str, name: &str, push: bool, size: u64) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "full_name": format!("{owner}/{name}"),
+            "private": true,
+            "owner": {"login": owner},
+            "size": size,
+            "archived": false,
+            "permissions": {"admin": push, "maintain": push, "push": push, "pull": true},
+            "updated_at": "2026-10-08T00:00:00Z",
+        })
+    }
+
+    fn mock_detail(server: &MockServer, body: serde_json::Value) {
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/alice/thesis")
+                .header("authorization", "Bearer test_token_value");
+            then.status(200).json_body(body);
+        });
+    }
+
+    #[tokio::test]
+    async fn an_empty_writable_repository_can_be_adopted() {
+        let server = MockServer::start();
+        mock_detail(&server, detail_body("alice", "thesis", true, 0));
+        let commits = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repos/alice/thesis/commits")
+                .query_param("per_page", "1");
+            then.status(409)
+                .json_body(serde_json::json!({"message": "Git Repository is empty."}));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        commits.assert();
+        let RepositoryAdoption::Adoptable(repo) = result else {
+            panic!("expected adoptable, got {result:?}");
+        };
+        assert_eq!(repo.full_name, "alice/thesis");
+        assert!(repo.private);
+    }
+
+    #[tokio::test]
+    async fn an_empty_array_counts_as_empty_only_when_the_size_is_zero() {
+        for (size, expect_adoptable) in [(0, true), (12, false)] {
+            let server = MockServer::start();
+            mock_detail(&server, detail_body("alice", "thesis", true, size));
+            server.mock(|when, then| {
+                when.method(GET).path("/repos/alice/thesis/commits");
+                then.status(200).json_body(serde_json::json!([]));
+            });
+            let api = GithubApi::with_base(server.url(""));
+            let result = api
+                .check_adoptable_repository(&token(), "alice", "thesis")
+                .await
+                .expect("check");
+            assert_eq!(
+                matches!(result, RepositoryAdoption::Adoptable(_)),
+                expect_adoptable,
+                "size {size}: {result:?}"
+            );
+            if !expect_adoptable {
+                assert_eq!(result, RepositoryAdoption::NotEmpty);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repository_with_commits_is_never_adoptable() {
+        let server = MockServer::start();
+        mock_detail(&server, detail_body("alice", "thesis", true, 0));
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis/commits");
+            then.status(200)
+                .json_body(serde_json::json!([{"sha": "0123456789abcdef"}]));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NotEmpty);
+    }
+
+    #[tokio::test]
+    async fn a_conflict_that_is_not_about_emptiness_is_not_adoptable() {
+        let server = MockServer::start();
+        mock_detail(&server, detail_body("alice", "thesis", true, 0));
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis/commits");
+            then.status(409)
+                .json_body(serde_json::json!({"message": "Something else"}));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NotEmpty);
+    }
+
+    #[tokio::test]
+    async fn a_repository_without_write_access_is_not_adoptable() {
+        // 読み取り専用。保存の有無は確認しない（commits は呼ばれない）
+        let server2 = MockServer::start();
+        mock_detail(&server2, detail_body("alice", "thesis", false, 0));
+        let commits = server2.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis/commits");
+            then.status(409)
+                .json_body(serde_json::json!({"message": "Git Repository is empty."}));
+        });
+        let api = GithubApi::with_base(server2.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NoWriteAccess);
+        assert_eq!(commits.calls(), 0);
+
+        // 権限の情報が無い応答も接続しない側に倒す
+        let server3 = MockServer::start();
+        mock_detail(
+            &server3,
+            serde_json::json!({
+                "name": "thesis", "full_name": "alice/thesis", "private": true,
+                "owner": {"login": "alice"}, "size": 0
+            }),
+        );
+        let api = GithubApi::with_base(server3.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NoWriteAccess);
+
+        // アーカイブ済みは書き込めない
+        let server4 = MockServer::start();
+        let mut archived = detail_body("alice", "thesis", true, 0);
+        archived["archived"] = serde_json::json!(true);
+        mock_detail(&server4, archived);
+        let api = GithubApi::with_base(server4.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NoWriteAccess);
+
+        // 詳細の取得が 403（Organization の制限など）
+        let server5 = MockServer::start();
+        server5.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis");
+            then.status(403);
+        });
+        let api = GithubApi::with_base(server5.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NoWriteAccess);
+    }
+
+    #[tokio::test]
+    async fn a_missing_repository_is_reported_as_not_found() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis");
+            then.status(404);
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NotFound);
+
+        // 詳細は見えるが、保存の一覧が 404
+        let server = MockServer::start();
+        mock_detail(&server, detail_body("alice", "thesis", true, 0));
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis/commits");
+            then.status(404);
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let result = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect("check");
+        assert_eq!(result, RepositoryAdoption::NotFound);
+    }
+
+    #[tokio::test]
+    async fn adoption_check_failures_are_classified_without_the_token() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis");
+            then.status(401);
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let err = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect_err("401");
+        assert!(matches!(err, AuthError::Unauthorized));
+        assert!(!format!("{err} {err:?}").contains("test_token_value"));
+
+        let server = MockServer::start();
+        mock_detail(&server, detail_body("alice", "thesis", true, 0));
+        server.mock(|when, then| {
+            when.method(GET).path("/repos/alice/thesis/commits");
+            then.status(503);
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let err = api
+            .check_adoptable_repository(&token(), "alice", "thesis")
+            .await
+            .expect_err("503");
+        assert!(matches!(err, AuthError::ServerUnavailable));
+
+        // 名前の検証は通信より先に行う
+        let api = GithubApi::with_base("http://127.0.0.1:1".to_string());
+        let err = api
+            .check_adoptable_repository(&token(), "alice", "../x")
+            .await
+            .expect_err("invalid");
+        assert!(matches!(err, AuthError::InvalidRepositoryName));
+        let err = api
+            .check_adoptable_repository(&token(), "../x", "thesis")
+            .await
+            .expect_err("invalid");
+        assert!(matches!(err, AuthError::InvalidOwner));
     }
 }
