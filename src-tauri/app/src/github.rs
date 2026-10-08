@@ -25,10 +25,17 @@ use tauri_specta::Event;
 use crate::events::{ClonePhase, CloneProgress, StatusChanged};
 use crate::{git_runner, run_blocking, run_exclusive, AppError, AppState, ProjectInfo};
 
-/// GitHub OAuth App の client_id（公開情報）。実行時の環境変数 `HIKAE_GITHUB_CLIENT_ID` を優先し、
-/// 無ければビルド時に同名の環境変数で埋め込まれた値を使う。
+/// Hikae の GitHub OAuth App の client_id（公開情報。秘密ではない）。
+/// 配布版では利用者が環境変数を設定できないため、既定値として埋め込む。
+/// client secret は Device Flow では使わないので、ここにもリポジトリにも置かない。
+const DEFAULT_GITHUB_CLIENT_ID: &str = "Ov23lizVk3Q3GQCgYzib";
+
+/// GitHub OAuth App の client_id。実行時の環境変数 `HIKAE_GITHUB_CLIENT_ID` を優先し、
+/// 無ければビルド時に同名の環境変数で埋め込まれた値、最後に既定値を使う。
 fn client_id() -> Result<String, AuthError> {
-    resolve_client_id(option_env!("HIKAE_GITHUB_CLIENT_ID"))
+    resolve_client_id(Some(
+        option_env!("HIKAE_GITHUB_CLIENT_ID").unwrap_or(DEFAULT_GITHUB_CLIENT_ID),
+    ))
 }
 
 /// clone は大きいリポジトリで時間がかかるため、通常の 60 秒より長く待つ。
