@@ -343,6 +343,9 @@ async fn add_project(
     let store = state.store.clone();
     let locks = state.locks.clone();
     let id_clone = id.clone();
+    // 署名は実際のログインユーザー（数値 ID とログイン名）から決める。
+    // 未ログイン・オフラインならローカル専用の既定にし、保存時に実ユーザーへ更新する
+    let signing = github::signing_user(&state).await;
     run_exclusive(
         locks,
         id,
@@ -350,10 +353,8 @@ async fn add_project(
         move || {
             let runner = crate::git_runner();
             let ops = Ops::new(runner);
-            let identity = core_ops::Identity {
-                name: owner.clone(),
-                email: format!("{}+{}@users.noreply.github.com", id_clone, owner),
-            };
+            let identity =
+                core_ops::resolve_identity(signing.as_ref().map(|(i, l)| (*i, l.as_str())));
 
             ops.init_project(&path, remote_url.as_deref(), &identity)
                 .map_err(AppError::from_ops_error)?;
@@ -570,6 +571,9 @@ async fn save(
     let store = state.store_clone();
     let touch_id = id.clone();
     let memo = message.clone();
+    // ログイン済みのユーザーが分かっていれば、保存の直前にリポジトリ単位の署名を最新にする。
+    // 分からない（未ログイン・オフライン）ときは既存の署名を変えない
+    let signing = github::cached_signing_user(&state);
 
     let outcome = run_op(
         &ctx,
@@ -581,6 +585,10 @@ async fn save(
             data_is_safe: "変更は保存されていません",
         },
         move |ops, path| {
+            if let Some((uid, login)) = &signing {
+                let identity = core_ops::resolve_identity(Some((*uid, login.as_str())));
+                ops.apply_identity(path, &identity)?;
+            }
             let outcome = ops.save(path, &memo)?;
             if let Ok(guard) = store.lock() {
                 let _ = guard.touch_project(&touch_id);
@@ -1699,6 +1707,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             github::start_login,
             github::wait_login,
             github::cancel_login,
+            github::open_login_page,
             github::logout,
             github::list_owners,
             github::list_remote_projects,

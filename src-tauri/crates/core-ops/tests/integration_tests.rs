@@ -1640,3 +1640,29 @@ fn clone_refuses_a_non_empty_destination_and_accepts_an_empty_one(
     setup.cleanup()?;
     Ok(())
 }
+
+#[test]
+fn test_apply_identity_updates_local_config_and_commit_author(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::Builder::new().prefix("identity").tempdir()?;
+    let repo = tmp.path().join("proj");
+    let ops = Ops::new(new_runner());
+
+    // 未ログイン想定の既定で作成する
+    ops.init_project(&repo, None, &core_ops::resolve_identity(None))?;
+    let (_, name, _) = common::run_git(&repo, &["config", "--local", "user.name"]);
+    assert_eq!(name.trim(), core_ops::FALLBACK_NAME);
+
+    // ログイン後の実ユーザーへ更新して保存する
+    let real = core_ops::resolve_identity(Some((12345, "alice")));
+    ops.apply_identity(&repo, &real)?;
+    common::write_test_file(&repo, "a.txt", "hello")?;
+    ops.save(&repo, "first")?;
+
+    let (_, author, _) = common::run_git(&repo, &["log", "-1", "--format=%an <%ae>"]);
+    assert_eq!(
+        author.trim(),
+        "alice <12345+alice@users.noreply.github.com>"
+    );
+    Ok(())
+}

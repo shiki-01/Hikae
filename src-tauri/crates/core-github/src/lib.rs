@@ -17,7 +17,7 @@ pub use api::{
 pub use credential::{credential_helper_output, helper_command, respond_to_git};
 pub use device_flow::{client_id_from_env, resolve_client_id, DeviceFlowClient};
 pub use error::AuthError;
-pub use login::{LoginCoordinator, LoginEnd, LoginPrompt};
+pub use login::{is_login_page_url, LoginCoordinator, LoginEnd, LoginPrompt, LOGIN_PAGE_URL};
 pub use store::TokenStore;
 pub use token::{AccessToken, DeviceCode, User};
 pub use user::UserClient;

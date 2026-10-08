@@ -71,6 +71,12 @@ export const commands = {
 	waitLogin: () => typedError<LoginOutcome, AppError>(__TAURI_INVOKE("wait_login")),
 	/**  進行中のログインを中断する。待機中の `wait_login` は `canceled` で戻る。 */
 	cancelLogin: () => __TAURI_INVOKE<void>("cancel_login"),
+	/**
+	 *  ログインの確認ページ（https://github.com/login/device）を既定のブラウザで開く。
+	 *  任意の URL は受け取らない。開くのは進行中のログインが保持している確認 URL だけで、
+	 *  ホストとパスが固定の確認ページと完全一致する場合に限る。
+	 */
+	openLoginPage: () => typedError<null, AppError>(__TAURI_INVOKE("open_login_page")),
 	/**  ログアウトする。キーチェーンのトークンを削除する（GitHub 側の許可の取り消しは行わない）。 */
 	logout: () => typedError<null, AppError>(__TAURI_INVOKE("logout")),
 	/**  保存先（個人 + 所属 Organization）の一覧。 */

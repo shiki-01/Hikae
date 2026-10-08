@@ -38,6 +38,17 @@ pub(crate) fn init_project(
     Ok(())
 }
 
+/// リポジトリ単位の署名を更新する（`--local` のみ）。
+pub(crate) fn apply_identity(
+    runner: &GitRunner,
+    repo: &Path,
+    identity: &Identity,
+) -> Result<(), OpsError> {
+    runner.run_ok(repo, &["config", "--local", "user.name", &identity.name])?;
+    runner.run_ok(repo, &["config", "--local", "user.email", &identity.email])?;
+    Ok(())
+}
+
 /// URL から clone し、local config を設定。
 pub(crate) fn clone_project(
     runner: &GitRunner,

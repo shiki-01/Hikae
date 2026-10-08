@@ -237,6 +237,8 @@ export interface ProjectApi {
 	/** ユーザーが GitHub で許可するまで待つ。キャンセルされた場合は `canceled` で戻る */
 	waitLogin(): Promise<LoginOutcome>;
 	cancelLogin(): Promise<void>;
+	/** 進行中のログインの確認ページを既定のブラウザで開く（URL は渡せない。デスクトップアプリのみ） */
+	openLoginPage(): Promise<void>;
 	completeOnboarding(): Promise<void>;
 
 	listProjects(): Promise<Project[]>;

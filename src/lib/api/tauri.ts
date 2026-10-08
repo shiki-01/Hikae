@@ -115,6 +115,10 @@ export const tauriApi: ProjectApi = {
 		await commands.cancelLogin();
 	},
 
+	async openLoginPage() {
+		await unwrap(commands.openLoginPage());
+	},
+
 	async completeOnboarding() {
 		await unwrap(commands.completeOnboarding());
 	},

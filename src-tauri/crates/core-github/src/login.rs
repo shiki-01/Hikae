@@ -47,6 +47,15 @@ impl std::fmt::Debug for LoginEnd {
     }
 }
 
+/// ブラウザで開いてよい確認ページ。これ以外の URL は開かない。
+pub const LOGIN_PAGE_URL: &str = "https://github.com/login/device";
+
+/// URL が開いてよい確認ページ（`https://github.com/login/device`）と一致するか。
+/// クエリ・フラグメント・認証情報・別ホストはすべて不一致とする。
+pub fn is_login_page_url(url: &str) -> bool {
+    url == LOGIN_PAGE_URL
+}
+
 struct Pending {
     generation: u64,
     device: DeviceCode,
@@ -132,6 +141,13 @@ impl LoginCoordinator {
         }
     }
 
+    /// 進行中の手続きの確認ページ URL（device_code は含まない）。進行中でなければ None
+    pub fn verification_uri(&self) -> Option<String> {
+        self.lock()
+            .as_ref()
+            .map(|p| p.device.verification_uri.clone())
+    }
+
     /// 手続きが進行中か
     pub fn is_pending(&self) -> bool {
         self.lock().is_some()
@@ -186,6 +202,30 @@ mod tests {
         // 画面に渡す型にも、そのデバッグ表示にも device_code は出ない
         assert!(!format!("{prompt:?}").contains("secret_device_code"));
         assert!(login.is_pending());
+        assert_eq!(
+            login.verification_uri().as_deref(),
+            Some("https://github.com/login/device")
+        );
+        login.cancel();
+        assert_eq!(login.verification_uri(), None);
+    }
+
+    #[test]
+    fn only_the_fixed_login_page_is_openable() {
+        assert!(is_login_page_url("https://github.com/login/device"));
+        for bad in [
+            "http://github.com/login/device",
+            "https://github.com/login/device?x=1",
+            "https://github.com/login/device/",
+            "https://github.com.evil.example/login/device",
+            "https://evil.example/login/device",
+            "https://user@github.com/login/device",
+            "https://github.com/login/oauth/authorize",
+            "file:///C:/Windows/System32/calc.exe",
+            "",
+        ] {
+            assert!(!is_login_page_url(bad), "{bad}");
+        }
     }
 
     #[tokio::test]

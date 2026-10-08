@@ -422,6 +422,10 @@ export const mockApi: ProjectApi = {
 		cancelLoginWait?.();
 	},
 
+	async openLoginPage(): Promise<void> {
+		// ブラウザ単体では <a> が開くため、ここでは何もしない
+	},
+
 	async completeOnboarding(): Promise<void> {
 		writeStorage('hikae.session', { loggedIn: true, onboarded: true });
 	},

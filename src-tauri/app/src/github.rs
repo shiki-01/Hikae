@@ -156,6 +156,22 @@ async fn current_user(state: &AppState, token: &AccessToken) -> Result<User, Aut
     }
 }
 
+/// 署名に使うユーザーの確認結果。ログイン済みなら (数値 ID, ログイン名)、確認できなければ None。
+/// 未ログイン・オフライン・トークン失効はすべて None にし、エラーにはしない（トークンは扱わない）。
+pub(crate) async fn signing_user(state: &AppState) -> Option<(u64, String)> {
+    if let Some(user) = cached_user(state) {
+        return Some((user.id, user.login));
+    }
+    let token = load_token().await.ok().flatten()?;
+    let user = current_user(state, &token).await.ok()?;
+    Some((user.id, user.login))
+}
+
+/// 控えているユーザーだけから署名用の情報を返す（通信しない）。保存のたびに呼ぶため。
+pub(crate) fn cached_signing_user(state: &AppState) -> Option<(u64, String)> {
+    cached_user(state).map(|u| (u.id, u.login))
+}
+
 // ========== セッション・ログイン ==========
 
 /// ログイン中の GitHub ユーザー（表示用）
@@ -325,6 +341,48 @@ pub async fn wait_login(state: tauri::State<'_, AppState>) -> Result<LoginOutcom
         LoginEnd::Expired => Ok(LoginOutcome::Expired),
         LoginEnd::Canceled => Ok(LoginOutcome::Canceled),
     }
+}
+
+/// ログインの確認ページ（https://github.com/login/device）を既定のブラウザで開く。
+/// 任意の URL は受け取らない。開くのは進行中のログインが保持している確認 URL だけで、
+/// ホストとパスが固定の確認ページと完全一致する場合に限る。
+#[tauri::command]
+#[specta::specta]
+pub fn open_login_page(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let fail = |what: &str, next: &str, technical: Option<String>| AppError {
+        what_happened: what.to_string(),
+        data_is_safe: FILES_SAFE.to_string(),
+        next_action: next.to_string(),
+        technical_info: technical,
+    };
+    let Some(url) = state.login.verification_uri() else {
+        return Err(fail(
+            "ログインの手続きが進行中ではありません。",
+            "もう一度ログインを始めてください",
+            None,
+        ));
+    };
+    if !core_github::is_login_page_url(&url) {
+        return Err(fail(
+            "ログインのページを開けませんでした。",
+            "表示されているページを、ブラウザで手動で開いてください",
+            Some("unexpected verification url".to_string()),
+        ));
+    }
+    app.opener()
+        .open_url(core_github::LOGIN_PAGE_URL, None::<&str>)
+        .map_err(|e| {
+            fail(
+                "ブラウザを開けませんでした。",
+                "表示されているページを、ブラウザで手動で開いてください",
+                Some(e.to_string()),
+            )
+        })
 }
 
 /// 進行中のログインを中断する。待機中の `wait_login` は `canceled` で戻る。

@@ -4,6 +4,7 @@ mod add_files;
 mod clone_dest;
 mod file_in_use;
 mod history;
+mod identity;
 mod memo;
 mod models;
 mod open_path;
@@ -13,6 +14,7 @@ mod restore_file;
 
 pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
+pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
     new_restore_points, AddFilesOutcome, AddRejectReason, AddedFile, Choice, ConflictFile,
@@ -75,6 +77,12 @@ impl Ops {
         identity: &Identity,
     ) -> Result<(), OpsError> {
         operations::init_project(self.runner(), dir, remote_url, identity, self.now())
+    }
+
+    /// リポジトリ単位の署名（user.name / user.email）を更新する。
+    /// 作業フォルダとインデックスは変更しない（.git/config のみ）。グローバル設定へは書かない。
+    pub fn apply_identity(&self, repo: &Path, identity: &Identity) -> Result<(), OpsError> {
+        operations::apply_identity(self.runner(), repo, identity)
     }
 
     /// URL から clone し、identity を設定。

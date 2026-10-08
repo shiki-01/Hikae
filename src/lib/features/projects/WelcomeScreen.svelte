@@ -14,7 +14,7 @@
 	} from '@lucide/svelte';
 	import { onDestroy, type Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
-	import { api } from '#lib/api/index.js';
+	import { api, isTauri } from '#lib/api/index.js';
 	import { keys } from '#lib/api/keys.js';
 	import type { AddProjectMode, DeviceFlow, Project } from '#lib/api/types.js';
 	import Badge from '#lib/components/Badge.svelte';
@@ -92,6 +92,17 @@
 			reportError(error);
 		} finally {
 			flow = null;
+		}
+	}
+
+	// デスクトップアプリでは webview の <a> が開けない場合があるため、バックエンド経由で開く
+	async function openLoginPage(event: MouseEvent) {
+		if (!isTauri) return;
+		event.preventDefault();
+		try {
+			await api.openLoginPage();
+		} catch (error) {
+			reportError(error);
 		}
 	}
 
@@ -260,6 +271,7 @@
 									href={flow.verificationUri}
 									target="_blank"
 									rel="noopener noreferrer"
+									onclick={openLoginPage}
 									class="inline-flex align-items:center gap:2 px:3 py:1 r:md bg:bg-raised fg:fg b:1px|solid|border-strong type-small font-weight:500 text-decoration:none"
 								>
 									<ExternalLink size={14} aria-hidden="true" />
