@@ -14,6 +14,7 @@ mod pc_name;
 mod preview_file;
 mod recover;
 mod relocate;
+mod remote;
 mod restore_file;
 mod size_check;
 
@@ -33,6 +34,7 @@ pub use open_path::{resolve_in_project, OpenPathError};
 pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
 pub use preview_file::{cleanup_old_previews, PREVIEW_MAX_AGE};
 pub use recover::is_recoverable_operation;
+pub use remote::{project_folder_state, ConnectOutcome, FirstSave, FolderState, RemoteConnection};
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
 
 use core_git::GitRunner;
@@ -405,6 +407,49 @@ impl Ops {
     /// プロジェクト登録時に記録し、保存先 URL の無いプロジェクトの付け替え照合に使う。
     pub fn initial_commit(&self, repo: &Path) -> Result<Option<String>, OpsError> {
         relocate::initial_commit(self.runner(), repo)
+    }
+
+    /// クラウドの保管場所（`origin`）を設定する。すでに同じ場所なら何もしない。別の場所が設定済みなら
+    /// 拒否する。`.git/config` だけを変更し、作業フォルダとインデックスには触れない。
+    /// URL に認証情報を含めてはならない（含まれていれば拒否する）。
+    pub fn connect_remote(&self, repo: &Path, url: &str) -> Result<RemoteConnection, OpsError> {
+        remote::connect_remote(self.runner(), repo, url)
+    }
+
+    /// `connect_remote` に、頼まれたときの初回の保存（通常の保存と同じ復元点・サイズ検査を通る）を
+    /// 加えた版。アップロードは含めない（続けて `upload` を呼ぶ）。
+    pub fn connect(
+        &self,
+        repo: &Path,
+        url: &str,
+        first_save_memo: Option<&str>,
+        limits: SizeLimits,
+    ) -> Result<ConnectOutcome, OpsError> {
+        remote::connect(
+            self.runner(),
+            repo,
+            url,
+            first_save_memo,
+            limits,
+            self.now(),
+            self.meta(),
+        )
+    }
+
+    /// `origin` の URL。設定されていなければ None（読み取りのみ）。
+    pub fn origin_url(&self, repo: &Path) -> Result<Option<String>, OpsError> {
+        remote::origin_url(self.runner(), repo)
+    }
+
+    /// 現在のブランチから辿れる保存の数。まだ保存が無ければ 0（読み取りのみ）。
+    pub fn commit_count(&self, repo: &Path) -> Result<u32, OpsError> {
+        remote::commit_count(self.runner(), repo)
+    }
+
+    /// クラウドに上がっている最新の保存の日時（ISO 8601）。保管場所が無い、まだ何も上げていない
+    /// ときは None（読み取りのみ）。
+    pub fn last_uploaded_at(&self, repo: &Path) -> Result<Option<String>, OpsError> {
+        remote::upstream_tip_time(self.runner(), repo)
     }
 }
 

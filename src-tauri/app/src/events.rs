@@ -51,6 +51,10 @@ pub enum AttentionReason {
     /// 前回のアプリ終了で、途中で止まった操作が見つかった（E15）
     #[serde(rename = "interrupted-operation")]
     InterruptedOperation,
+    /// 登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。自動の取り込み・
+    /// アップロードは、フォルダが戻るまで見送る
+    #[serde(rename = "folder-missing")]
+    FolderMissing,
 }
 
 /// プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。

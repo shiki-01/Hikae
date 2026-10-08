@@ -237,6 +237,8 @@ async fn run_loop(app: tauri::AppHandle) {
     };
     // 通知済みの状態（変化したときだけ通知する）
     let mut notified: HashMap<String, (SyncHealth, Option<u64>)> = HashMap::new();
+    // フォルダが見つからない（E11）として通知済みのプロジェクト
+    let mut folder_missing_notified: HashSet<String> = HashSet::new();
     // 保守作業は起動直後に 1 回、その後は 1 日ごと
     let mut maintenance = MaintenanceTimer::daily();
 
@@ -269,8 +271,35 @@ async fn run_loop(app: tauri::AppHandle) {
             maintenance.mark_run(handle.now());
         }
 
+        // フォルダが見つからないプロジェクト（E11）は、git を実行せずに自動実行の対象から外す。
+        // 画面に知らせるのは、見つからなくなった最初の巡回だけ（戻れば通知の記録を消す）
+        let paths: Vec<(String, std::path::PathBuf)> = listed
+            .iter()
+            .map(|(p, _)| (p.id.clone(), p.path.clone()))
+            .collect();
+        let missing: HashSet<String> = tauri::async_runtime::spawn_blocking(move || {
+            paths
+                .into_iter()
+                .filter(|(_, path)| core_ops::project_folder_state(path).is_missing())
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        folder_missing_notified.retain(|id| missing.contains(id));
+        for id in &missing {
+            if folder_missing_notified.insert(id.clone()) {
+                let _ = NeedsAttention {
+                    project_id: id.clone(),
+                    reason: AttentionReason::FolderMissing,
+                }
+                .emit(&app);
+            }
+        }
+
         let targets: Vec<(Project, SyncPolicy, bool)> = listed
             .into_iter()
+            .filter(|(p, _)| !missing.contains(&p.id))
             .filter(|(p, _)| p.remote_url.as_deref().is_some_and(|u| !u.is_empty()))
             .map(|(p, s)| (p, policy_from_settings(&s), !s.save_before_pull))
             .collect();

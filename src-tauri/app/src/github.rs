@@ -86,6 +86,18 @@ pub(crate) fn auth_error(e: AuthError, data_is_safe: &str) -> AppError {
             "ログインの手続きが進行中ではありません。",
             "もう一度ログインを始めてください",
         ),
+        AuthError::RepositoryNameTaken => (
+            "同じ名前の保存先がすでに GitHub にあります。",
+            "別の名前を指定して、もう一度お試しください",
+        ),
+        AuthError::InvalidRepositoryName => (
+            "保存先の名前に使えない文字が含まれています。",
+            "英数字と - _ . だけで名前を付けて、もう一度お試しください",
+        ),
+        AuthError::InvalidOwner => (
+            "保存先の指定が正しくありません。",
+            "保存先を選び直してください",
+        ),
         _ => (
             "GitHub との通信に失敗しました。",
             "しばらくしてから、もう一度お試しください",
@@ -103,6 +115,9 @@ pub(crate) fn auth_error(e: AuthError, data_is_safe: &str) -> AppError {
         | AuthError::FailedToLoadToken
         | AuthError::FailedToDeleteToken => "keychain_error",
         AuthError::NoPendingLogin | AuthError::LoginInProgress => "login_not_in_progress",
+        AuthError::RepositoryNameTaken => "remote_name_taken",
+        AuthError::InvalidRepositoryName => "remote_name_invalid",
+        AuthError::InvalidOwner => "remote_owner_invalid",
         _ => "github_error",
     };
     AppError {
@@ -115,9 +130,9 @@ pub(crate) fn auth_error(e: AuthError, data_is_safe: &str) -> AppError {
     }
 }
 
-const FILES_SAFE: &str = "ファイルはこの PC に安全に残っています。";
+pub(crate) const FILES_SAFE: &str = "ファイルはこの PC に安全に残っています。";
 
-fn store_error(e: StoreError) -> AppError {
+pub(crate) fn store_error(e: StoreError) -> AppError {
     AppError {
         code: "database_error".to_string(),
         params: Vec::new(),
@@ -128,7 +143,7 @@ fn store_error(e: StoreError) -> AppError {
     }
 }
 
-fn lock_error() -> AppError {
+pub(crate) fn lock_error() -> AppError {
     AppError {
         code: "database_error".to_string(),
         params: Vec::new(),
@@ -147,7 +162,7 @@ async fn load_token() -> Result<Option<AccessToken>, AppError> {
 }
 
 /// ログイン済みであることを求める。未ログインは E01 として扱う。
-async fn require_token() -> Result<AccessToken, AppError> {
+pub(crate) async fn require_token() -> Result<AccessToken, AppError> {
     load_token()
         .await?
         .ok_or_else(|| auth_error(AuthError::Unauthorized, FILES_SAFE))
@@ -165,7 +180,7 @@ fn set_cached_user(state: &AppState, user: Option<User>) {
 
 /// ログイン中のユーザー。控えがあればそれを、無ければ GitHub に問い合わせる。
 /// トークンが無効だった場合は控えを捨てる。
-async fn current_user(state: &AppState, token: &AccessToken) -> Result<User, AuthError> {
+pub(crate) async fn current_user(state: &AppState, token: &AccessToken) -> Result<User, AuthError> {
     if let Some(user) = cached_user(state) {
         return Ok(user);
     }
@@ -499,7 +514,7 @@ pub async fn list_owners(state: tauri::State<'_, AppState>) -> Result<Vec<OwnerI
 }
 
 /// 読み取り系の GitHub 呼び出しの失敗を変換する。トークンが無効なら控えのユーザー情報も捨てる。
-fn github_read_error(state: &AppState, e: AuthError) -> AppError {
+pub(crate) fn github_read_error(state: &AppState, e: AuthError) -> AppError {
     if matches!(e, AuthError::Unauthorized) {
         set_cached_user(state, None);
     }
@@ -784,14 +799,8 @@ pub async fn clone_project(
                 target: Some(repo.clone()),
             });
             let project = guard.get_project(&task_id).map_err(store_error)?;
-            Ok(ProjectInfo {
-                id: project.id,
-                display_name: project.display_name,
-                path: project.path,
-                remote_url: project.remote_url,
-                owner: project.owner,
-                last_viewed_at: project.last_viewed_at,
-            })
+            drop(guard);
+            Ok(crate::project_info(&project))
         },
     )
     .await;

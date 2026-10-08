@@ -309,6 +309,178 @@ impl GithubApi {
         );
         Ok(RepoList { repos, truncated })
     }
+
+    /// 新しいリポジトリを作る（設計書 4.6）。個人は `POST /user/repos`、Organization は
+    /// `POST /orgs/{org}/repos`。`private` を呼び出し側が必ず決める（既定は非公開にすること）。
+    ///
+    /// - 所有者名とリポジトリ名は送信前に検証する（URL の経路に載る所有者名の注入を防ぐ）
+    /// - 同名が既にある（422）は `RepositoryNameTaken`、権限が無い（403・Organization が見えない 404）は
+    ///   `Forbidden`（E02）。レート制限・通信不可・GitHub 側の障害は他の API と同じ分類
+    /// - 応答本文・URL・トークンはエラーに含めない。作成後の URL は呼び出し側が `clone_url_for` で組み立てる
+    pub async fn create_repository(
+        &self,
+        token: &AccessToken,
+        owner: &str,
+        kind: OwnerKind,
+        name: &str,
+        private: bool,
+        description: Option<&str>,
+    ) -> Result<RemoteRepo, AuthError> {
+        validate_owner_login(owner)?;
+        validate_repository_name(name)?;
+
+        let path = match kind {
+            OwnerKind::Personal => "/user/repos".to_string(),
+            OwnerKind::Org => format!("/orgs/{owner}/repos"),
+        };
+        let mut body = serde_json::json!({
+            "name": name,
+            "private": private,
+            "auto_init": false,
+        });
+        if let Some(text) = description.map(str::trim).filter(|d| !d.is_empty()) {
+            body["description"] = serde_json::Value::String(text.to_string());
+        }
+
+        let url = format!("{}{}", self.base, path);
+        let response = http::with_github_headers(self.client.post(url), token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(http::classify_send_error)?;
+
+        let status = response.status();
+        if status == StatusCode::UNPROCESSABLE_ENTITY {
+            return Err(classify_unprocessable(response).await);
+        }
+        // Organization が見えない（存在しない、または OAuth アプリの利用が許可されていない）
+        if status == StatusCode::NOT_FOUND {
+            return Err(AuthError::Forbidden);
+        }
+        if !status.is_success() {
+            let remaining = http::rate_limit_remaining(&response);
+            return Err(http::classify_status(status, remaining.as_deref()));
+        }
+
+        let created = response
+            .json::<RepoResponse>()
+            .await
+            .map_err(|_| AuthError::JsonError)?;
+        Ok(RemoteRepo {
+            full_name: created.full_name,
+            name: created.name,
+            owner_login: created.owner.login,
+            private: created.private,
+            updated_at: created.pushed_at.or(created.updated_at),
+        })
+    }
+}
+
+/// 422 の応答から、同名の衝突とそれ以外の入力エラーを見分ける。応答本文は返さず分類だけにする。
+async fn classify_unprocessable(response: reqwest::Response) -> AuthError {
+    #[derive(Deserialize)]
+    struct Detail {
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Body {
+        #[serde(default)]
+        errors: Vec<Detail>,
+    }
+    let Ok(body) = response.json::<Body>().await else {
+        return AuthError::UnexpectedStatus;
+    };
+    let exists = body.errors.iter().any(|e| {
+        e.message
+            .as_deref()
+            .is_some_and(|m| m.to_ascii_lowercase().contains("already exists"))
+    });
+    if exists {
+        return AuthError::RepositoryNameTaken;
+    }
+    if body
+        .errors
+        .iter()
+        .any(|e| e.field.as_deref() == Some("name"))
+    {
+        return AuthError::InvalidRepositoryName;
+    }
+    AuthError::UnexpectedStatus
+}
+
+/// GitHub のアカウント名・Organization 名として使える文字だけか（英数字と `-`、39 文字以内）。
+/// API の経路（`/orgs/{org}/repos`）に載せる値のため、`/` や `..` が混ざらないことを保証する。
+pub fn validate_owner_login(owner: &str) -> Result<(), AuthError> {
+    let valid = !owner.is_empty()
+        && owner.len() <= 39
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if valid {
+        Ok(())
+    } else {
+        Err(AuthError::InvalidOwner)
+    }
+}
+
+/// リポジトリ名の長さの上限（GitHub の規則）
+const MAX_REPOSITORY_NAME_LEN: usize = 100;
+
+/// リポジトリ名の検証。英数字と `-`・`_`・`.` だけ、1〜100 文字。
+/// `.` と `..`、`.git` で終わる名前（GitHub は末尾を取り除いて別名にする）と、`.wiki` で終わる名前
+/// （Wiki 用のリポジトリ名と衝突する）は予約名として拒否する。
+pub fn validate_repository_name(name: &str) -> Result<(), AuthError> {
+    let lower = name.to_ascii_lowercase();
+    let valid = !name.is_empty()
+        && name.len() <= MAX_REPOSITORY_NAME_LEN
+        && name != "."
+        && name != ".."
+        && !lower.ends_with(".git")
+        && !lower.ends_with(".wiki")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(AuthError::InvalidRepositoryName)
+    }
+}
+
+/// プロジェクトの表示名から、GitHub で使えるリポジトリ名の案を作る。
+/// ASCII の英数字と `-`・`_`・`.` だけを残し、空白は `-` にする。日本語の名前などで何も残らない
+/// ときは `hikae-<識別子の先頭 8 文字>` にする（`seed` はプロジェクト ID）。結果は必ず検証を通る。
+pub fn suggest_repository_name(display_name: &str, seed: &str) -> String {
+    let mut out = String::new();
+    for c in display_name.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.') {
+            out.push(c);
+        } else if c == '-' || c.is_whitespace() {
+            // 連続する区切りは 1 つにまとめる
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        }
+    }
+    let trimmed = out.trim_matches(|c| c == '-' || c == '.');
+    let mut name: String = trimmed.chars().take(MAX_REPOSITORY_NAME_LEN).collect();
+    if validate_repository_name(&name).is_err() {
+        let short: String = seed
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(8)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        name = if short.is_empty() {
+            "hikae-project".to_string()
+        } else {
+            format!("hikae-{short}")
+        };
+    }
+    name
 }
 
 impl Default for GithubApi {
@@ -613,6 +785,257 @@ mod tests {
             "user:pw@host/x",
         ] {
             assert_eq!(clone_url_for(bad), None, "{bad}");
+        }
+    }
+
+    fn created_body(owner: &str, name: &str, private: bool) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "full_name": format!("{owner}/{name}"),
+            "private": private,
+            "owner": {"login": owner},
+            "updated_at": "2026-10-08T00:00:00Z",
+        })
+    }
+
+    #[tokio::test]
+    async fn personal_repository_is_created_private_through_user_repos() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/user/repos")
+                .header("authorization", "Bearer test_token_value")
+                .header("user-agent", "Hikae")
+                .json_body(serde_json::json!({
+                    "name": "thesis",
+                    "private": true,
+                    "auto_init": false,
+                    "description": "卒業論文の控え",
+                }));
+            then.status(201)
+                .json_body(created_body("alice", "thesis", true));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let repo = api
+            .create_repository(
+                &token(),
+                "alice",
+                OwnerKind::Personal,
+                "thesis",
+                true,
+                Some(" 卒業論文の控え "),
+            )
+            .await
+            .expect("created");
+        mock.assert();
+        assert_eq!(repo.full_name, "alice/thesis");
+        assert!(repo.private);
+        assert_eq!(
+            clone_url_for(&repo.full_name).as_deref(),
+            Some("https://github.com/alice/thesis.git")
+        );
+    }
+
+    #[tokio::test]
+    async fn organization_repository_uses_the_org_endpoint_and_can_be_public() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/orgs/acme-team/repos")
+                .json_body(serde_json::json!({
+                    "name": "report",
+                    "private": false,
+                    "auto_init": false,
+                }));
+            then.status(201)
+                .json_body(created_body("acme-team", "report", false));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let repo = api
+            .create_repository(&token(), "acme-team", OwnerKind::Org, "report", false, None)
+            .await
+            .expect("created");
+        mock.assert();
+        assert!(!repo.private);
+        assert_eq!(repo.owner_login, "acme-team");
+    }
+
+    #[tokio::test]
+    async fn existing_name_is_a_dedicated_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path("/user/repos");
+            then.status(422).json_body(serde_json::json!({
+                "message": "Repository creation failed.",
+                "errors": [{
+                    "resource": "Repository",
+                    "code": "custom",
+                    "field": "name",
+                    "message": "name already exists on this account"
+                }]
+            }));
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let err = api
+            .create_repository(&token(), "alice", OwnerKind::Personal, "thesis", true, None)
+            .await
+            .expect_err("422");
+        assert!(matches!(err, AuthError::RepositoryNameTaken));
+        assert!(!format!("{err} {err:?}").contains("test_token_value"));
+    }
+
+    #[tokio::test]
+    async fn other_unprocessable_responses_are_classified_without_the_body() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/user/repos")
+                .json_body(serde_json::json!({
+                    "name": "badname", "private": true, "auto_init": false
+                }));
+            then.status(422).json_body(serde_json::json!({
+                "message": "Repository creation failed.",
+                "errors": [{"resource": "Repository", "code": "invalid", "field": "name"}]
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/user/repos")
+                .json_body(serde_json::json!({
+                    "name": "weird", "private": true, "auto_init": false
+                }));
+            then.status(422).body("not json");
+        });
+        let api = GithubApi::with_base(server.url(""));
+        let err = api
+            .create_repository(
+                &token(),
+                "alice",
+                OwnerKind::Personal,
+                "badname",
+                true,
+                None,
+            )
+            .await
+            .expect_err("422");
+        assert!(matches!(err, AuthError::InvalidRepositoryName));
+        let err = api
+            .create_repository(&token(), "alice", OwnerKind::Personal, "weird", true, None)
+            .await
+            .expect_err("422");
+        assert!(matches!(err, AuthError::UnexpectedStatus));
+    }
+
+    #[tokio::test]
+    async fn creation_failures_follow_the_existing_classification() {
+        type Check = fn(&AuthError) -> bool;
+        let cases: [(u16, Option<&str>, Check); 6] = [
+            (401, None, |e| matches!(e, AuthError::Unauthorized)),
+            // Organization の管理者の許可が必要（E02）
+            (403, None, |e| matches!(e, AuthError::Forbidden)),
+            (403, Some("0"), |e| matches!(e, AuthError::RateLimited)),
+            (429, None, |e| matches!(e, AuthError::RateLimited)),
+            // Organization が見えない
+            (404, None, |e| matches!(e, AuthError::Forbidden)),
+            (503, None, |e| matches!(e, AuthError::ServerUnavailable)),
+        ];
+        for (status, remaining, check) in cases {
+            let server = MockServer::start();
+            server.mock(|when, then| {
+                when.method(POST).path("/orgs/acme/repos");
+                let then = then.status(status);
+                let _ = match remaining {
+                    Some(value) => then.header("x-ratelimit-remaining", value),
+                    None => then,
+                };
+            });
+            let api = GithubApi::with_base(server.url(""));
+            let err = api
+                .create_repository(&token(), "acme", OwnerKind::Org, "report", true, None)
+                .await
+                .expect_err("failure");
+            assert!(check(&err), "{status}: {err:?}");
+            assert!(!format!("{err} {err:?}").contains("test_token_value"));
+        }
+    }
+
+    #[tokio::test]
+    async fn creation_to_an_unreachable_server_is_network_unavailable() {
+        let api = GithubApi::with_base("http://127.0.0.1:1".to_string());
+        let err = api
+            .create_repository(&token(), "alice", OwnerKind::Personal, "thesis", true, None)
+            .await
+            .expect_err("unreachable");
+        assert!(matches!(err, AuthError::NetworkUnavailable));
+        assert!(!format!("{err} {err:?}").contains("test_token_value"));
+    }
+
+    #[tokio::test]
+    async fn invalid_names_are_rejected_before_any_request() {
+        // 何も待ち受けていないポート。検証より先に通信すると NetworkUnavailable になる
+        let api = GithubApi::with_base("http://127.0.0.1:1".to_string());
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a b",
+            "卒業論文",
+            "a/b",
+            "x.git",
+            "x.WIKI",
+            &"a".repeat(101),
+        ] {
+            let err = api
+                .create_repository(&token(), "alice", OwnerKind::Personal, bad, true, None)
+                .await
+                .expect_err(bad);
+            assert!(matches!(err, AuthError::InvalidRepositoryName), "{bad}");
+        }
+        for bad in ["", "../x", "a/b", "-a", "a-", "a_b", "a b", &"a".repeat(40)] {
+            let err = api
+                .create_repository(&token(), bad, OwnerKind::Org, "ok", true, None)
+                .await
+                .expect_err(bad);
+            assert!(matches!(err, AuthError::InvalidOwner), "{bad}");
+        }
+    }
+
+    #[test]
+    fn valid_repository_names_are_accepted() {
+        for ok in [
+            "thesis",
+            "my-report_2026.v2",
+            ".github",
+            "A",
+            &"a".repeat(100),
+        ] {
+            assert!(validate_repository_name(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn suggested_names_are_always_valid_and_ascii() {
+        assert_eq!(
+            suggest_repository_name("My Report 2026", "id"),
+            "My-Report-2026"
+        );
+        assert_eq!(suggest_repository_name("  a  --  b  ", "id"), "a-b");
+        assert_eq!(suggest_repository_name("report_v1.2", "id"), "report_v1.2");
+        // 日本語だけで何も残らないときは、識別子から作る
+        assert_eq!(
+            suggest_repository_name("卒業論文", "1A2B-3c4d-5e6f"),
+            "hikae-1a2b3c4d"
+        );
+        assert_eq!(suggest_repository_name("卒業論文", ""), "hikae-project");
+        // 予約名になってしまう候補は使わない
+        assert_eq!(
+            suggest_repository_name("notes.git", "abcd1234"),
+            "hikae-abcd1234"
+        );
+        assert_eq!(suggest_repository_name("..", "abcd1234"), "hikae-abcd1234");
+        for input in ["", "日本語 English", &"x".repeat(300), "a/b:c*d", "-.-"] {
+            let name = suggest_repository_name(input, "seed-0001");
+            assert!(validate_repository_name(&name).is_ok(), "{input} -> {name}");
         }
     }
 }

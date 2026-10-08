@@ -959,6 +959,10 @@ pub(crate) fn upload(
     let sync = sync_state(runner, repo)?;
 
     if !sync.has_upstream {
+        // まだ 1 度も保存していない（上げるものが無い）ときは、push が失敗するため何もしない
+        if crate::remote::nothing_committed(runner, repo)? {
+            return Ok(UploadOutcome::NothingToUpload);
+        }
         // upstream 未設定：push -u
         runner.run_ok(repo, &["push", "-u", "origin", "HEAD"])?;
         return Ok(UploadOutcome::Pushed);

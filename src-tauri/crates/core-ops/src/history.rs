@@ -8,6 +8,7 @@
 
 use crate::models::*;
 use crate::operations::current_branch;
+use crate::remote::unuploaded_commits;
 use core_git::GitRunner;
 use core_safety::SNAPSHOT_REF_PREFIX;
 use std::collections::{HashMap, HashSet};
@@ -154,6 +155,10 @@ pub(crate) fn history(
     let out = runner.run_ok(repo, &args)?;
     let records = parse_log_records(&out.stdout);
 
+    // クラウドに上がっていない保存（upstream が無ければ None）。手動の保存のうち、これに含まれず
+    // upstream から辿れるものを「クラウドにある」とする
+    let unuploaded = unuploaded_commits(runner, repo)?;
+
     // 手動の保存と同じ内容（ツリー）の自動保存は出さない
     let manual_trees: HashSet<&str> = records
         .iter()
@@ -192,6 +197,10 @@ pub(crate) fn history(
                     .count() as u32
             }
         };
+        let cloud_synced = snapshot_ref.is_none()
+            && unuploaded
+                .as_ref()
+                .is_some_and(|set| !set.contains(&record.oid));
         let kind = if snapshot_ref.is_some() {
             HistoryKind::Auto
         } else {
@@ -207,6 +216,7 @@ pub(crate) fn history(
             changed_files_count,
             kind,
             pc_name,
+            cloud_synced,
         });
     }
     Ok(entries)

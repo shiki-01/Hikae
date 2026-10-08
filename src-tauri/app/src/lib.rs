@@ -20,6 +20,7 @@ mod events;
 mod github;
 mod maintenance;
 mod ops_runner;
+mod remote;
 mod scheduler;
 
 use events::{OpTrigger, StatusChanged};
@@ -27,6 +28,7 @@ use ops_runner::{
     memo_labels, pull_outcome_name, push_outcome_name, run_op, size_limits_for, summarize_pull,
     summarize_push, OpContext, OpSpec, OpSummary,
 };
+use remote::{AddProjectResult, RemoteConnectResult, RemoteRequest};
 use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 
 // ========== エラー型（specta::Type 実装、設計書5章） ==========
@@ -48,6 +50,10 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 ///   `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
 ///   `keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、
 ///   `github_error`
+/// - 保存先の作成・接続: `remote_name_taken`（同名のリポジトリが既にある）、`remote_name_invalid`、
+///   `remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、
+///   `project_folder_missing`、`remote_connect_failed`（権限不足は `github_forbidden`（E02）、
+///   通信できないは `network_unavailable`（E03））
 /// - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
 ///   `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
 ///   `clone_failed`、`clone_timeout`、`clone_register_failed`
@@ -311,6 +317,35 @@ fn record_initial_commit(store: &Arc<Mutex<Store>>, id: &str, path: &std::path::
     }
 }
 
+/// 登録されたプロジェクトを画面向けの情報にする（読み取りのみ）。
+///
+/// - フォルダが見つからない・フォルダでない・リポジトリでないときは `folder_missing`（E11）を立て、
+///   git を実行しない（フォルダが無いと git がエラーになるため）
+/// - 最終アップロード日時は、クラウドに上がっている最新の保存（`@{u}`）の日時。保存先が無い、
+///   まだ何も上げていない、取得できないときは None
+pub(crate) fn project_info(p: &Project) -> ProjectInfo {
+    let folder_missing = core_ops::project_folder_state(&p.path).is_missing();
+    let connected = p.remote_url.as_deref().is_some_and(|u| !u.is_empty());
+    let last_uploaded_at = if connected && !folder_missing {
+        Ops::new(git_runner())
+            .last_uploaded_at(&p.path)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    ProjectInfo {
+        id: p.id.clone(),
+        display_name: p.display_name.clone(),
+        path: p.path.clone(),
+        remote_url: p.remote_url.clone(),
+        owner: p.owner.clone(),
+        last_viewed_at: p.last_viewed_at.clone(),
+        folder_missing,
+        last_uploaded_at,
+    }
+}
+
 // ========== git の呼び出し口 ==========
 
 /// アプリ共通の GitRunner を作る。
@@ -387,18 +422,10 @@ async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectI
             next_action: "もう一度試してください".to_string(),
             technical_info: Some(format!("{:?}", e)),
         })?;
+        // git を実行する間はデータベースのロックを持たない
+        drop(store_guard);
 
-        Ok(projects
-            .into_iter()
-            .map(|p| ProjectInfo {
-                id: p.id,
-                display_name: p.display_name,
-                path: p.path,
-                remote_url: p.remote_url,
-                owner: p.owner,
-                last_viewed_at: p.last_viewed_at,
-            })
-            .collect())
+        Ok(projects.iter().map(project_info).collect())
     })
     .await
     .map_err(|e| AppError {
@@ -411,24 +438,39 @@ async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectI
     })?
 }
 
-/// プロジェクトを追加（既存フォルダ登録・新規作成・GitHub から clone）。
+/// プロジェクトを追加（既存フォルダ登録・新規作成）。GitHub から取得する場合は `clone_project`。
+///
+/// `remote` を渡すと、ローカルの登録に続けて GitHub 上にリポジトリを作り、保存先として接続し、
+/// 初回の保存（変更があれば）と初回のアップロードまで行う（設計書 4.6）。途中で失敗しても
+/// ローカルの登録は残る（保存先の無いプロジェクトとして使え、あとから `connect_remote` で接続できる）。
+/// その場合は `AddProjectResult.remote.error` に 3 要素のエラーが入る。
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 async fn add_project(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     display_name: String,
     path: PathBuf,
     owner: String,
     remote_url: Option<String>,
-) -> Result<(), AppError> {
+    remote: Option<RemoteRequest>,
+) -> Result<AddProjectResult, AppError> {
     let store = state.store.clone();
     let locks = state.locks.clone();
     let id_clone = id.clone();
+    let id_for_flow = id.clone();
+    // 公開の確認が済んでいない要求は、何も作る前に断る
+    if let Some(request) = &remote {
+        remote::check_public_confirmed(request)?;
+    }
+    // 保存先を作る場合の所有者を、プロジェクトの所有者として記録する
+    let owner = remote.as_ref().map_or(owner, |r| r.owner.clone());
     // 署名は実際のログインユーザー（数値 ID とログイン名）から決める。
     // 未ログイン・オフラインならローカル専用の既定にし、保存時に実ユーザーへ更新する
     let signing = github::signing_user(&state).await;
-    run_exclusive(
+    let has_origin = run_exclusive(
         locks,
         id,
         "ファイルは変更されていません",
@@ -440,6 +482,11 @@ async fn add_project(
 
             ops.init_project(&path, remote_url.as_deref(), &identity)
                 .map_err(AppError::from_ops_error)?;
+
+            // 既存のリポジトリがすでに保存先（origin）を持っているときは、それを使う（作り直さない）
+            let existing_origin = ops.origin_url(&path).ok().flatten();
+            let has_origin = existing_origin.is_some();
+            let stored_remote = remote_url.clone().or(existing_origin);
 
             // 既存のリポジトリを登録する場合に備えて、最初の保存の OID を先に調べておく
             let initial_commit = ops.initial_commit(&path).ok().flatten();
@@ -457,7 +504,7 @@ async fn add_project(
                     &id_clone,
                     &display_name,
                     &path,
-                    remote_url.as_deref(),
+                    stored_remote.as_deref(),
                     &owner,
                     "main",
                 )
@@ -476,10 +523,23 @@ async fn add_project(
                 let _ = store_guard.set_initial_commit(&id_clone, &oid);
             }
 
-            Ok(())
+            Ok(has_origin)
         },
     )
-    .await
+    .await?;
+
+    // ローカルの登録はここで完了している。保存先の作成に失敗しても登録は残す。
+    // すでに保存先（origin）を持つリポジトリは、それを使うため新しく作らない
+    let Some(request) = remote.filter(|_| !has_origin) else {
+        return Ok(AddProjectResult { remote: None });
+    };
+    let result = match remote::connect_flow(app, &state, &id_for_flow, request, true).await {
+        Ok(result) => result,
+        Err(error) => RemoteConnectResult::not_connected(error),
+    };
+    Ok(AddProjectResult {
+        remote: Some(result),
+    })
 }
 
 /// プロジェクトを削除（登録のみ。フォルダは消さない）。
@@ -557,6 +617,15 @@ async fn project_status(
             .and_then(|g| g.interrupted_operation(&id).ok().flatten())
             .map(|e| e.operation);
 
+        // フォルダが見つからない（E11）ときは git を実行しない（実行するとエラーになるため）
+        if core_ops::project_folder_state(&project.path).is_missing() {
+            return Ok(SyncStatus {
+                folder_missing: true,
+                interrupted_operation,
+                ..SyncStatus::default()
+            });
+        }
+
         let sync = ops
             .sync_state(&project.path)
             .map_err(AppError::from_ops_error)?;
@@ -569,13 +638,24 @@ async fn project_status(
             .map_err(AppError::from_ops_error)?
             .len();
 
+        // 保存先は設定済みだが一度もアップロードしていない（upstream なし）ときは、
+        // 作った保存のすべてがアップロード待ち
+        let connected = project.remote_url.as_deref().is_some_and(|u| !u.is_empty());
+        let upload_pending = if sync.has_upstream || !connected {
+            sync.ahead
+        } else {
+            ops.commit_count(&project.path)
+                .map_err(AppError::from_ops_error)?
+        };
+
         Ok(SyncStatus {
             unsaved_changes: u32::try_from(unsaved_changes).unwrap_or(u32::MAX),
-            upload_pending: sync.ahead,
+            upload_pending,
             pull_pending: sync.behind,
             has_conflicts: !conflicts.is_empty(),
             is_syncing: false,
             interrupted_operation,
+            folder_missing: false,
         })
     })
     .await
@@ -957,6 +1037,11 @@ async fn list_history(
         let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
+        // フォルダが見つからない（E11）ときは git を実行せず、空の履歴を返す
+        if core_ops::project_folder_state(&project.path).is_missing() {
+            return Ok(Vec::new());
+        }
+
         let entries = ops
             .history(&project.path, max_count as usize)
             .map_err(AppError::from_ops_error)?;
@@ -970,6 +1055,7 @@ async fn list_history(
                 changed_files_count: e.changed_files_count,
                 is_snapshot: e.snapshot_ref.is_some(),
                 pc_name: e.pc_name,
+                cloud_synced: e.cloud_synced,
             })
             .collect())
     })
@@ -1663,14 +1749,8 @@ async fn relocate_project(
                 next_action: "プロジェクト一覧から確認してください".to_string(),
                 technical_info: Some(format!("{e:?}")),
             })?;
-            Ok(ProjectInfo {
-                id: updated.id,
-                display_name: updated.display_name,
-                path: updated.path,
-                remote_url: updated.remote_url,
-                owner: updated.owner,
-                last_viewed_at: updated.last_viewed_at,
-            })
+            drop(guard);
+            Ok(project_info(&updated))
         },
     )
     .await?;
@@ -1725,6 +1805,11 @@ pub struct ProjectInfo {
     pub remote_url: Option<String>,
     pub owner: String,
     pub last_viewed_at: String,
+    /// 登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない
+    pub folder_missing: bool,
+    /// クラウドに上がっている最新の保存の日時（ISO 8601）。保存先が無い、まだ何も上げていない、
+    /// フォルダが見つからないときは null
+    pub last_uploaded_at: Option<String>,
 }
 
 /// 変更ファイル
@@ -1827,6 +1912,8 @@ pub struct HistoryItem {
     pub is_snapshot: bool,
     /// この保存を作った PC の名前。記録が無ければ null。`message` には含まれない
     pub pc_name: Option<String>,
+    /// クラウドに上がっている保存か。自動保存と、クラウドの保管場所が無い・まだ何も上げていないときは false
+    pub cloud_synced: bool,
 }
 
 /// 差分行
@@ -1910,6 +1997,8 @@ pub struct SyncStatus {
     pub is_syncing: bool,
     /// 前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null（E15）
     pub interrupted_operation: Option<String>,
+    /// 登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない
+    pub folder_missing: bool,
 }
 
 /// 1 ファイルを戻す影響の種類
@@ -2063,6 +2152,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             github::list_owners,
             github::list_remote_projects,
             github::clone_project,
+            remote::connect_remote,
             app_settings::get_settings,
             app_settings::update_settings,
             app_settings::complete_onboarding,

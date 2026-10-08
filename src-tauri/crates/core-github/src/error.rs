@@ -78,6 +78,15 @@ pub enum AuthError {
     #[error("GitHub から想定外の応答がありました")]
     UnexpectedStatus,
 
+    #[error("同じ名前のリポジトリがすでにあります")]
+    RepositoryNameTaken,
+
+    #[error("リポジトリの名前が GitHub の規則に合いません")]
+    InvalidRepositoryName,
+
+    #[error("保存先（所有者）の名前が GitHub の規則に合いません")]
+    InvalidOwner,
+
     #[error("ログインの手続きが始まっていません")]
     NoPendingLogin,
 

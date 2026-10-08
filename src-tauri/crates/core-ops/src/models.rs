@@ -217,6 +217,9 @@ pub struct HistoryEntry {
     /// この保存を作った PC の名前（commit のトレーラー `Hikae-PC`）。記録が無ければ None。
     /// `message` にはトレーラーを含めない
     pub pc_name: Option<String>,
+    /// クラウドに上がっている保存か（`@{u}` から辿れる手動の保存）。自動保存と、クラウドの保管場所が
+    /// 無い・まだ何も上げていないときは常に false
+    pub cloud_synced: bool,
 }
 
 /// 特定時点のファイル情報
