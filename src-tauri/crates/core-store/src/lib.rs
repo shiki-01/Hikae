@@ -679,47 +679,52 @@ mod tests {
     }
 
     /// 異なる ID での並行実行が可能であることを検証。
+    /// 時間の計測ではなく、双方がクリティカルセクションに同時にいることを観測する（CI の負荷で揺れない）。
     #[test]
     fn test_project_locks_different_ids_parallel() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        use std::time::Instant;
+        use std::time::{Duration, Instant};
 
         let locks = Arc::new(ProjectLocks::new());
+        let inside = Arc::new(AtomicUsize::new(0));
+        let overlapped = Arc::new(AtomicUsize::new(0));
+        let met = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        let start = Instant::now();
-
-        let handle1 = {
-            let locks_clone = locks.clone();
+        let spawn = |id: &'static str| {
+            let locks = locks.clone();
+            let inside = inside.clone();
+            let overlapped = overlapped.clone();
+            let met = met.clone();
             std::thread::spawn(move || {
-                locks_clone
-                    .run("proj-1", || {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+                locks
+                    .run(id, || {
+                        inside.fetch_add(1, Ordering::SeqCst);
+                        // 相手が入ってくるまで最大 5 秒待つ。直列化されていれば相手は入れない
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while !met.load(Ordering::SeqCst) && Instant::now() < deadline {
+                            if inside.load(Ordering::SeqCst) == 2 {
+                                met.store(true, Ordering::SeqCst);
+                            }
+                            std::thread::yield_now();
+                        }
+                        if met.load(Ordering::SeqCst) {
+                            overlapped.fetch_add(1, Ordering::SeqCst);
+                        }
+                        inside.fetch_sub(1, Ordering::SeqCst);
                     })
                     .expect("run failed")
             })
         };
 
-        let handle2 = {
-            let locks_clone = locks.clone();
-            std::thread::spawn(move || {
-                locks_clone
-                    .run("proj-2", || {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    })
-                    .expect("run failed")
-            })
-        };
+        let h1 = spawn("proj-1");
+        let h2 = spawn("proj-2");
+        h1.join().expect("thread join failed");
+        h2.join().expect("thread join failed");
 
-        handle1.join().expect("thread join failed");
-        handle2.join().expect("thread join failed");
-
-        let elapsed = start.elapsed();
-
-        // 並行実行なら 100-150ms、直列実行なら 200ms+ になるはず
         assert!(
-            elapsed.as_millis() < 180,
-            "異なる ID でのロック: 並行実行すべき（実行時間: {}ms）",
-            elapsed.as_millis()
+            overlapped.load(Ordering::SeqCst) >= 1,
+            "異なる ID のロックは並行実行できるはず"
         );
     }
 }
