@@ -1,5 +1,12 @@
 // スナップショット、バックアップ ref、操作ジャーナル、間引き。
 
+mod thin;
+
+pub use thin::{
+    plan_thinning, thin_restore_points, ThinPolicy, ThinReport, BACKUP_RETENTION_DAYS,
+    DEFAULT_SNAPSHOT_RETENTION_DAYS,
+};
+
 use core_git::{GitError, GitRunner};
 use std::ffi::OsStr;
 use std::path::Path;

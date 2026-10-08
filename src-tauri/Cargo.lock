@@ -1779,6 +1779,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-specta",
+ "time",
 ]
 
 [[package]]

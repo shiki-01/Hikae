@@ -2,6 +2,7 @@
 
 use crate::memo::{self, MemoChange, MemoChangeKind, MemoLabels};
 use crate::models::*;
+use crate::size_check::{self, SaveOptions};
 use core_git::GitRunner;
 use core_safety::{create_backup_ref, create_restore_point};
 use std::path::Path;
@@ -91,10 +92,17 @@ pub(crate) fn clone_project(
 }
 
 /// 変更をコミット。未保存変更がなければ NothingToSave。
+///
+/// 1. 新規・変更ファイルのサイズを検査する（設計書 4.1 手順 1）。決定が必要な大きいファイルが
+///    残っていれば、何も変更せず `NeedsSizeDecision` を返す（復元点も作らない）
+/// 2. 復元点を作る（不変条件 3）
+/// 3. 利用者が「外す」と選んだファイルを保存対象から外す（`rm --cached` と .gitignore への追記）
+/// 4. `add -A` → `commit`
 pub(crate) fn save(
     runner: &GitRunner,
     repo: &Path,
     memo: &str,
+    options: &SaveOptions,
     now: OffsetDateTime,
 ) -> Result<SaveOutcome, OpsError> {
     // マージ競合中でないか確認
@@ -110,6 +118,14 @@ pub(crate) fn save(
         return Ok(SaveOutcome::NothingToSave);
     }
 
+    // 保存前のサイズ検査。ここまでは作業フォルダにもインデックスにも触れていない
+    let findings = size_check::scan(runner, repo, options.limits)?;
+    let exclude = size_check::validate_exclusions(&options.exclude, &findings)?;
+    let pending = size_check::unresolved(&findings, &exclude, options.accept_warned);
+    if !pending.is_empty() {
+        return Ok(SaveOutcome::NeedsSizeDecision(pending));
+    }
+
     // ブランチ名を取得
     let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
     let branch = String::from_utf8_lossy(&branch_output.stdout)
@@ -119,8 +135,27 @@ pub(crate) fn save(
     // 復元点を作成
     let restore_point_internal = create_restore_point(runner, repo, &branch, "save", now)?;
 
+    // 「外す」と選ばれたファイルを保存対象から外す。作業フォルダのファイルは消さない
+    // （追跡解除は `rm --cached` のみ。未追跡ファイルには何もしない）
+    if !exclude.is_empty() {
+        for path in &exclude {
+            let spec = format!(":(literal){path}");
+            runner.run_ok(
+                repo,
+                &["rm", "--cached", "--ignore-unmatch", "-q", "--", &spec],
+            )?;
+        }
+        size_check::append_ignore_patterns(repo, &exclude)?;
+    }
+
     // add -A
     runner.run_ok(repo, &["add", "-A"])?;
+
+    // 外したことで保存する内容が無くなった場合は、空の保存を作らない
+    let staged = runner.run(repo, &["diff", "--cached", "--quiet", "--exit-code"])?;
+    if staged.code == 0 {
+        return Ok(SaveOutcome::NothingToSave);
+    }
 
     // commit
     let _commit_output = runner.run_ok(repo, &["-c", "core.hooksPath=", "commit", "-m", memo])?;
@@ -226,9 +261,16 @@ pub(crate) fn pull(
         return Ok(PullOutcome::UpToDate);
     }
 
+    // 取り込み前の HEAD（手順 8 で、取り込みで消えるファイルの内容を取り出す元）
+    let pre_merge_head =
+        String::from_utf8_lossy(&runner.run_ok(repo, &["rev-parse", "HEAD"])?.stdout)
+            .trim()
+            .to_string();
+
     if ahead == 0 {
         // fast-forward のみ
         runner.run_ok(repo, &["merge", "--ff-only", "@{u}"])?;
+        restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
         return Ok(PullOutcome::FastForwarded);
     }
 
@@ -240,6 +282,7 @@ pub(crate) fn pull(
 
     if merge_output.code == 0 {
         // merge 成功
+        restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
         let commit_output = runner.run(repo, &["rev-parse", "HEAD"])?;
         let commit = String::from_utf8_lossy(&commit_output.stdout)
             .trim()
@@ -252,6 +295,63 @@ pub(crate) fn pull(
     Ok(PullOutcome::Conflicted {
         files: conflict_files,
     })
+}
+
+/// 取り込みで「相手側が保存対象から外した」ファイルが削除された場合に、取り込み前の内容を
+/// 作業フォルダへ書き戻す（設計書 4.3 手順 8、4.8 の注意点への対策）。
+///
+/// - 対象は、取り込み前の HEAD にあり取り込み後の HEAD に無いパスのうち、取り込み後の
+///   .gitignore で「保存しないファイル」になっていて、作業フォルダに実体が無いもの。
+///   ignore されていない削除（相手が実際に消したファイル）は書き戻さない
+/// - 書き戻しは `restore --source=<取り込み前> --worktree` の 1 ファイル指定のみ。インデックスは
+///   触らない（取り込みの時点でインデックスからも外れている）。`rm` は使わない
+/// - 既にファイルがあるパスは上書きしない（未追跡ファイルを消さない・壊さない。不変条件 6）
+/// - 取り込み自体は成功しているため、個々の失敗は取り込みの失敗にしない。取り込み前の内容は
+///   復元点（backup / snapshot）に残っている
+fn restore_files_untracked_by_remote(runner: &GitRunner, repo: &Path, pre_merge_head: &str) {
+    let Ok(removed) = runner.run_ok(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=D",
+            pre_merge_head,
+            "HEAD",
+        ],
+    ) else {
+        return;
+    };
+    for raw in removed.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        let Some(path) = std::str::from_utf8(raw).ok() else {
+            continue;
+        };
+        let Ok(rel) = crate::restore_file::normalize_project_path(path) else {
+            continue;
+        };
+        if std::fs::symlink_metadata(repo.join(&rel)).is_ok() {
+            continue;
+        }
+        let ignored = runner
+            .run(repo, &["check-ignore", "-q", "--", &rel])
+            .is_ok_and(|o| o.code == 0);
+        if !ignored {
+            continue;
+        }
+        let spec = format!(":(literal){rel}");
+        let _ = runner.run(
+            repo,
+            &[
+                "restore",
+                "--source",
+                pre_merge_head,
+                "--worktree",
+                "--",
+                &spec,
+            ],
+        );
+    }
 }
 
 /// 現在の競合ファイルを列挙

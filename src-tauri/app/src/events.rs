@@ -45,6 +45,9 @@ pub enum AttentionReason {
     /// 未保存の変更があるため、自動の取り込みを見送った
     #[serde(rename = "unsaved-changes")]
     UnsavedChanges,
+    /// 前回のアプリ終了で、途中で止まった操作が見つかった（E15）
+    #[serde(rename = "interrupted-operation")]
+    InterruptedOperation,
 }
 
 /// プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。

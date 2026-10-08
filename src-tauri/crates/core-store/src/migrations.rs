@@ -19,6 +19,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 4 {
         migrate_to_v4(conn)?;
     }
+    if current_version < 5 {
+        migrate_to_v5(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -182,6 +185,51 @@ fn migrate_to_v4(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v5: 操作ジャーナルを「開始時に実行中を記録し、完了で更新」できる形にする（設計書 6.3）。
+/// 実行中は完了時刻が無いため `finished_at` を NULL 可にする（SQLite は列の制約を変えられないので
+/// 表を作り直して既存の行を移す）。`outcome` に `running` / `interrupted` が加わる。
+fn migrate_to_v5(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        BEGIN;
+
+        CREATE TABLE journal_v5 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            triggered_by TEXT NOT NULL DEFAULT 'manual',
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            outcome TEXT NOT NULL,
+            detail TEXT,
+            snapshot_ref TEXT,
+            backup_ref TEXT,
+            target TEXT
+        );
+
+        INSERT INTO journal_v5
+            (id, project_id, operation, triggered_by, started_at, finished_at, outcome,
+             detail, snapshot_ref, backup_ref, target)
+        SELECT id, project_id, operation, triggered_by, started_at, finished_at, outcome,
+               detail, snapshot_ref, backup_ref, target
+        FROM journal;
+
+        DROP TABLE journal;
+        ALTER TABLE journal_v5 RENAME TO journal;
+
+        CREATE INDEX IF NOT EXISTS idx_journal_project_started
+            ON journal (project_id, started_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_journal_outcome ON journal (outcome);
+
+        PRAGMA user_version = 5;
+
+        COMMIT;
+        "#,
+    )?;
+
+    Ok(())
+}
+
 /// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
 /// 壊れた JSON、null、選択肢にない値は取り込まない。
 fn legacy_overrides(config: &str) -> Vec<(String, String)> {
@@ -217,6 +265,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn v5_keeps_journal_rows_and_allows_running_entries() {
+        let conn = Connection::open_in_memory().expect("open");
+        migrate_to_v1(&conn).expect("v1");
+        migrate_to_v2(&conn).expect("v2");
+        migrate_to_v3(&conn).expect("v3");
+        migrate_to_v4(&conn).expect("v4");
+        conn.execute(
+            "INSERT INTO journal (project_id, operation, started_at, finished_at, outcome, backup_ref)
+             VALUES ('p1', 'save', '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 'success', 'refs/hikae/backup/save/x')",
+            [],
+        )
+        .expect("insert old row");
+
+        run_migrations(&conn).expect("migrate");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(version, 5);
+        let (outcome, finished, backup): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT outcome, finished_at, backup_ref FROM journal WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("old row");
+        assert_eq!(outcome, "success");
+        assert_eq!(finished.as_deref(), Some("2026-01-01T00:00:01Z"));
+        assert_eq!(backup.as_deref(), Some("refs/hikae/backup/save/x"));
+
+        // 実行中の行（完了時刻なし）を追加でき、ID は続きの番号になる
+        conn.execute(
+            "INSERT INTO journal (project_id, operation, started_at, finished_at, outcome)
+             VALUES ('p1', 'pull', '2026-01-02T00:00:00Z', NULL, 'running')",
+            [],
+        )
+        .expect("insert running row");
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM journal WHERE outcome = 'running'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("id");
+        assert_eq!(id, 2);
+
+        // 2 回目の実行は何も変えない
+        run_migrations(&conn).expect("rerun");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM journal", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
     fn v3_adds_nullable_initial_commit_and_keeps_existing_rows() {
         let conn = Connection::open_in_memory().expect("open");
         // v2 までのデータベースを作り、既存のプロジェクトを 1 件入れる
@@ -234,7 +337,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",

@@ -3,6 +3,7 @@
 // 実行計画の判断（次回実行時刻・バックオフ）は tauri 非依存の `core_watch::SyncPlanner` が行う。
 // ここは計画に従って実行し、結果を計画へ戻し、状態の変化を UI へ通知するだけの薄い層。
 // 実行は必ず `run_op`（= `run_exclusive`）を通すため、同一プロジェクトへの状態変更は直列に実行される。
+// 起動時と日次で保守作業（復元点の間引き・ジャーナルの整理。`maintenance`）も行う。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -11,7 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use core_ops::{PullOutcome, UploadOutcome};
 use core_store::{AppSettings, Project};
-use core_watch::{FailureKind, SyncHealth, SyncPlanner, SyncPolicy, SyncTask, TaskResult};
+use core_watch::{
+    FailureKind, MaintenanceTimer, SyncHealth, SyncPlanner, SyncPolicy, SyncTask, TaskResult,
+};
 use tauri::Manager;
 use tauri_specta::Event;
 
@@ -233,6 +236,8 @@ async fn run_loop(app: tauri::AppHandle) {
     };
     // 通知済みの状態（変化したときだけ通知する）
     let mut notified: HashMap<String, (SyncHealth, Option<u64>)> = HashMap::new();
+    // 保守作業は起動直後に 1 回、その後は 1 日ごと
+    let mut maintenance = MaintenanceTimer::daily();
 
     loop {
         // 1) 登録内容と設定を計画へ反映
@@ -257,6 +262,12 @@ async fn run_loop(app: tauri::AppHandle) {
         .flatten()
         .unwrap_or_default();
 
+        // 2) 保守作業（起動時と日次）。リモートの有無にかかわらず全プロジェクトが対象
+        if maintenance.is_due(handle.now()) {
+            crate::maintenance::run(&ctx, &listed).await;
+            maintenance.mark_run(handle.now());
+        }
+
         let targets: Vec<(Project, SyncPolicy, bool)> = listed
             .into_iter()
             .filter(|(p, _)| p.remote_url.as_deref().is_some_and(|u| !u.is_empty()))
@@ -269,7 +280,7 @@ async fn run_loop(app: tauri::AppHandle) {
                 .collect::<Vec<_>>(),
         );
 
-        // 2) 期限の来た処理を、プロジェクトごとに 1 件ずつ実行（取り込み → アップロードの順）
+        // 3) 期限の来た処理を、プロジェクトごとに 1 件ずつ実行（取り込み → アップロードの順）
         for (project, _, skip_when_unsaved) in &targets {
             for _ in 0..2 {
                 let Some(task) = handle.next_task(&project.id) else {
@@ -280,7 +291,7 @@ async fn run_loop(app: tauri::AppHandle) {
             }
         }
 
-        // 3) 状態の変化を通知
+        // 4) 状態の変化を通知
         for (id, health, retry_at) in handle.states() {
             let key = (health, retry_at.map(|t| t as u64));
             let previous = notified
@@ -317,7 +328,7 @@ async fn run_loop(app: tauri::AppHandle) {
             }
         }
 
-        // 4) 次の予定まで待つ（コマンドからの通知で早く起きる）
+        // 5) 次の予定まで待つ（コマンドからの通知で早く起きる）
         let timeout = handle.sleep_for();
         match tauri::async_runtime::spawn_blocking(move || {
             let _ = rx.recv_timeout(timeout);

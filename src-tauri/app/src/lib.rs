@@ -8,13 +8,14 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use core_git::GitRunner;
-use core_ops::{Ops, OpsError};
+use core_ops::{Ops, OpsError, SaveOptions, SizeLimits};
 use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
 mod app_settings;
 mod events;
 mod github;
+mod maintenance;
 mod ops_runner;
 mod scheduler;
 
@@ -455,6 +456,12 @@ async fn project_status(
         let runner = crate::git_runner();
         let ops = Ops::new(runner);
 
+        let interrupted_operation = store
+            .lock()
+            .ok()
+            .and_then(|g| g.interrupted_operation(&id).ok().flatten())
+            .map(|e| e.operation);
+
         let sync = ops
             .sync_state(&project.path)
             .map_err(AppError::from_ops_error)?;
@@ -468,6 +475,7 @@ async fn project_status(
             pull_pending: sync.behind,
             has_conflicts: !conflicts.is_empty(),
             is_syncing: false,
+            interrupted_operation,
         })
     })
     .await
@@ -559,6 +567,10 @@ async fn list_changes(
 }
 
 /// 保存（commit）を実行。
+///
+/// 保存前に新規・変更ファイルのサイズを検査する（設計書 4.1 手順 1）。大きいファイルがあれば
+/// 何も保存せず、`size_check` に該当ファイルとサイズを入れて返す（エラーではない）。
+/// 画面は E07 / E08 の 2 択を出し、選択を `save_with_size_choice` で送って保存をやり直す。
 #[tauri::command]
 #[specta::specta]
 async fn save(
@@ -567,13 +579,48 @@ async fn save(
     id: String,
     message: String,
 ) -> Result<SaveResult, AppError> {
-    let ctx = OpContext::new(app, &state);
+    run_save(app, &state, id, message, SaveSizeChoice::default()).await
+}
+
+/// 大きいファイルについての選択（E07 / E08）を添えて保存をやり直す。
+#[tauri::command]
+#[specta::specta]
+async fn save_with_size_choice(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    message: String,
+    choice: SaveSizeChoice,
+) -> Result<SaveResult, AppError> {
+    run_save(app, &state, id, message, choice).await
+}
+
+async fn run_save(
+    app: tauri::AppHandle,
+    state: &AppState,
+    id: String,
+    message: String,
+    choice: SaveSizeChoice,
+) -> Result<SaveResult, AppError> {
+    let ctx = OpContext::new(app, state);
     let store = state.store_clone();
     let touch_id = id.clone();
     let memo = message.clone();
     // ログイン済みのユーザーが分かっていれば、保存の直前にリポジトリ単位の署名を最新にする。
     // 分からない（未ログイン・オフライン）ときは既存の署名を変えない
-    let signing = github::cached_signing_user(&state);
+    let signing = github::cached_signing_user(state);
+    // 大きいファイルの警告閾値（設計書 7章。プロジェクト別の上書きを含む）。読めなければ既定値
+    let limits = store
+        .lock()
+        .ok()
+        .and_then(|g| g.effective_settings(&id).ok())
+        .map(|s| SizeLimits::from_warn_mb(s.large_file_warn_mb))
+        .unwrap_or_default();
+    let options = SaveOptions {
+        limits,
+        accept_warned: choice.accept_warned,
+        exclude: choice.exclude,
+    };
 
     let outcome = run_op(
         &ctx,
@@ -589,7 +636,7 @@ async fn save(
                 let identity = core_ops::resolve_identity(Some((*uid, login.as_str())));
                 ops.apply_identity(path, &identity)?;
             }
-            let outcome = ops.save(path, &memo)?;
+            let outcome = ops.save_with(path, &memo, &options)?;
             if let Ok(guard) = store.lock() {
                 let _ = guard.touch_project(&touch_id);
             }
@@ -601,6 +648,7 @@ async fn save(
             detail: match o {
                 core_ops::SaveOutcome::Saved { .. } => "saved",
                 core_ops::SaveOutcome::NothingToSave => "nothing-to-save",
+                core_ops::SaveOutcome::NeedsSizeDecision(_) => "needs-size-decision",
             }
             .to_string(),
             quiet: false,
@@ -608,9 +656,10 @@ async fn save(
     )
     .await?;
 
-    let commit = match outcome {
-        core_ops::SaveOutcome::Saved { commit, .. } => Some(commit),
-        core_ops::SaveOutcome::NothingToSave => None,
+    let (commit, size_check) = match outcome {
+        core_ops::SaveOutcome::Saved { commit, .. } => (Some(commit), None),
+        core_ops::SaveOutcome::NothingToSave => (None, None),
+        core_ops::SaveOutcome::NeedsSizeDecision(found) => (None, Some(size_check_result(found))),
     };
 
     // 「保存時に自動アップロード」がオンなら、スケジューラがキュー経由でアップロードする
@@ -621,7 +670,20 @@ async fn save(
     Ok(SaveResult {
         commit,
         message: Some(message),
+        size_check,
     })
+}
+
+/// 検査結果を画面向けの型にする（サイズはバイト）
+fn size_check_result(found: core_ops::SizeFindings) -> SizeCheckResult {
+    let item = |f: core_ops::LargeFile| LargeFileItem {
+        path: f.path,
+        size: f.size as f64,
+    };
+    SizeCheckResult {
+        blocked: found.blocked.into_iter().map(item).collect(),
+        warned: found.warned.into_iter().map(item).collect(),
+    }
 }
 
 /// 未保存の変更から保存メモの案を作る（ルールベース、設計書 10.3）。
@@ -1462,6 +1524,36 @@ pub enum ChangeKind {
 pub struct SaveResult {
     pub commit: Option<String>,
     pub message: Option<String>,
+    /// 大きいファイルがあり、保存しなかった場合の内容（E07 / E08）。なければ null
+    pub size_check: Option<SizeCheckResult>,
+}
+
+/// 保存前のサイズ検査で見つかったファイル（保存はしていない）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SizeCheckResult {
+    /// 100MB を超えるため保存できないファイル（E07: 「外して保存」か「キャンセル」）
+    pub blocked: Vec<LargeFileItem>,
+    /// 警告閾値を超えるが保存できるファイル（E08: 「このまま保存」か「外す」）
+    pub warned: Vec<LargeFileItem>,
+}
+
+/// 大きいファイル
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct LargeFileItem {
+    /// プロジェクトからの相対パス
+    pub path: String,
+    /// ファイルサイズ（バイト）
+    pub size: f64,
+}
+
+/// 大きいファイルについての選択。既定（何も選ばない）は、問題のあるファイルがあれば保存しない。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
+pub struct SaveSizeChoice {
+    /// 警告（E08）のファイルをそのまま保存する
+    pub accept_warned: bool,
+    /// 保存対象から外すファイル（検査で見つかったファイルのパスのみ）。.gitignore に追記され、
+    /// ファイル自体は消えない
+    pub exclude: Vec<String>,
 }
 
 /// 取り込み結果
@@ -1562,6 +1654,8 @@ pub struct SyncStatus {
     pub pull_pending: u32,
     pub has_conflicts: bool,
     pub is_syncing: bool,
+    /// 前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null（E15）
+    pub interrupted_operation: Option<String>,
 }
 
 /// 1 ファイルを戻す影響の種類
@@ -1685,6 +1779,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             project_status,
             list_changes,
             save,
+            save_with_size_choice,
             pull,
             push,
             list_history,
@@ -1770,8 +1865,28 @@ pub fn run() {
                 )))
             })?;
 
+            // 前回のアプリ終了で途中で止まった操作（ジャーナルが「実行中」のまま）を検出する。
+            // 画面が開く前に通知しても届かないため、状態（project_status）にも載せる
+            let interrupted = store
+                .recover_interrupted(&core_store::now_rfc3339())
+                .unwrap_or_else(|e| {
+                    eprintln!("操作ジャーナルの確認に失敗しました: {e:?}");
+                    Vec::new()
+                });
+
             let state = AppState::new(store);
             app.manage(state);
+
+            let mut notified = std::collections::HashSet::new();
+            for entry in interrupted {
+                if notified.insert(entry.project_id.clone()) {
+                    let _ = events::NeedsAttention {
+                        project_id: entry.project_id,
+                        reason: events::AttentionReason::InterruptedOperation,
+                    }
+                    .emit(app.handle());
+                }
+            }
 
             // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）
             scheduler::spawn(app.handle().clone());

@@ -1,4 +1,9 @@
-// 操作ジャーナル（設計書 6.3）。状態変更操作の実行結果を SQLite に追記する。
+// 操作ジャーナル（設計書 6.3）。状態変更操作を SQLite に記録する。
+//
+// - 操作の開始時に「実行中」の行を作り、完了で結果に更新する。アプリが途中で終了すると
+//   「実行中」のまま残るため、次の起動で「中断された操作」として検出する（E15）
+// - 保持期間を過ぎた完了済みの行は起動時に削除する。「実行中」「中断」の行は消さない
+// - 復元点（refs）には触れない。ジャーナルの行を消しても refs は残る
 //
 // 認証情報を残さないため、記録する文字列は `redact` を通して切り詰める。
 
@@ -9,6 +14,10 @@ use serde::{Deserialize, Serialize};
 pub enum JournalOutcome {
     Success,
     Failure,
+    /// 実行中（完了すると結果に更新される）
+    Running,
+    /// 起動時に「実行中」のまま残っていた（前回の終了で途中で止まった）
+    Interrupted,
 }
 
 impl JournalOutcome {
@@ -16,14 +25,17 @@ impl JournalOutcome {
         match self {
             JournalOutcome::Success => "success",
             JournalOutcome::Failure => "failure",
+            JournalOutcome::Running => "running",
+            JournalOutcome::Interrupted => "interrupted",
         }
     }
 
     pub(crate) fn from_db(s: &str) -> Self {
-        if s == "success" {
-            JournalOutcome::Success
-        } else {
-            JournalOutcome::Failure
+        match s {
+            "success" => JournalOutcome::Success,
+            "running" => JournalOutcome::Running,
+            "interrupted" => JournalOutcome::Interrupted,
+            _ => JournalOutcome::Failure,
         }
     }
 }
@@ -54,7 +66,34 @@ impl JournalTrigger {
     }
 }
 
-/// 追記する 1 件
+/// 操作の開始時に記録する 1 件（結果は `finish_journal` で後から入れる）
+#[derive(Debug, Clone)]
+pub struct RunningJournal {
+    pub project_id: String,
+    pub operation: String,
+    pub trigger: JournalTrigger,
+    /// RFC3339
+    pub started_at: String,
+    /// 対象（元に戻す先のコミットなど）
+    pub target: Option<String>,
+}
+
+/// 操作の完了時に「実行中」の行へ書き込む内容
+#[derive(Debug, Clone)]
+pub struct JournalFinish {
+    /// RFC3339
+    pub finished_at: String,
+    /// `Success` または `Failure`
+    pub outcome: JournalOutcome,
+    /// 結果の要約または失敗の種類。エラー本文は入れない
+    pub detail: Option<String>,
+    /// 操作が作った自動保存（スナップショット）の ref
+    pub snapshot_ref: Option<String>,
+    /// 操作が作ったバックアップ ref
+    pub backup_ref: Option<String>,
+}
+
+/// 完了済みの 1 件を一度に追記する
 #[derive(Debug, Clone)]
 pub struct NewJournalEntry {
     pub project_id: String,
@@ -84,7 +123,8 @@ pub struct JournalEntry {
     pub operation: String,
     pub trigger: JournalTrigger,
     pub started_at: String,
-    pub finished_at: String,
+    /// 完了（または中断の検出）の時刻。実行中は None
+    pub finished_at: Option<String>,
     pub outcome: JournalOutcome,
     pub detail: Option<String>,
     pub snapshot_ref: Option<String>,
@@ -95,6 +135,17 @@ pub struct JournalEntry {
 /// 現在時刻（RFC3339）。ジャーナルの日時に使う。
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// 保持期間を過ぎた行を削除するときの基準時刻（RFC3339）。`now` から `retention_days` 日前。
+/// 時刻は引数で受け取る（実時間に依存しない）。
+pub fn journal_cutoff(now: chrono::DateTime<chrono::Utc>, retention_days: u32) -> String {
+    (now - chrono::Duration::days(i64::from(retention_days))).to_rfc3339()
+}
+
+/// `journal_cutoff` の現在時刻版
+pub fn journal_cutoff_from_now(retention_days: u32) -> String {
+    journal_cutoff(chrono::Utc::now(), retention_days)
 }
 
 /// 記録する文字列の最大長

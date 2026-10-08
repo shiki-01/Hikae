@@ -13,7 +13,8 @@ pub mod models;
 pub mod settings;
 
 pub use journal::{
-    now_rfc3339, redact, JournalEntry, JournalOutcome, JournalTrigger, NewJournalEntry,
+    journal_cutoff, journal_cutoff_from_now, now_rfc3339, redact, JournalEntry, JournalFinish,
+    JournalOutcome, JournalTrigger, NewJournalEntry, RunningJournal,
 };
 pub use migrations::run_migrations;
 pub use models::{Project, ProjectConfig};
@@ -324,6 +325,204 @@ impl Store {
         )?;
         let rows = stmt
             .query_map(params![project_id, limit], |row| {
+                Ok(JournalEntry {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    operation: row.get(2)?,
+                    trigger: JournalTrigger::from_db(&row.get::<_, String>(3)?),
+                    started_at: row.get(4)?,
+                    finished_at: row.get(5)?,
+                    outcome: JournalOutcome::from_db(&row.get::<_, String>(6)?),
+                    detail: row.get(7)?,
+                    snapshot_ref: row.get(8)?,
+                    backup_ref: row.get(9)?,
+                    target: row.get(10)?,
+                })
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// 操作の開始を記録する（結果は `finish_journal` で更新する）。行の ID を返す。
+    pub fn begin_journal(&self, entry: &RunningJournal) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO journal
+                (project_id, operation, triggered_by, started_at, finished_at, outcome, target)
+             VALUES (?, ?, ?, ?, NULL, 'running', ?)",
+            params![
+                entry.project_id,
+                redact(&entry.operation),
+                entry.trigger.as_str(),
+                entry.started_at,
+                entry.target.as_deref().map(redact),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 「実行中」の行を完了の内容に更新する。更新したら true。
+    /// 実行中でない行（すでに完了・中断として扱われた行）は変更しない。
+    pub fn finish_journal(&self, id: i64, finish: &JournalFinish) -> Result<bool, StoreError> {
+        let clean = |s: &Option<String>| s.as_deref().map(redact);
+        let outcome = match finish.outcome {
+            JournalOutcome::Success => JournalOutcome::Success,
+            // 完了として書き込めるのは成功と失敗だけ
+            _ => JournalOutcome::Failure,
+        };
+        let changed = self.conn.execute(
+            "UPDATE journal
+             SET finished_at = ?, outcome = ?, detail = ?, snapshot_ref = ?, backup_ref = ?
+             WHERE id = ? AND outcome = 'running'",
+            params![
+                finish.finished_at,
+                outcome.as_str(),
+                clean(&finish.detail),
+                clean(&finish.snapshot_ref),
+                clean(&finish.backup_ref),
+                id,
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// 「実行中」の行を削除する（自動実行で何も起きなかった操作を記録に残さないため）。
+    pub fn discard_journal(&self, id: i64) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "DELETE FROM journal WHERE id = ? AND outcome = 'running'",
+            params![id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// 起動時に呼ぶ。「実行中」のまま残っている行（前回の終了で途中で止まった操作）を
+    /// 「中断」に変え、その一覧を返す。操作が実行されていない起動直後にだけ呼ぶこと。
+    pub fn recover_interrupted(&self, now: &str) -> Result<Vec<JournalEntry>, StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let ids: Vec<i64> = {
+            let mut stmt =
+                tx.prepare("SELECT id FROM journal WHERE outcome = 'running' ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<SqliteResult<Vec<_>>>()?;
+            rows
+        };
+        for id in &ids {
+            tx.execute(
+                "UPDATE journal SET outcome = 'interrupted', finished_at = ?, detail = 'interrupted'
+                 WHERE id = ?",
+                params![now, id],
+            )?;
+        }
+        tx.commit()?;
+        let mut out = Vec::new();
+        for id in ids {
+            out.extend(self.journal_rows("WHERE id = ?", params![id])?);
+        }
+        Ok(out)
+    }
+
+    /// プロジェクトの中断された操作のうち、最も新しいもの（要対応事項。設計書 9.2）。
+    pub fn interrupted_operation(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<JournalEntry>, StoreError> {
+        Ok(self
+            .journal_rows(
+                "WHERE project_id = ? AND outcome = 'interrupted' ORDER BY id DESC LIMIT 1",
+                params![project_id],
+            )?
+            .into_iter()
+            .next())
+    }
+
+    /// 中断された操作への対応が済んだものとして、「中断」を「失敗（interrupted）」に変える。
+    /// 変えた件数を返す。
+    pub fn resolve_interrupted(&self, project_id: &str) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "UPDATE journal SET outcome = 'failure'
+             WHERE project_id = ? AND outcome = 'interrupted'",
+            params![project_id],
+        )?)
+    }
+
+    /// 保持期間を過ぎた完了済みの行を削除する。削除した件数を返す。
+    ///
+    /// - `cutoff` より前（RFC3339。`journal_cutoff` で作る）に始まった「成功」「失敗」の行だけが対象。
+    ///   「実行中」「中断」の行と、日時を読めない行は消さない
+    /// - `project_id` が `Some` ならそのプロジェクトの行、`None` なら登録されていないプロジェクトの行
+    /// - 復元点（refs）の削除は行わない
+    pub fn purge_journal(
+        &self,
+        project_id: Option<&str>,
+        cutoff: &str,
+    ) -> Result<usize, StoreError> {
+        const OLD: &str = "outcome IN ('success', 'failure')
+             AND julianday(started_at) IS NOT NULL
+             AND julianday(started_at) < julianday(?)";
+        let changed = match project_id {
+            Some(id) => self.conn.execute(
+                &format!("DELETE FROM journal WHERE project_id = ? AND {OLD}"),
+                params![id, cutoff],
+            )?,
+            None => self.conn.execute(
+                &format!(
+                    "DELETE FROM journal WHERE project_id NOT IN (SELECT id FROM projects) AND {OLD}"
+                ),
+                params![cutoff],
+            )?,
+        };
+        Ok(changed)
+    }
+
+    /// 利用者の手動の操作が作った復元点の ref（間引きの保護対象。設計書 6.2）。
+    pub fn manual_restore_refs(&self, project_id: &str) -> Result<Vec<String>, StoreError> {
+        let mut refs = Vec::new();
+        for entry in self.journal_rows(
+            "WHERE project_id = ? AND triggered_by = 'manual'",
+            params![project_id],
+        )? {
+            refs.extend(entry.snapshot_ref);
+            refs.extend(entry.backup_ref);
+        }
+        refs.sort();
+        refs.dedup();
+        Ok(refs)
+    }
+
+    /// 間引きで削除された復元点を、ジャーナルの参照から外す（存在しない ref を指さないため）。
+    /// 外した件数を返す。
+    pub fn forget_restore_refs(
+        &self,
+        project_id: &str,
+        refs: &[String],
+    ) -> Result<usize, StoreError> {
+        let mut changed = 0;
+        for r in refs {
+            changed += self.conn.execute(
+                "UPDATE journal SET snapshot_ref = NULL WHERE project_id = ? AND snapshot_ref = ?",
+                params![project_id, r],
+            )?;
+            changed += self.conn.execute(
+                "UPDATE journal SET backup_ref = NULL WHERE project_id = ? AND backup_ref = ?",
+                params![project_id, r],
+            )?;
+        }
+        Ok(changed)
+    }
+
+    fn journal_rows(
+        &self,
+        clause: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<JournalEntry>, StoreError> {
+        let sql = format!(
+            "SELECT id, project_id, operation, triggered_by, started_at, finished_at, outcome,
+                    detail, snapshot_ref, backup_ref, target
+             FROM journal {clause}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(args, |row| {
                 Ok(JournalEntry {
                     id: row.get(0)?,
                     project_id: row.get(1)?,

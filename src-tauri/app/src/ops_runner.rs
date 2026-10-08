@@ -1,7 +1,8 @@
 // 状態変更操作の共通枠。
 //
 // 直列キュー（`run_exclusive`、安全上の不変条件 7）の内側で操作を実行し、
-// 前後の復元点の差からジャーナルに「どの復元点を作ったか」を記録し、UI へイベントを通知する。
+// 開始時にジャーナルへ「実行中」を記録し、完了で結果（どの復元点を作ったか）に更新し、
+// UI へイベントを通知する。途中でアプリが終了した操作は「実行中」のまま残り、次の起動で検出される。
 // 手動のコマンドとスケジューラ（自動実行）の両方がこの関数を通る。
 
 use std::path::Path;
@@ -10,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use core_git::GitError;
 use core_ops::{new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, UploadOutcome};
 use core_store::{
-    now_rfc3339, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks, Store,
+    now_rfc3339, JournalFinish, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks,
+    RunningJournal, Store,
 };
 use core_watch::{classify_failure, FailureKind};
 use tauri_specta::Event;
@@ -92,7 +94,7 @@ pub(crate) fn failure_kind(e: &OpsError) -> FailureKind {
 ///
 /// - 実行は必ず `run_exclusive`（同一プロジェクトは 1 件ずつ）
 /// - 復元点は `body` の中（core-ops）が作る。ここでは前後の差を記録するだけ
-/// - ジャーナルの記録失敗は操作の成否に影響させない
+/// - 開始時に「実行中」、完了時に結果をジャーナルへ記録する（設計書 6.3）。記録の失敗は操作の成否に影響させない
 pub(crate) async fn run_op<T, B, S>(
     ctx: &OpContext,
     id: &str,
@@ -142,6 +144,22 @@ where
 
             let ops = Ops::new(crate::git_runner()).with_labels(app_labels());
             let started_at = now_rfc3339();
+            let journal_trigger = if trigger == OpTrigger::Auto {
+                JournalTrigger::Auto
+            } else {
+                JournalTrigger::Manual
+            };
+            // 操作の開始を記録する（本体の前。ここで止まった操作を次の起動で検出できる）
+            let journal_id = store.lock().ok().and_then(|g| {
+                g.begin_journal(&RunningJournal {
+                    project_id: id_owned.clone(),
+                    operation: operation.to_string(),
+                    trigger: journal_trigger,
+                    started_at: started_at.clone(),
+                    target: target.clone(),
+                })
+                .ok()
+            });
             let before = ops.restore_point_refs(&project.path).unwrap_or_default();
 
             let result = body(&ops, &project.path);
@@ -162,30 +180,53 @@ where
                 ),
             };
 
-            if !quiet {
-                let entry = NewJournalEntry {
-                    project_id: id_owned.clone(),
-                    operation: operation.to_string(),
-                    trigger: if auto {
-                        JournalTrigger::Auto
-                    } else {
-                        JournalTrigger::Manual
-                    },
-                    started_at,
-                    finished_at: now_rfc3339(),
-                    outcome: journal_outcome,
-                    detail: Some(detail.clone()),
-                    snapshot_ref: restore.snapshot_ref,
-                    backup_ref: restore.backup_ref,
-                    target,
-                };
-                // 記録に失敗しても操作の結果は変えない
-                let recorded = store
+            // 記録に失敗しても操作の結果は変えない
+            let recorded = match journal_id {
+                // 自動実行で何も起きなかった操作は記録に残さない
+                Some(jid) if quiet => store
                     .lock()
                     .ok()
-                    .is_some_and(|g| g.record_journal(&entry).is_ok());
-                if !recorded {
-                    eprintln!("操作ジャーナルの記録に失敗しました（操作: {operation}）");
+                    .is_some_and(|g| g.discard_journal(jid).is_ok()),
+                Some(jid) => store.lock().ok().is_some_and(|g| {
+                    g.finish_journal(
+                        jid,
+                        &JournalFinish {
+                            finished_at: now_rfc3339(),
+                            outcome: journal_outcome,
+                            detail: Some(detail.clone()),
+                            snapshot_ref: restore.snapshot_ref,
+                            backup_ref: restore.backup_ref,
+                        },
+                    )
+                    .is_ok()
+                }),
+                // 開始の記録に失敗していた場合は、完了した内容を一度に記録する
+                None if quiet => true,
+                None => store.lock().ok().is_some_and(|g| {
+                    g.record_journal(&NewJournalEntry {
+                        project_id: id_owned.clone(),
+                        operation: operation.to_string(),
+                        trigger: journal_trigger,
+                        started_at,
+                        finished_at: now_rfc3339(),
+                        outcome: journal_outcome,
+                        detail: Some(detail.clone()),
+                        snapshot_ref: restore.snapshot_ref,
+                        backup_ref: restore.backup_ref,
+                        target,
+                    })
+                    .is_ok()
+                }),
+            };
+            if !recorded {
+                eprintln!("操作ジャーナルの記録に失敗しました（操作: {operation}）");
+            }
+
+            // 利用者の操作が成功したので、前回の中断（E15）への対応は済んだものとして扱う。
+            // 起動直後の自動実行では解除しない（画面に出す前に消えてしまうため）
+            if !auto && result.is_ok() {
+                if let Ok(g) = store.lock() {
+                    let _ = g.resolve_interrupted(&id_owned);
                 }
             }
 

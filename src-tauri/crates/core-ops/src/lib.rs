@@ -11,6 +11,7 @@ mod open_path;
 mod operations;
 mod relocate;
 mod restore_file;
+mod size_check;
 
 pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
@@ -24,6 +25,7 @@ pub use models::{
     RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
 };
 pub use open_path::{resolve_in_project, OpenPathError};
+pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
 
 use core_git::GitRunner;
 use std::path::Path;
@@ -98,7 +100,27 @@ impl Ops {
     /// 変更をコミット。未保存変更がなければ NothingToSave を返す。
     /// 変更があれば復元点を作成し、add -A, commit を実行する。
     pub fn save(&self, repo: &Path, memo: &str) -> Result<SaveOutcome, OpsError> {
-        operations::save(self.runner(), repo, memo, self.now())
+        self.save_with(repo, memo, &SaveOptions::default())
+    }
+
+    /// 保存前のサイズ検査（設計書 4.1 手順 1）の閾値と利用者の選択を指定して保存する。
+    /// 決定が必要な大きいファイルが残っていれば、何も変更せず `NeedsSizeDecision` を返す。
+    pub fn save_with(
+        &self,
+        repo: &Path,
+        memo: &str,
+        options: &SaveOptions,
+    ) -> Result<SaveOutcome, OpsError> {
+        operations::save(self.runner(), repo, memo, options, self.now())
+    }
+
+    /// 保存した場合に問題になる大きいファイルを調べる（読み取りのみ）。
+    pub fn check_save_sizes(
+        &self,
+        repo: &Path,
+        limits: SizeLimits,
+    ) -> Result<SizeFindings, OpsError> {
+        size_check::scan(self.runner(), repo, limits)
     }
 
     /// upstream から取り込む。未保存変更があれば自動保存してから取り込む。

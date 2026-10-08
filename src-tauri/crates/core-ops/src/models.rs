@@ -1,5 +1,6 @@
 // 公開 API で使用するデータ型。
 
+use crate::size_check::SizeFindings;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -29,6 +30,9 @@ pub enum SaveOutcome {
         commit: String,
         restore_point: RestorePointInfo,
     },
+    /// 大きいファイルがあり、利用者の決定が必要なため何も変更しなかった（E07 / E08）。
+    /// 決定を `SaveOptions` に載せて保存をやり直す
+    NeedsSizeDecision(SizeFindings),
 }
 
 /// 取り込みの結果
