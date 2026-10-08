@@ -7,6 +7,9 @@
 # - TLS と HTTP は macOS 標準の libcurl（/usr/lib/libcurl.4.dylib。Apple の証明書ストアを使う）に動的リンクする。
 #   OpenSSL を同梱・静的リンクしないので、サイズと更新対象が減る。CA 証明書は OS のものに従う
 # - Perl・Python・Tcl/Tk・gettext・expat（git-http-push）は使わない
+# - Rust は無効にする（NO_RUST。git 2.56 の Makefile の公式の変数）。有効だと cargo が libgitcore.a を
+#   ホスト向けにしか作らず、arm64 ランナー上の x86_64 ビルドでリンクに失敗する。無効時は varint が
+#   C 実装（varint.c）になり、機能は変わらない
 # - 展開済みで版が一致していれば何もしない（再ビルドしない）
 #
 # 要件: macOS、Xcode Command Line Tools（clang、make、lipo）、curl、shasum、tar
@@ -14,7 +17,7 @@
 #
 # 署名・公証は扱わない（配布の段階で、同梱バイナリごと署名する）。
 #
-# ※ この仕組みは Windows 上では実行できず、CI（macOS）でも未確認。
+# ※ この仕組みは Windows 上では実行できない（CI の macOS で確認する）。
 
 set -euo pipefail
 
@@ -85,6 +88,7 @@ build_arch() {
       NO_TCLTK=YesPlease \
       NO_PERL=YesPlease \
       NO_PYTHON=YesPlease \
+      NO_RUST=YesPlease \
       NO_INSTALL_HARDLINKS=YesPlease \
       INSTALL_SYMLINKS=YesPlease \
       SKIP_DASHED_BUILT_INS=YesPlease
@@ -122,6 +126,19 @@ lipo -info "$GIT_BIN" | grep -q "arm64" || die "arm64 が含まれていませ�
 lipo -info "$GIT_BIN" | grep -q "x86_64" || die "x86_64 が含まれていません"
 [ -x "${UNI}/libexec/git-core/git-remote-https" ] || die "git-remote-https がありません"
 
+# 動的リンク先が OS 標準（/usr/lib と /System）のみであることを、すべての Mach-O で確認する
+while IFS= read -r -d '' f; do
+  lipo -info "$f" >/dev/null 2>&1 || continue
+  for a in arm64 x86_64; do
+    while read -r dep; do
+      case "$dep" in
+        /usr/lib/*|/System/*) ;;
+        *) die "${f#"${UNI}/"} (${a}) が OS 標準以外にリンクしています: ${dep}" ;;
+      esac
+    done < <(otool -arch "$a" -L "$f" | tail -n +2 | awk '{print $1}')
+  done
+done < <(find "$UNI" -type f -perm -u+x -print0)
+
 SMOKE="${WORK}/smoke"
 mkdir -p "$SMOKE"
 sg() {
@@ -135,6 +152,17 @@ echo hello > "${SMOKE}/a.txt"
 sg add a.txt
 sg -c core.hooksPath= commit -q -m smoke
 [ "$(sg log --format=%s)" = "smoke" ] || die "git log の結果が想定と違います"
+
+# 結果の記録（サイズ、主要ファイル、アーキテクチャ、動的リンク先）
+log "サイズ: $(du -sh "$UNI" | awk '{print $1}')"
+log "git-core 配下のエントリ数: $(find "${UNI}/libexec/git-core" -mindepth 1 | wc -l | tr -d ' ')"
+log "git-core 配下の実体ファイル数: $(find "${UNI}/libexec/git-core" -type f | wc -l | tr -d ' ')"
+for f in bin/git libexec/git-core/git-remote-https; do
+  log "lipo: $(lipo -info "${UNI}/${f}")"
+  log "file: $(file "${UNI}/${f}" | tr '\n' ' ')"
+  log "otool -L (${f}):"
+  otool -L "${UNI}/${f}" | tail -n +2 | sed 's/^/    /'
+done
 
 # --- 5. 配置 ---
 # ソースの著作権表示（GPLv2）も同梱する
