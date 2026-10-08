@@ -183,7 +183,8 @@ export const tauriApi: ProjectApi = {
 					owner: input.ownerId,
 					name: null,
 					private: input.visibility === 'private',
-					public_confirmed: input.publicConfirmed === true
+					public_confirmed: input.publicConfirmed === true,
+					adopt_existing: false
 				}
 			: null;
 		const added = await unwrap(
@@ -203,7 +204,8 @@ export const tauriApi: ProjectApi = {
 					owner: input.ownerId,
 					name: name ? name : null,
 					private: input.visibility === 'private',
-					public_confirmed: input.publicConfirmed
+					public_confirmed: input.publicConfirmed,
+					adopt_existing: input.adoptExisting === true
 				})
 			)
 		);

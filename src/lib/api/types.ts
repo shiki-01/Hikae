@@ -190,8 +190,16 @@ export interface RemoteOutcome {
 	connected: boolean;
 	/** 最初のアップロードまで完了した */
 	uploaded: boolean;
-	/** 最初の保存に大きいファイルがあり、保存を見送った場合の内容。なければ null */
+	/**
+	 * 最初の保存に大きいファイルがあり、保存を見送った場合の内容。なければ null。
+	 * `connected` が false のときは、GitHub に何も作る前に見つかったもの（作成も接続もしていない）
+	 */
 	sizeCheck: SizeCheck | null;
+	/**
+	 * 同じ名前の空の保存先（`所有者/名前`）が GitHub にすでにあり、新しくは作らなかった場合の名前。
+	 * 何も作らず、接続もしていない。画面が確認し、承認されたら `adoptExisting` で接続をやり直す。なければ null
+	 */
+	existingEmptyRepository: string | null;
 	/** 途中で失敗した場合のエラー（3 要素の文言を持つ）。なければ null */
 	error: AppError | null;
 }
@@ -209,6 +217,8 @@ export interface ConnectRemoteInput {
 	publicConfirmed: boolean;
 	/** GitHub 上の名前。空なら自動で決める */
 	name?: string;
+	/** 同名の空の保存先がすでにあるとき、新しく作らずにそこへ接続する（利用者が確認したあとだけ true） */
+	adoptExisting?: boolean;
 }
 
 export interface DroppedFile {

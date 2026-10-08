@@ -4,6 +4,7 @@
 	import ErrorDialog from '#lib/features/notifications/ErrorDialog.svelte';
 	import ToastHost from '#lib/features/notifications/ToastHost.svelte';
 	import { useBackendEvents } from '#lib/features/projects/live.svelte.js';
+	import RemoteFollowUpDialogs from '#lib/features/projects/RemoteFollowUpDialogs.svelte';
 
 	let { children } = $props();
 
@@ -16,6 +17,7 @@
 
 <QueryClientProvider client={queryClient}>
 	{@render children()}
+	<RemoteFollowUpDialogs />
 	<ErrorDialog />
 	<ToastHost />
 </QueryClientProvider>

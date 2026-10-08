@@ -67,6 +67,7 @@
 		if (!projectId || ownerError || confirmError) return;
 		connect.mutate({
 			id: projectId,
+			name: projectName,
 			input: {
 				ownerId,
 				visibility,

@@ -27,6 +27,11 @@ export const commands = {
 	private: boolean,
 	/**  公開にすることの警告を確認した。`private` が false のとき、これが true でなければ拒否する */
 	public_confirmed: boolean,
+	/**
+	 *  同名の「空の」保存先がすでにあるとき、新しく作らずにそこへ接続する（利用者が確認したあとだけ true）。
+	 *  空でない保存先、書き込めない保存先には接続しない（バックエンドが改めて確かめる）
+	 */
+	adopt_existing: boolean,
 } | null) => typedError<AddProjectResult, AppError>(__TAURI_INVOKE("add_project", { id, displayName, path, owner, remoteUrl, remote })),
 	/**  プロジェクトを削除（登録のみ。フォルダは消さない）。 */
 	removeProject: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { id })),
@@ -141,8 +146,9 @@ export const commands = {
 	 *  ローカルだけのプロジェクトを、GitHub 上の新しいリポジトリに接続する。
 	 * 
 	 *  新規作成のときと同じ流れだが、初回の保存は作らない（保存は利用者が行う）。すでにある保存は
-	 *  初回のアップロードで上がる。同名のリポジトリが GitHub にすでにある場合は `remote_name_taken`
-	 *  （何も作られず、ローカルも変更されない）。
+	 *  初回のアップロードで上がる。同名のリポジトリが GitHub にすでにある場合は、空で書き込めるものだけ
+	 *  `existing_empty_repository` で接続を提案し（何も作られず、ローカルも変更されない）、承認されたら
+	 *  `adopt_existing: true` で呼び直す。空でないものは `remote_name_taken`（接続しない）。
 	 */
 	connectRemote: (id: string, request: RemoteRequest) => typedError<RemoteConnectResult, AppError>(__TAURI_INVOKE("connect_remote", { id, request })),
 	/**  設定を取得する。`project_id` を指定すると、そのプロジェクトの上書きを反映した設定を返す。 */
@@ -227,8 +233,11 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *    `github_error`
  *  - 保存先の作成・接続: `remote_name_taken`（同名のリポジトリが既にある）、`remote_name_invalid`、
  *    `remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、
- *    `project_folder_missing`、`remote_connect_failed`（権限不足は `github_forbidden`（E02）、
- *    通信できないは `network_unavailable`（E03））
+ *    `project_folder_missing`、`remote_conflict`（`origin` がすでに別の場所を指している。作成の前の
+ *    検査）、`remote_not_writable`（`.git/config` に書き込めない。作成の前の検査）、
+ *    `remote_orphaned`（GitHub 上に空の保存先ができたが、プロジェクトに接続できなかった。params:
+ *    `name` = 作成済みの `owner/name`）
+ *    （権限不足は `github_forbidden`（E02）、通信できないは `network_unavailable`（E03））
  *  - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
  *    `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
  *    `clone_failed`、`clone_timeout`、`clone_register_failed`
@@ -583,8 +592,19 @@ export type RemoteConnectResult = {
 	connected: boolean,
 	/**  初回のアップロードまで完了した（アップロードするものが無かったときは false） */
 	uploaded: boolean,
-	/**  初回の保存に大きいファイルがあり、保存を見送った場合の内容（E07 / E08）。なければ null */
+	/**
+	 *  初回の保存に大きいファイルがあり、保存を見送った場合の内容（E07 / E08）。なければ null
+	 * 
+	 *  `connected` が false のときは、GitHub には何も作っておらず、ローカルも変更していない
+	 *  （作成の前の検査で見つかった。画面は 2 択を出し、選択を保存に反映してから接続をやり直す）
+	 */
 	size_check: SizeCheckResult | null,
+	/**
+	 *  同じ名前の空の保存先（`owner/name`）が GitHub にすでにあり、新しくは作らなかった場合の名前。
+	 *  何も作らず、ローカルも変更していない。画面が「ここに接続しますか」と確認し、承認されたら
+	 *  `adopt_existing` を true にして接続をやり直す。なければ null
+	 */
+	existing_empty_repository: string | null,
 	/**  途中で失敗した場合の 3 要素のエラー（E02 / E03 など）。ローカルのファイルは無事 */
 	error: AppError | null,
 };
@@ -622,6 +642,11 @@ export type RemoteRequest = {
 	private: boolean,
 	/**  公開にすることの警告を確認した。`private` が false のとき、これが true でなければ拒否する */
 	public_confirmed: boolean,
+	/**
+	 *  同名の「空の」保存先がすでにあるとき、新しく作らずにそこへ接続する（利用者が確認したあとだけ true）。
+	 *  空でない保存先、書き込めない保存先には接続しない（バックエンドが改めて確かめる）
+	 */
+	adopt_existing: boolean,
 };
 
 /**  全体を元に戻した結果 */

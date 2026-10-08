@@ -402,6 +402,7 @@ export function mapRemoteOutcome(result: RemoteConnectResult): RemoteOutcome {
 		connected: result.connected,
 		uploaded: result.uploaded,
 		sizeCheck: mapSizeCheck(result.size_check),
+		existingEmptyRepository: result.existing_empty_repository,
 		error: result.error === null ? null : mapError(result.error)
 	};
 }

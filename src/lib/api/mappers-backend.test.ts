@@ -327,6 +327,7 @@ describe('保存先の作成・接続の結果の変換', () => {
 		connected: true,
 		uploaded: true,
 		size_check: null,
+		existing_empty_repository: null,
 		error: null
 	};
 
@@ -336,6 +337,23 @@ describe('保存先の作成・接続の結果の変換', () => {
 			connected: true,
 			uploaded: true,
 			sizeCheck: null,
+			existingEmptyRepository: null,
+			error: null
+		});
+	});
+
+	it('同名の空の保存先がある結果は、何も接続していない状態で名前を引き継ぐ', () => {
+		const outcome = mapRemoteOutcome({
+			...base,
+			repository: null,
+			connected: false,
+			uploaded: false,
+			existing_empty_repository: 'me/p'
+		});
+		expect(outcome).toMatchObject({
+			connected: false,
+			repository: null,
+			existingEmptyRepository: 'me/p',
 			error: null
 		});
 	});

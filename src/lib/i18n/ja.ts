@@ -327,6 +327,22 @@ const messages = {
 	'connect.name': 'GitHub 上の名前',
 	'connect.name_hint': '省略すると、プロジェクト名から自動で決めます。英数字と - _ . が使えます。',
 	'connect.name_placeholder': '例: thesis-2026',
+	'connect.first_save_memo': '最初の保存',
+
+	'remote_existing.title': 'すでに同じ名前の保存先があります',
+	'remote_existing.description':
+		'GitHub 上に「{name}」という空の保存先があります。ここに接続しますか。',
+	'remote_existing.note':
+		'中身が空なので、GitHub 上の既存のファイルが上書きされることはありません。接続すると、このプロジェクトのファイルがここにアップロードされます。',
+	'remote_existing.safe': 'この PC のファイルは変更されません。',
+	'remote_existing.connect': '接続する',
+	'remote_existing.rename': '別の名前にする',
+	'remote_existing.cancel': 'キャンセル',
+	'remote_rename.title': '別の名前で作成',
+	'remote_rename.description':
+		'GitHub 上の保存先の名前を入力してください。英数字と - _ . が使えます。',
+	'remote_rename.submit': '作成して接続',
+	'remote_rename.error_name': '名前を入力してください',
 
 	'project_card.last_saved': '最終保存 {when}',
 	'project_card.never_saved': 'まだ保存していません',
@@ -663,6 +679,27 @@ const messages = {
 	'errcode.settings_io_failed.what': '設定を読み書きできませんでした',
 	'errcode.settings_io_failed.safe': 'ファイルは変更されていません。',
 	'errcode.settings_io_failed.next': 'もう一度お試しください。',
+	'errcode.remote_name_taken.what': '同じ名前の保存先がすでに GitHub にあります',
+	'errcode.remote_name_taken.safe':
+		'ファイルはこの PC に安全に残っています。GitHub 上のものには何も変更していません。',
+	'errcode.remote_name_taken.next': '別の名前を指定して、もう一度お試しください。',
+	'errcode.remote_conflict.what': 'このフォルダは、すでに別の GitHub 上の保存先につながっています',
+	'errcode.remote_conflict.safe':
+		'ファイルはこの PC に安全に残っています。GitHub には何も作っていません。',
+	'errcode.remote_conflict.next':
+		'いまのつながりのまま使うか、別のフォルダでプロジェクトを作ってください。',
+	'errcode.remote_not_writable.what':
+		'このフォルダの設定を書き込めないため、GitHub に接続できません',
+	'errcode.remote_not_writable.safe':
+		'ファイルはこの PC に安全に残っています。GitHub には何も作っていません。',
+	'errcode.remote_not_writable.next':
+		'フォルダが読み取り専用になっていないか確認してから、もう一度お試しください。',
+	'errcode.remote_orphaned.what':
+		'GitHub 上に空の保存先（{name}）ができていますが、接続を完了できませんでした',
+	'errcode.remote_orphaned.safe':
+		'ファイルはこの PC に安全に残っています。GitHub 上の保存先も空のままです。',
+	'errcode.remote_orphaned.next':
+		'もう一度「接続する」を押してください。同じ名前の空の保存先に接続できます。不要な場合は、GitHub 上で削除してください。',
 
 	'toast.region': '通知',
 	'toast.type.info': '情報',

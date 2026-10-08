@@ -99,6 +99,49 @@ function saveWithCheck(state: ProjectState, memo: string, choice?: SizeChoice): 
 	return { kind: 'saved' };
 }
 
+/**
+ * 保存先の作成で試せる場面（名前で切り替える）。
+ * - `existing-empty`: 同じ名前の空の保存先がすでにある（確認のあと、承認すれば接続できる）
+ * - `taken`: 同じ名前の空でない保存先がある（接続できない）
+ * - 追加時の名前に `large` を含める: 最初の保存に大きいファイルがあり、作成の前に確認が返る
+ */
+export const MOCK_EXISTING_EMPTY = 'existing-empty';
+export const MOCK_TAKEN = 'taken';
+
+function mockNameTaken(): AppError {
+	return new AppError(
+		'backend',
+		'name taken',
+		{},
+		{
+			code: 'remote_name_taken',
+			params: {},
+			whatHappened: t('errcode.remote_name_taken.what'),
+			dataIsSafe: t('errcode.remote_name_taken.safe'),
+			nextAction: t('errcode.remote_name_taken.next')
+		}
+	);
+}
+
+/** 保存先の名前から、作成の前に起きる場面を決める。何も起きなければ null（そのまま作成して接続する） */
+function mockRemoteCheck(ownerId: string, name: string, adopt: boolean): RemoteOutcome | null {
+	if (name === MOCK_TAKEN) throw mockNameTaken();
+	if (name === MOCK_EXISTING_EMPTY) {
+		if (adopt) return null;
+		return {
+			repository: null,
+			connected: false,
+			uploaded: false,
+			sizeCheck: null,
+			existingEmptyRepository: `${ownerId}/${name}`,
+			error: null
+		};
+	}
+	// 空でない（または存在しない）保存先には、承認されても接続しない
+	if (adopt) throw mockNameTaken();
+	return null;
+}
+
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -601,7 +644,27 @@ export const mockApi: ProjectApi = {
 		const id = nextId('proj');
 		const owners = await mockApi.listOwners();
 		const owner = owners.find((o) => o.id === input.ownerId) ?? owners[0];
-		const connected = input.mode === 'github' || input.connectCloud === true;
+		const wantsCloud = input.mode !== 'github' && input.connectCloud === true;
+		// 最初の保存に大きいファイルがあると、作成の前に確認を返す（何も作らず、接続もしない）
+		const largeFirst = wantsCloud && input.name.includes('large');
+		let early: RemoteOutcome | null = null;
+		if (wantsCloud && !largeFirst) {
+			try {
+				early = mockRemoteCheck(owner.id, input.name, false);
+			} catch (error) {
+				// 保存先を作れなかった場合も、ローカルの登録は残る
+				if (!(error instanceof AppError)) throw error;
+				early = {
+					repository: null,
+					connected: false,
+					uploaded: false,
+					sizeCheck: null,
+					existingEmptyRepository: null,
+					error
+				};
+			}
+		}
+		const connected = input.mode === 'github' || (wantsCloud && !largeFirst && early === null);
 		const project: Project = {
 			id,
 			name: input.name,
@@ -620,7 +683,9 @@ export const mockApi: ProjectApi = {
 		};
 		states.set(id, {
 			project,
-			changes: [],
+			changes: largeFirst
+				? [{ id: nextId('c'), path: t('mock.file.logo'), type: 'added', isConflict: false }]
+				: [],
 			savePoints: [
 				{
 					id: nextId('sp'),
@@ -637,19 +702,29 @@ export const mockApi: ProjectApi = {
 			pushFailuresLeft: 0,
 			restoreFailuresLeft: 0
 		});
-		return {
-			project: { ...project },
-			remote:
-				input.mode !== 'github' && input.connectCloud === true
-					? {
-							repository: `${owner.id}/${input.name}`,
-							connected: true,
-							uploaded: true,
-							sizeCheck: null,
-							error: null
-						}
-					: null
-		};
+		if (largeFirst) {
+			project.unsavedCount = 1;
+		}
+		const remote: RemoteOutcome | null = !wantsCloud
+			? null
+			: largeFirst
+				? {
+						repository: null,
+						connected: false,
+						uploaded: false,
+						sizeCheck: inspectSizes(states.get(id)?.changes ?? []),
+						existingEmptyRepository: null,
+						error: null
+					}
+				: (early ?? {
+						repository: `${owner.id}/${input.name}`,
+						connected: true,
+						uploaded: true,
+						sizeCheck: null,
+						existingEmptyRepository: null,
+						error: null
+					});
+		return { project: { ...project }, remote };
 	},
 
 	async connectRemote(id: string, input: ConnectRemoteInput): Promise<RemoteOutcome> {
@@ -661,6 +736,9 @@ export const mockApi: ProjectApi = {
 		if (input.visibility === 'public' && !input.publicConfirmed) {
 			throw new AppError('E02', 'public is not confirmed');
 		}
+		const repoName = input.name?.trim() || state.project.name;
+		const early = mockRemoteCheck(owner.id, repoName, input.adoptExisting === true);
+		if (early) return early;
 		state.project.remoteConnected = true;
 		state.project.ownerName = owner.name;
 		state.project.ownerKind = owner.kind;
@@ -668,10 +746,11 @@ export const mockApi: ProjectApi = {
 		state.project.lastUploadedAt = new Date();
 		state.savePoints = state.savePoints.map((s) => ({ ...s, cloudSynced: s.kind === 'save' }));
 		return {
-			repository: `${owner.id}/${input.name || state.project.name}`,
+			repository: `${owner.id}/${repoName}`,
 			connected: true,
 			uploaded: true,
 			sizeCheck: null,
+			existingEmptyRepository: null,
 			error: null
 		};
 	},
