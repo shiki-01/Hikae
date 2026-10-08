@@ -3,7 +3,7 @@ import { formatDateTime } from '#lib/i18n/format.js';
 import { AppError } from './errors';
 import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
-import { classifyDropped, LARGE_WARN_BYTES } from '#lib/features/changes/files.js';
+import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
 	AddFilesOutcome,
 	AddProjectInput,
@@ -27,16 +27,20 @@ import type {
 	RemoteProjectList,
 	RestoreResult,
 	RestoreScope,
+	SaveOutcome,
 	SavePoint,
 	Session,
 	SettingKey,
-	SettingsView
+	SettingsView,
+	SizeCheck,
+	SizeChoice
 } from './types';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const PSD_BYTES = 72 * 1024 * 1024;
+const VIDEO_BYTES = 250 * 1024 * 1024;
 const WAIT_SHORT = 350;
 const WAIT_LONG = 900;
 
@@ -53,6 +57,42 @@ interface ProjectState extends Snapshot {
 	conflictsOnNextFetch: boolean;
 	pushFailuresLeft: number;
 	restoreFailuresLeft: number;
+}
+
+/**
+ * 保存前の検査で使う、モックのファイルサイズ。
+ * .psd は 72MB（警告）、.mp4 は 250MB（保存できない）として扱い、画面の確認を開発中に試せるようにする。
+ */
+function mockSizeOf(path: string): number {
+	if (path.endsWith('.psd')) return PSD_BYTES;
+	if (path.endsWith('.mp4')) return VIDEO_BYTES;
+	return 12 * 1024;
+}
+
+function inspectSizes(changes: Change[]): SizeCheck {
+	const sized = changes
+		.filter((c) => c.type !== 'deleted')
+		.map((c) => ({ path: c.path, sizeBytes: mockSizeOf(c.path) }));
+	return {
+		blocked: sized.filter((f) => f.sizeBytes >= MAX_FILE_BYTES),
+		warned: sized.filter((f) => f.sizeBytes >= LARGE_WARN_BYTES && f.sizeBytes < MAX_FILE_BYTES)
+	};
+}
+
+/** 大きいファイルの選択を反映して保存する。まだ確認が必要なファイルが残れば、何も保存せず確認を返す */
+function saveWithCheck(state: ProjectState, memo: string, choice?: SizeChoice): SaveOutcome {
+	if (choice) {
+		const excluded = new Set(choice.exclude);
+		state.changes = state.changes.filter((c) => !excluded.has(c.path));
+		state.project.unsavedCount = state.changes.length;
+	}
+	const check = inspectSizes(state.changes);
+	const warned = choice?.acceptWarned ? [] : check.warned;
+	if (check.blocked.length > 0 || warned.length > 0) {
+		return { kind: 'size_check', check: { blocked: check.blocked, warned } };
+	}
+	if (state.changes.length > 0) addSavePoint(state, memo, 3);
+	return { kind: 'saved' };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -105,7 +145,8 @@ function createThesis(): ProjectState {
 			uploadPendingCount: 1,
 			fetchPendingCount: 2,
 			hasConflict: false,
-			folderMissing: false
+			folderMissing: false,
+			interruptedOperation: null
 		},
 		savePoints: [
 			{
@@ -185,7 +226,8 @@ function createMaterials(): ProjectState {
 			uploadPendingCount: 1,
 			fetchPendingCount: 0,
 			hasConflict: false,
-			folderMissing: false
+			folderMissing: false,
+			interruptedOperation: 'pull'
 		},
 		changes: [],
 		savePoints: [
@@ -221,7 +263,8 @@ function createAlbum(): ProjectState {
 			uploadPendingCount: 0,
 			fetchPendingCount: 0,
 			hasConflict: false,
-			folderMissing: true
+			folderMissing: true,
+			interruptedOperation: null
 		},
 		changes: [],
 		savePoints: [],
@@ -521,7 +564,8 @@ export const mockApi: ProjectApi = {
 			uploadPendingCount: input.mode === 'github' ? 0 : 1,
 			fetchPendingCount: 0,
 			hasConflict: false,
-			folderMissing: false
+			folderMissing: false,
+			interruptedOperation: null
 		};
 		states.set(id, {
 			project,
@@ -611,9 +655,14 @@ export const mockApi: ProjectApi = {
 		return { kind: 'text', rows: diffLines(before, after) };
 	},
 
-	async save(projectId: string, memo: string): Promise<void> {
+	async save(projectId: string, memo: string): Promise<SaveOutcome> {
 		await sleep(WAIT_LONG);
-		addSavePoint(stateOf(projectId), memo, 3);
+		return saveWithCheck(stateOf(projectId), memo);
+	},
+
+	async saveWithSizeChoice(projectId, memo, choice): Promise<SaveOutcome> {
+		await sleep(WAIT_LONG);
+		return saveWithCheck(stateOf(projectId), memo, choice);
 	},
 
 	async restoreImpact(projectId, targetId, scope): Promise<ImpactItem[]> {

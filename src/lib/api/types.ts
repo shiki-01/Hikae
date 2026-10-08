@@ -11,7 +11,34 @@ export interface Project {
 	fetchPendingCount: number;
 	hasConflict: boolean;
 	folderMissing: boolean;
+	/** 前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null */
+	interruptedOperation: string | null;
 }
+
+/** 保存前の検査で見つかった大きいファイル */
+export interface LargeFile {
+	path: string;
+	/** バイト数。取得できなかったときは null */
+	sizeBytes: number | null;
+}
+
+/** 大きいファイルの検査結果（保存はしていない） */
+export interface SizeCheck {
+	/** 100MB を超え、保存できないファイル */
+	blocked: LargeFile[];
+	/** 大きめだが保存できるファイル */
+	warned: LargeFile[];
+}
+
+/** 大きいファイルについての選択 */
+export interface SizeChoice {
+	/** 警告だけのファイルをそのまま保存する */
+	acceptWarned: boolean;
+	/** 保存対象から外すファイルのパス */
+	exclude: string[];
+}
+
+export type SaveOutcome = { kind: 'saved' } | { kind: 'size_check'; check: SizeCheck };
 
 export type ChangeType = 'modified' | 'added' | 'deleted' | 'renamed';
 
@@ -263,7 +290,9 @@ export interface ProjectApi {
 	suggestMemo(projectId: string): Promise<string>;
 	compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff>;
 
-	save(projectId: string, memo: string): Promise<void>;
+	/** 大きいファイルがあれば何も保存せず `size_check` で返す。画面は選択を求め、`saveWithSizeChoice` で再実行する */
+	save(projectId: string, memo: string): Promise<SaveOutcome>;
+	saveWithSizeChoice(projectId: string, memo: string, choice: SizeChoice): Promise<SaveOutcome>;
 	restoreImpact(projectId: string, targetId: string, scope: RestoreScope): Promise<ImpactItem[]>;
 	restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult>;
 	undoRestore(projectId: string, undoToken: string): Promise<void>;

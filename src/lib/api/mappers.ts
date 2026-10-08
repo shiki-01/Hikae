@@ -21,6 +21,8 @@ import type {
 	RestoreFilePreviewData,
 	RestoreFileResult,
 	RestorePreviewData,
+	SaveResult,
+	SaveSizeChoice,
 	SessionInfo,
 	SettingsPatch_Deserialize,
 	SettingsView as BackendSettingsView,
@@ -47,10 +49,12 @@ import type {
 	Project,
 	RejectReason,
 	RemoteProjectList,
+	SaveOutcome,
 	SavePoint,
 	SettingKey,
 	SettingsView,
-	Session
+	Session,
+	SizeChoice
 } from './types';
 
 /** バックエンドのエラー（3 要素）を画面側の AppError に変換する */
@@ -157,7 +161,8 @@ export function mapProject(
 		uploadPendingCount: status.upload_pending,
 		fetchPendingCount: status.pull_pending,
 		hasConflict: status.has_conflicts,
-		folderMissing: false
+		folderMissing: false,
+		interruptedOperation: status.interrupted_operation
 	};
 }
 
@@ -294,6 +299,25 @@ export function mapAddFilesResult(result: AddFilesResult): AddFilesOutcome {
 			size: item.size
 		}))
 	};
+}
+
+/** 保存の結果。大きいファイルがあって保存しなかったときだけ、確認が必要な結果にする。パスは選択として送り返すため、変換しない */
+export function mapSaveResult(result: SaveResult): SaveOutcome {
+	const check = result.size_check;
+	if (check === null || (check.blocked.length === 0 && check.warned.length === 0)) {
+		return { kind: 'saved' };
+	}
+	const convert = (items: typeof check.blocked) =>
+		items.map((item) => ({ path: item.path, sizeBytes: item.size }));
+	return {
+		kind: 'size_check',
+		check: { blocked: convert(check.blocked), warned: convert(check.warned) }
+	};
+}
+
+/** 大きいファイルについての選択をバックエンドの形にする。パスは検査で返ってきた形のまま渡す */
+export function toBackendSizeChoice(choice: SizeChoice): SaveSizeChoice {
+	return { accept_warned: choice.acceptWarned, exclude: choice.exclude };
 }
 
 /** 画面側の設定名とバックエンドの項目名の対応 */

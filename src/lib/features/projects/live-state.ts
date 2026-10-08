@@ -54,7 +54,11 @@ export function applyLiveEvent(state: LiveState, event: LiveEvent): LiveUpdate {
 				state: {
 					...state,
 					sync: event.payload.state,
-					attention: event.payload.state === 'idle' ? null : state.attention
+					// 同期が落ち着いても、途中で止まった操作は操作が成功するまで残す
+					attention:
+						event.payload.state === 'idle' && state.attention !== 'interrupted-operation'
+							? null
+							: state.attention
 				},
 				invalidate: true
 			};
@@ -69,4 +73,12 @@ export function syncingKind(operation: string | null): 'fetch' | 'push' | 'other
 	if (operation === 'pull') return 'fetch';
 	if (operation === 'push') return 'push';
 	return 'other';
+}
+
+/** 途中で止まった操作が残っているか。イベント（要対応の通知）とプロジェクトの状態（起動時の検出）のどちらかが示せば true */
+export function hasInterruptedOperation(
+	state: LiveState,
+	interruptedOperation: string | null
+): boolean {
+	return state.attention === 'interrupted-operation' || interruptedOperation !== null;
 }

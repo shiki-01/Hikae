@@ -17,6 +17,7 @@ function project(overrides: Partial<Project> = {}): Project {
 		fetchPendingCount: 0,
 		hasConflict: false,
 		folderMissing: false,
+		interruptedOperation: null,
 		...overrides
 	};
 }
@@ -34,6 +35,19 @@ describe('プロジェクトカードの状態', () => {
 		);
 		expect(cardStatus(project({ uploadPendingCount: 1 }))).toBe('push_pending');
 		expect(cardStatus(project())).toBe('saved');
+	});
+
+	it('途中で止まった操作は、ぶつかり以外の状態より優先して要対応にする', () => {
+		const stopped = project({
+			interruptedOperation: 'save',
+			unsavedCount: 2,
+			uploadPendingCount: 1
+		});
+		expect(cardStatus(stopped)).toBe('interrupted');
+		expect(needsAttention(stopped)).toBe(true);
+		expect(cardStatus(project({ interruptedOperation: 'pull', hasConflict: true }))).toBe(
+			'conflict'
+		);
 	});
 
 	it('要対応はぶつかりとフォルダ不明', () => {

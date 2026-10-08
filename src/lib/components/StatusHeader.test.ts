@@ -150,3 +150,16 @@ describe('StatusHeader priority calculation', () => {
 		}
 	});
 });
+
+describe('途中で止まった操作', () => {
+	it('ぶつかりより後で、処理中・オフライン・未保存より先に表示する', () => {
+		expect(calculateStatusPriority(true, false, true, 0, 0, 0, false, true)).toBe('conflict');
+		expect(calculateStatusPriority(false, true, false, 5, 2, 1, true, true)).toBe('interrupted');
+		expect(calculateStatusPriority(false, false, false, 5, 2, 1, false, true)).toBe('interrupted');
+		expect(calculateStatusPriority(false, false, true, 5, 2, 1, false, true)).toBe('interrupted');
+	});
+
+	it('残っていなければ従来の順序のまま', () => {
+		expect(calculateStatusPriority(false, false, true, 5, 2, 1, false, false)).toBe('unsaved');
+	});
+});

@@ -6,7 +6,13 @@
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import { api, isTauri } from '#lib/api/index.js';
-	import type { DroppedFile, OpenTarget, RestoreScope, SavePoint } from '#lib/api/types.js';
+	import type {
+		DroppedFile,
+		OpenTarget,
+		RestoreScope,
+		SavePoint,
+		SizeCheck
+	} from '#lib/api/types.js';
 	import SaveBar from '#lib/components/SaveBar.svelte';
 	import type { SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
@@ -20,6 +26,8 @@
 		type AddFilesSummary
 	} from '#lib/features/changes/add-files-result.js';
 	import { nextMemo } from '#lib/features/changes/memo.js';
+	import SizeCheckDialog from '#lib/features/changes/SizeCheckDialog.svelte';
+	import { choiceFor, type SizeAction } from '#lib/features/changes/size-check.js';
 	import { droppedFromPaths, listenNativeDrop } from '#lib/features/changes/native-drop.js';
 	import { useAddFiles, useSave } from '#lib/features/changes/mutations.js';
 	import { useChanges, useMemoSuggestion } from '#lib/features/changes/queries.js';
@@ -35,7 +43,8 @@
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
 	import { liveStateOf } from './live.svelte.js';
-	import { syncingKind } from './live-state';
+	import InterruptedDialog from './InterruptedDialog.svelte';
+	import { hasInterruptedOperation, syncingKind } from './live-state';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
 
@@ -75,6 +84,9 @@
 	let dragDepth = $state(0);
 	let tooLarge = $state(false);
 	let addSummary = $state<AddFilesSummary | null>(null);
+	// 大きいファイルの確認待ち。保存のやり直しに同じメモを使うため、メモも持つ
+	let sizeRequest = $state<{ memo: string; check: SizeCheck } | null>(null);
+	let interruptedOpen = $state(false);
 
 	const changes = $derived(changesQuery.data ?? []);
 	const history = $derived(historyQuery.data ?? []);
@@ -94,7 +106,9 @@
 		() => {
 			memo = '';
 			autoMemo = '';
-		}
+			sizeRequest = null;
+		},
+		(requestMemo, check) => (sizeRequest = { memo: requestMemo, check })
 	);
 	const fetchMutation = useFetch(
 		() => projectId,
@@ -119,6 +133,9 @@
 
 	const syncing = $derived(
 		fetchMutation.isPending ? 'fetch' : push.isPending ? 'push' : syncingKind(live.operation)
+	);
+	const interrupted = $derived(
+		hasInterruptedOperation(live, project.data?.interruptedOperation ?? null)
 	);
 	const attention = $derived(
 		live.attention === 'auth' || live.sync === 'auth-required'
@@ -148,7 +165,13 @@
 
 	function submitSave() {
 		const text = memo.trim() || suggestion;
-		if (text) save.mutate(text);
+		if (text) save.mutate({ memo: text });
+	}
+
+	function chooseSize(action: SizeAction) {
+		if (!sizeRequest) return;
+		const choice = choiceFor(sizeRequest.check, action);
+		if (choice) save.mutate({ memo: sizeRequest.memo, choice });
 	}
 
 	function openCompare(path: string, from: string, to: string) {
@@ -272,6 +295,7 @@
 			live.sync === 'conflicted'}
 		{syncing}
 		{attention}
+		{interrupted}
 		isOnline={network.online && live.sync !== 'offline'}
 		unsavedCount={changesQuery.data ? changes.length : (project.data?.unsavedCount ?? 0)}
 		uploadPendingCount={project.data?.uploadPendingCount ?? 0}
@@ -283,6 +307,7 @@
 		onpush={() => push.mutate()}
 		onretry={() => fetchMutation.mutate()}
 		onreview={() => (conflictOpen = true)}
+		oninterrupted={() => (interruptedOpen = true)}
 	/>
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
@@ -418,6 +443,19 @@
 	onconfirm={() =>
 		restoreRequest &&
 		restore.mutate({ targetId: restoreRequest.point.id, scope: restoreRequest.scope })}
+/>
+
+<SizeCheckDialog
+	check={sizeRequest?.check ?? null}
+	pending={save.isPending}
+	onchoose={chooseSize}
+	oncancel={() => (sizeRequest = null)}
+/>
+
+<InterruptedDialog
+	open={interruptedOpen}
+	operation={project.data?.interruptedOperation ?? null}
+	onclose={() => (interruptedOpen = false)}
 />
 
 <AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />

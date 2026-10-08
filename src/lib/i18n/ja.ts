@@ -66,6 +66,8 @@ const messages = {
 	'header.status_push_pending': 'アップロード待ちが {count} 件あります',
 	'header.status_conflict': '対応が必要なファイルがあります',
 	'header.status_conflict_resolve': '確認する',
+	'header.status_interrupted': '途中で止まった操作があります',
+	'header.status_interrupted_review': '確認する',
 
 	'tabs.label': '表示の切り替え',
 	'tabs.changes': '変更',
@@ -113,6 +115,35 @@ const messages = {
 	'add_files.reason_not_a_file': 'ファイルではないため追加できません（フォルダなど）',
 	'add_files.reason_unreadable': '読み取れなかったため追加できません',
 	'add_files.close': '閉じる',
+
+	'size_check.title': '大きいファイルがあります',
+	'size_check.description_blocked': '100MB を超えるファイルは、クラウドに保存できません。',
+	'size_check.description_warned':
+		'大きめのファイルがあります。保存はできますが、アップロードに時間がかかり、保管容量を多く使います。',
+	'size_check.safe': 'まだ何も保存していません。ファイルはこの PC にそのまま残っています。',
+	'size_check.list_label': '大きいファイル',
+	'size_check.tag_blocked': '保存できません',
+	'size_check.tag_warned': '大きめ',
+	'size_check.size_unknown': 'サイズ不明',
+	'size_check.next': '保存対象から外すと、ファイルは削除されず、残りのファイルだけを保存します。',
+	'size_check.accept': 'そのまま保存する',
+	'size_check.exclude_one': 'このファイルを保存対象から外す',
+	'size_check.exclude_many': 'これらのファイルを保存対象から外す',
+	'size_check.cancel': 'キャンセル',
+
+	'interrupted.title': '途中で止まった操作があります',
+	'interrupted.description': '前回のアプリ終了で、{name}が途中で止まっています。',
+	'interrupted.safe':
+		'ファイルはこの PC に残っています。操作の前の状態も控えとして残してあります。',
+	'interrupted.next':
+		'もう一度同じ操作を行ってください。元の状態に戻したいときは、履歴から戻せます。',
+	'interrupted.close': '閉じる',
+	'interrupted.op_save': '保存',
+	'interrupted.op_pull': '取り込み',
+	'interrupted.op_push': 'アップロード',
+	'interrupted.op_restore': '元に戻す操作',
+	'interrupted.op_resolve': '変更のぶつかりの解消',
+	'interrupted.op_other': '操作',
 
 	'save_bar.label': '保存',
 	'save_bar.memo': 'メモ',

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { applyLiveEvent, initialLiveState, syncingKind, type LiveState } from './live-state';
+import {
+	applyLiveEvent,
+	hasInterruptedOperation,
+	initialLiveState,
+	syncingKind,
+	type LiveState
+} from './live-state';
 
 const base: LiveState = initialLiveState;
 
@@ -64,6 +70,41 @@ describe('イベントの反映', () => {
 		expect(result.invalidate).toBe(true);
 	});
 
+	it('途中で止まった操作は、同期が待機に戻っても残り、操作の成功で消える', () => {
+		const stopped = applyLiveEvent(base, {
+			type: 'needs-attention',
+			payload: { project_id: 'p', reason: 'interrupted-operation' }
+		});
+		expect(stopped.state.attention).toBe('interrupted-operation');
+		const idle = applyLiveEvent(stopped.state, {
+			type: 'sync-state-changed',
+			payload: { project_id: 'p', state: 'idle', retry_at: null }
+		});
+		expect(idle.state.attention).toBe('interrupted-operation');
+		const failed = applyLiveEvent(idle.state, {
+			type: 'op-finished',
+			payload: {
+				project_id: 'p',
+				operation: 'pull',
+				trigger: 'manual',
+				ok: false,
+				outcome: 'error'
+			}
+		});
+		expect(failed.state.attention).toBe('interrupted-operation');
+		const ok = applyLiveEvent(failed.state, {
+			type: 'op-finished',
+			payload: {
+				project_id: 'p',
+				operation: 'pull',
+				trigger: 'manual',
+				ok: true,
+				outcome: 'merged'
+			}
+		});
+		expect(ok.state.attention).toBeNull();
+	});
+
 	it('元の状態を書き換えない', () => {
 		const before = { ...base };
 		applyLiveEvent(base, {
@@ -80,5 +121,16 @@ describe('処理中の種別', () => {
 		expect(syncingKind('pull')).toBe('fetch');
 		expect(syncingKind('push')).toBe('push');
 		expect(syncingKind('save')).toBe('other');
+	});
+});
+
+describe('途中で止まった操作の判定', () => {
+	it('通知かプロジェクトの状態のどちらかが示せば残っているとみなす', () => {
+		expect(hasInterruptedOperation(base, null)).toBe(false);
+		expect(hasInterruptedOperation(base, 'save')).toBe(true);
+		expect(hasInterruptedOperation({ ...base, attention: 'interrupted-operation' }, null)).toBe(
+			true
+		);
+		expect(hasInterruptedOperation({ ...base, attention: 'auth' }, null)).toBe(false);
 	});
 });

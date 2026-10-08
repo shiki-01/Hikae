@@ -17,12 +17,14 @@ import {
 	mapPull,
 	mapRemoteProjects,
 	mapResolutions,
+	mapSaveResult,
 	mapSavePoint,
 	mapSession,
 	mapSettingsView,
 	parseDate,
 	restoreFileFailure,
-	toBackendPatch
+	toBackendPatch,
+	toBackendSizeChoice
 } from './mappers';
 import type {
 	AddFilesOutcome,
@@ -41,7 +43,9 @@ import type {
 	ProjectApi,
 	RestoreResult,
 	RestoreScope,
-	SavePoint
+	SaveOutcome,
+	SavePoint,
+	SizeChoice
 } from './types';
 
 const HISTORY_LIMIT = 200;
@@ -205,8 +209,18 @@ export const tauriApi: ProjectApi = {
 		return mapDiff(lines);
 	},
 
-	async save(projectId: string, memo: string): Promise<void> {
-		await unwrap(commands.save(projectId, memo));
+	async save(projectId: string, memo: string): Promise<SaveOutcome> {
+		return mapSaveResult(await unwrap(commands.save(projectId, memo)));
+	},
+
+	async saveWithSizeChoice(
+		projectId: string,
+		memo: string,
+		choice: SizeChoice
+	): Promise<SaveOutcome> {
+		return mapSaveResult(
+			await unwrap(commands.saveWithSizeChoice(projectId, memo, toBackendSizeChoice(choice)))
+		);
 	},
 
 	async restoreImpact(

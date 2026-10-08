@@ -22,6 +22,7 @@
 			case 'folder_missing':
 				return { variant: 'danger' as const, label: t('badge.folder_missing') };
 			case 'conflict':
+			case 'interrupted':
 				return { variant: 'danger' as const, label: t('badge.danger') };
 			case 'unsaved':
 				return {

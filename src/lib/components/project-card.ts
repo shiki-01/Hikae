@@ -11,10 +11,12 @@ export function cardStatus(project: Project): CardStatus {
 		true,
 		project.unsavedCount,
 		project.fetchPendingCount,
-		project.uploadPendingCount
+		project.uploadPendingCount,
+		false,
+		project.interruptedOperation !== null
 	);
 }
 
 export function needsAttention(project: Project): boolean {
-	return project.folderMissing || project.hasConflict;
+	return project.folderMissing || project.hasConflict || project.interruptedOperation !== null;
 }

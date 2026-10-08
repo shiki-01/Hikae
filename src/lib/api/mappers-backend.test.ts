@@ -7,12 +7,15 @@ import {
 	mapOverridden,
 	mapOwner,
 	mapPointChange,
+	mapProject,
 	mapRemoteProjects,
+	mapSaveResult,
 	mapSession,
 	mapSettings,
 	mapSettingsView,
 	restoreFileFailure,
-	toBackendPatch
+	toBackendPatch,
+	toBackendSizeChoice
 } from './mappers';
 
 describe('ログインの変換', () => {
@@ -211,5 +214,65 @@ describe('設定の変換', () => {
 
 	it('false や 0 も省略せず送る', () => {
 		expect(toBackendPatch({ saveBeforePull: false })).toEqual({ save_before_pull: false });
+	});
+});
+
+describe('保存結果の変換', () => {
+	it('保存できたとき（大きいファイルの情報なし）は保存済みにする', () => {
+		expect(mapSaveResult({ commit: 'abc', message: 'm', size_check: null })).toEqual({
+			kind: 'saved'
+		});
+	});
+
+	it('何も保存せず大きいファイルが返ったときは、確認が必要な結果にする（パスは変えない）', () => {
+		const outcome = mapSaveResult({
+			commit: null,
+			message: null,
+			size_check: {
+				blocked: [{ path: '動画\\講義.mp4', size: 250 * 1024 * 1024 }],
+				warned: [{ path: '素材.psd', size: null }]
+			}
+		});
+		expect(outcome).toEqual({
+			kind: 'size_check',
+			check: {
+				blocked: [{ path: '動画\\講義.mp4', sizeBytes: 250 * 1024 * 1024 }],
+				warned: [{ path: '素材.psd', sizeBytes: null }]
+			}
+		});
+	});
+
+	it('空の検査結果は保存済みとして扱う', () => {
+		expect(
+			mapSaveResult({ commit: null, message: null, size_check: { blocked: [], warned: [] } })
+		).toEqual({ kind: 'saved' });
+	});
+
+	it('選択をバックエンドの形にする', () => {
+		expect(toBackendSizeChoice({ acceptWarned: true, exclude: ['a.psd'] })).toEqual({
+			accept_warned: true,
+			exclude: ['a.psd']
+		});
+	});
+});
+
+describe('プロジェクトの変換', () => {
+	const info = { id: 'p', display_name: 'P', path: 'C:\\p', owner: 'me' } as Parameters<
+		typeof mapProject
+	>[0];
+	const status = {
+		unsaved_changes: 0,
+		upload_pending: 0,
+		pull_pending: 0,
+		has_conflicts: false,
+		is_syncing: false,
+		interrupted_operation: null
+	};
+
+	it('途中で止まった操作の名前を引き継ぐ', () => {
+		expect(mapProject(info, { ...status, interrupted_operation: 'pull' }, null)).toMatchObject({
+			interruptedOperation: 'pull'
+		});
+		expect(mapProject(info, status, null).interruptedOperation).toBeNull();
 	});
 });

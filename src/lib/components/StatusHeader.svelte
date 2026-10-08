@@ -24,6 +24,8 @@
 		syncing?: 'fetch' | 'push' | 'other' | null;
 		/** ユーザーの対応が必要な理由（ぶつかり以外） */
 		attention?: 'auth' | 'unsaved-changes' | null;
+		/** 前回のアプリ終了で途中で止まった操作が残っている */
+		interrupted?: boolean;
 		isOnline?: boolean;
 		unsavedCount?: number;
 		uploadPendingCount?: number;
@@ -35,6 +37,7 @@
 		onpush?: () => void;
 		onretry?: () => void;
 		onreview?: () => void;
+		oninterrupted?: () => void;
 		class?: string;
 	}
 
@@ -43,6 +46,7 @@
 		hasConflict = false,
 		syncing = null,
 		attention = null,
+		interrupted = false,
 		isOnline = true,
 		unsavedCount = 0,
 		uploadPendingCount = 0,
@@ -54,6 +58,7 @@
 		onpush,
 		onretry,
 		onreview,
+		oninterrupted,
 		class: className = ''
 	}: Props = $props();
 
@@ -72,7 +77,8 @@
 			unsavedCount,
 			fetchPendingCount,
 			uploadPendingCount,
-			attention !== null
+			attention !== null,
+			interrupted
 		)
 	);
 
@@ -82,6 +88,16 @@
 			color: 'fg:state-danger',
 			text: t('header.status_conflict'),
 			action: { label: t('header.status_conflict_resolve'), run: onreview, variant: 'primary' }
+		},
+		interrupted: {
+			icon: AlertTriangle,
+			color: 'fg:state-danger',
+			text: t('header.status_interrupted'),
+			action: {
+				label: t('header.status_interrupted_review'),
+				run: oninterrupted,
+				variant: 'primary'
+			}
 		},
 		syncing: {
 			icon: LoaderCircle,

@@ -1,5 +1,6 @@
 export type StatusState =
 	| 'conflict'
+	| 'interrupted'
 	| 'syncing'
 	| 'offline'
 	| 'attention'
@@ -15,9 +16,11 @@ export function resolveStatus(
 	unsavedCount: number,
 	fetchPendingCount: number,
 	uploadPendingCount: number,
-	hasAttention = false
+	hasAttention = false,
+	hasInterrupted = false
 ): StatusState {
 	if (hasConflict) return 'conflict';
+	if (hasInterrupted) return 'interrupted';
 	if (isSyncing) return 'syncing';
 	if (!isOnline) return 'offline';
 	if (hasAttention) return 'attention';

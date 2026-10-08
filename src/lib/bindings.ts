@@ -15,8 +15,16 @@ export const commands = {
 	projectStatus: (id: string) => typedError<SyncStatus, AppError>(__TAURI_INVOKE("project_status", { id })),
 	/**  変更ファイル一覧を取得。 */
 	listChanges: (id: string) => typedError<ChangeFile[], AppError>(__TAURI_INVOKE("list_changes", { id })),
-	/**  保存（commit）を実行。 */
+	/**
+	 *  保存（commit）を実行。
+	 * 
+	 *  保存前に新規・変更ファイルのサイズを検査する（設計書 4.1 手順 1）。大きいファイルがあれば
+	 *  何も保存せず、`size_check` に該当ファイルとサイズを入れて返す（エラーではない）。
+	 *  画面は E07 / E08 の 2 択を出し、選択を `save_with_size_choice` で送って保存をやり直す。
+	 */
 	save: (id: string, message: string) => typedError<SaveResult, AppError>(__TAURI_INVOKE("save", { id, message })),
+	/**  大きいファイルについての選択（E07 / E08）を添えて保存をやり直す。 */
+	saveWithSizeChoice: (id: string, message: string, choice: SaveSizeChoice) => typedError<SaveResult, AppError>(__TAURI_INVOKE("save_with_size_choice", { id, message, choice })),
 	/**  取り込む（fetch + merge）を実行。 */
 	pull: (id: string) => typedError<PullResult, AppError>(__TAURI_INVOKE("pull", { id })),
 	/**  アップロード（push）を実行。 */
@@ -229,7 +237,9 @@ export type AttentionReason =
 /**  再認証が必要 */
 "auth" | 
 /**  未保存の変更があるため、自動の取り込みを見送った */
-"unsaved-changes";
+"unsaved-changes" | 
+/**  前回のアプリ終了で、途中で止まった操作が見つかった（E15） */
+"interrupted-operation";
 
 /**  変更ファイル */
 export type ChangeFile = {
@@ -308,6 +318,14 @@ export type HistoryItem = {
 	message: string,
 	changed_files_count: number,
 	is_snapshot: boolean,
+};
+
+/**  大きいファイル */
+export type LargeFileItem = {
+	/**  プロジェクトからの相対パス */
+	path: string,
+	/**  ファイルサイズ（バイト） */
+	size: number | null,
 };
 
 /**  ログインの結末 */
@@ -512,6 +530,19 @@ export type RestorePreviewData = {
 export type SaveResult = {
 	commit: string | null,
 	message: string | null,
+	/**  大きいファイルがあり、保存しなかった場合の内容（E07 / E08）。なければ null */
+	size_check: SizeCheckResult | null,
+};
+
+/**  大きいファイルについての選択。既定（何も選ばない）は、問題のあるファイルがあれば保存しない。 */
+export type SaveSizeChoice = {
+	/**  警告（E08）のファイルをそのまま保存する */
+	accept_warned: boolean,
+	/**
+	 *  保存対象から外すファイル（検査で見つかったファイルのパスのみ）。.gitignore に追記され、
+	 *  ファイル自体は消えない
+	 */
+	exclude: string[],
 };
 
 /**  現在のログイン状態。トークンは含めない。 */
@@ -667,6 +698,14 @@ export type SettingsView = {
 	overridden: string[],
 };
 
+/**  保存前のサイズ検査で見つかったファイル（保存はしていない） */
+export type SizeCheckResult = {
+	/**  100MB を超えるため保存できないファイル（E07: 「外して保存」か「キャンセル」） */
+	blocked: LargeFileItem[],
+	/**  警告閾値を超えるが保存できるファイル（E08: 「このまま保存」か「外す」） */
+	warned: LargeFileItem[],
+};
+
 /**  プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。 */
 export type StatusChanged = {
 	project_id: string,
@@ -698,6 +737,8 @@ export type SyncStatus = {
 	pull_pending: number,
 	has_conflicts: boolean,
 	is_syncing: boolean,
+	/**  前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null（E15） */
+	interrupted_operation: string | null,
 };
 
 /**  用語の表示 */
