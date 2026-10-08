@@ -9,10 +9,13 @@
 		open: boolean;
 		/** 途中で止まった操作の名前。不明なら null */
 		operation: string | null;
+		/** 操作の前の状態へ戻している間は true */
+		recovering?: boolean;
+		onrecover: () => void;
 		onclose: () => void;
 	}
 
-	let { open, operation, onclose }: Props = $props();
+	let { open, operation, recovering = false, onrecover, onclose }: Props = $props();
 </script>
 
 <Dialog
@@ -20,9 +23,13 @@
 	variant="warning"
 	title={t('interrupted.title')}
 	description={t('interrupted.description', { name: interruptedOperationName(operation) })}
+	busy={recovering}
 	{onclose}
 >
-	<p class="m:0 type-body">{t('interrupted.next')}</p>
+	<div class="flex flex-direction:column gap:2">
+		<p class="m:0 type-body">{t('interrupted.next')}</p>
+		<p class="m:0 type-small fg:fg-muted">{t('interrupted.recover_hint')}</p>
+	</div>
 
 	{#snippet footerNote()}
 		<div class="flex align-items:start gap:2 p:3 r:md bg:bg-subtle">
@@ -32,6 +39,11 @@
 	{/snippet}
 
 	{#snippet actions()}
-		<Button onclick={onclose}>{t('interrupted.close')}</Button>
+		<Button variant="secondary" disabled={recovering} onclick={onclose}>
+			{t('interrupted.close')}
+		</Button>
+		<Button loading={recovering} disabled={recovering} onclick={onrecover}>
+			{t('interrupted.recover')}
+		</Button>
 	{/snippet}
 </Dialog>

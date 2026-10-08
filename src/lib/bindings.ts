@@ -71,6 +71,24 @@ export const commands = {
 	relocateProject: (id: string, newPath: string) => typedError<ProjectInfo, AppError>(__TAURI_INVOKE("relocate_project", { id, newPath })),
 	/**  保存時点で変更されたファイルの一覧（変更の種類つき、読み取りのみ）。 */
 	listPointChanges: (id: string, commit: string) => typedError<PointChangeItem[], AppError>(__TAURI_INVOKE("list_point_changes", { id, commit })),
+	/**
+	 *  過去の版のファイルを開く（設計書 4.7）。
+	 * 
+	 *  指定時点の内容をアプリ専用の一時フォルダへ書き出して読み取り専用にし、既定のアプリで開く。
+	 *  プロジェクトのファイルとリポジトリは変更しない（読み取りのみのため直列キューは通さない）。
+	 *  パスは `..`・絶対パス・`.git` 配下を拒否する。
+	 */
+	openFileAt: (id: string, commit: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_file_at", { id, commit, relativePath })),
+	/**
+	 *  中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
+	 * 
+	 *  対象は保存・取り込み系（`save` / `pull` / `push` / `resolve`）。復元点は
+	 *  `refs/hikae/backup/` の、その操作が始まった後に作られた最新のもの。戻す前にいまの状態の
+	 *  復元点を作り、`restore --source` で戻す（`reset --hard` / `checkout -f` は使わない）。
+	 *  実行は直列キューとジャーナルを通す。復元点が見つからなければ何も変更せずエラーを返し、
+	 *  中断の印は残る。成功すると中断の印を解除する。
+	 */
+	recoverInterrupted: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("recover_interrupted", { id })),
 	/**  ログイン状態を返す。 */
 	getSession: () => typedError<SessionInfo, AppError>(__TAURI_INVOKE("get_session")),
 	/**  ログインを始める（Device Flow）。確認コードと確認ページの URL を返す。 */
@@ -156,8 +174,43 @@ export type AiRunner = "builtin" | "ollama";
 /**  AI に渡す範囲 */
 export type AiScope = "file-names" | "text-diff" | "with-images";
 
-/**  何が起きたか、データは無事か、次の行動を含むエラー型 */
+/**
+ *  何が起きたか、データは無事か、次の行動を含むエラー型。
+ * 
+ *  画面は `code` と `params` から言語リソース（i18n キー）で文言を組み立てる。
+ *  `what_happened` / `data_is_safe` / `next_action`（日本語）は、対応する文言が無い場合の
+ *  フォールバックとして残す。`params` にはファイル名などの表示用の値だけを入れ、
+ *  トークンや認証情報、git の標準エラー出力（`technical_info` に入れる）は入れない。
+ * 
+ *  コード一覧（`OpsError` / 認証エラーと 1 対 1）:
+ * 
+ *  - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
+ *    `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
+ *    `restore_point_not_found`、`unexpected`
+ *  - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
+ *  - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
+ *    `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
+ *    `keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、
+ *    `github_error`
+ *  - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、
+ *    `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
+ *    `clone_failed`、`clone_timeout`、`clone_register_failed`
+ *  - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、
+ *    `project_list_failed`、`project_register_failed`、`project_remove_failed`、
+ *    `relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、
+ *    `relocate_failed`
+ *  - 内部: `database_error`、`task_failed`、`lock_failed`、`settings_io_failed`、
+ *    `invalid_settings`、`status_failed`、`history_failed`、`diff_failed`、
+ *    `change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`
+ * 
+ *  大きいファイル（E07 / E08）はエラーではなく構造化した結果（`SizeCheckResult`）で返すため、
+ *  ここにはコードを置かない。
+ */
 export type AppError = {
+	/**  機械可読なエラーコード（上の一覧）。画面の文言の選択に使う */
+	code: string,
+	/**  文言に差し込む値（キーと値の組。ファイル名など） */
+	params: ([string, string])[],
 	/**  何が起きたか（ユーザー向けの平易な説明） */
 	what_happened: string,
 	/**  データは無事か（1文で） */
@@ -238,6 +291,8 @@ export type AttentionReason =
 "auth" | 
 /**  未保存の変更があるため、自動の取り込みを見送った */
 "unsaved-changes" | 
+/**  取り込み前の自動保存に大きいファイルがあるため、自動の取り込みを見送った（E07 / E08） */
+"large-files" | 
 /**  前回のアプリ終了で、途中で止まった操作が見つかった（E15） */
 "interrupted-operation";
 
@@ -278,6 +333,10 @@ export type ConflictItem = {
 	this_saved_at: number | null,
 	/**  クラウド側の最終保存日時（Unix 秒）。不明なら null */
 	cloud_saved_at: number | null,
+	/**  この PC 側の最終保存を作った PC の名前。記録が無ければ null */
+	this_pc_name: string | null,
+	/**  クラウド側の最終保存を作った PC の名前。記録が無ければ null */
+	cloud_pc_name: string | null,
 };
 
 export type ConflictKind = "both-modified" | "both-added" | "deleted-by-us" | "deleted-by-them" | "both-deleted";
@@ -318,6 +377,8 @@ export type HistoryItem = {
 	message: string,
 	changed_files_count: number,
 	is_snapshot: boolean,
+	/**  この保存を作った PC の名前。記録が無ければ null。`message` には含まれない */
+	pc_name: string | null,
 };
 
 /**  大きいファイル */
@@ -441,11 +502,15 @@ export type ProjectInfo = {
 export type PullResult = {
 	outcome: string,
 	conflicts: ConflictItem[],
+	/**  取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容（E07 / E08）。なければ null */
+	size_check: SizeCheckResult | null,
 };
 
 /**  アップロード結果 */
 export type PushResult = {
 	outcome: string,
+	/**  取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容。なければ null */
+	size_check: SizeCheckResult | null,
 };
 
 /**  追加しなかったファイル */

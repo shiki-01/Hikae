@@ -44,7 +44,10 @@
 	import { network } from '#lib/utils/online.svelte.js';
 	import { liveStateOf } from './live.svelte.js';
 	import InterruptedDialog from './InterruptedDialog.svelte';
-	import { hasInterruptedOperation, syncingKind } from './live-state';
+	import SyncSizeDialog from './SyncSizeDialog.svelte';
+	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
+	import { useRecoverInterrupted } from './mutations';
+	import type { SyncSizeRequest } from './sync-size';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
 
@@ -87,6 +90,8 @@
 	// 大きいファイルの確認待ち。保存のやり直しに同じメモを使うため、メモも持つ
 	let sizeRequest = $state<{ memo: string; check: SizeCheck } | null>(null);
 	let interruptedOpen = $state(false);
+	// 大きいファイルのため、取り込み・アップロードを見送った内容
+	let syncSize = $state<SyncSizeRequest | null>(null);
 
 	const changes = $derived(changesQuery.data ?? []);
 	const history = $derived(historyQuery.data ?? []);
@@ -112,9 +117,17 @@
 	);
 	const fetchMutation = useFetch(
 		() => projectId,
-		() => (conflictOpen = true)
+		() => (conflictOpen = true),
+		(request) => (syncSize = request)
 	);
-	const push = usePush(() => projectId);
+	const push = usePush(
+		() => projectId,
+		(request) => (syncSize = request)
+	);
+	const recover = useRecoverInterrupted(
+		() => projectId,
+		() => (interruptedOpen = false)
+	);
 	const addFiles = useAddFiles(
 		() => projectId,
 		(outcome) => {
@@ -137,6 +150,8 @@
 	const interrupted = $derived(
 		hasInterruptedOperation(live, project.data?.interruptedOperation ?? null)
 	);
+	// 確認のために再実行している間は、処理中の表示を優先する
+	const largeFiles = $derived(hasLargeFilesAttention(live) && syncing === null);
 	const attention = $derived(
 		live.attention === 'auth' || live.sync === 'auth-required'
 			? 'auth'
@@ -190,6 +205,16 @@
 				return;
 			}
 			await api.openFile(projectId, path, target);
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	// 選択中の保存時点の版を、読み取り専用で開く（現在のファイルは変更しない）
+	async function openFileAtPoint(path: string) {
+		if (!selectedPoint) return;
+		try {
+			await api.openFileAt(projectId, selectedPoint.id, path);
 		} catch (error) {
 			reportError(error);
 		}
@@ -296,6 +321,7 @@
 		{syncing}
 		{attention}
 		{interrupted}
+		{largeFiles}
 		isOnline={network.online && live.sync !== 'offline'}
 		unsavedCount={changesQuery.data ? changes.length : (project.data?.unsavedCount ?? 0)}
 		uploadPendingCount={project.data?.uploadPendingCount ?? 0}
@@ -308,6 +334,7 @@
 		onretry={() => fetchMutation.mutate()}
 		onreview={() => (conflictOpen = true)}
 		oninterrupted={() => (interruptedOpen = true)}
+		onlargefiles={() => fetchMutation.mutate()}
 	/>
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
@@ -391,7 +418,7 @@
 					oncompare={(path) => selectedPoint && openCompare(path, selectedPoint.id, 'current')}
 					onrestore={(path) =>
 						askRestore(selectedPoint ?? undefined, path ? { kind: 'file', path } : { kind: 'all' })}
-					onopen={openFile}
+					onopenat={openFileAtPoint}
 				/>
 			{/if}
 		</div>
@@ -455,8 +482,12 @@
 <InterruptedDialog
 	open={interruptedOpen}
 	operation={project.data?.interruptedOperation ?? null}
+	recovering={recover.isPending}
+	onrecover={() => recover.mutate()}
 	onclose={() => (interruptedOpen = false)}
 />
+
+<SyncSizeDialog request={syncSize} onclose={() => (syncSize = null)} />
 
 <AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />
 

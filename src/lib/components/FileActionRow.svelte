@@ -4,22 +4,29 @@
 	import type { OpenTarget } from '#lib/api/types.js';
 	import Button from './Button.svelte';
 	import SplitButton from './SplitButton.svelte';
+	import Tooltip from './Tooltip.svelte';
 
 	interface Props {
 		filename: string;
 		restoreLabel?: string;
+		/** 現在のファイルを開く分割ボタンの表示名 */
+		openLabel?: string;
 		oncompare?: () => void;
 		onrestore?: () => void;
 		onopen?: (target: OpenTarget) => void;
+		/** 過去の時点の版を読み取り専用で開く（指定すると、現在のファイルを開く分割ボタンの代わりに出す） */
+		onopenat?: () => void;
 		class?: string;
 	}
 
 	let {
 		filename,
 		restoreLabel = t('file_action.restore_current'),
+		openLabel = t('file_action.open'),
 		oncompare,
 		onrestore,
 		onopen,
+		onopenat,
 		class: className = ''
 	}: Props = $props();
 
@@ -55,8 +62,15 @@
 				{restoreLabel}
 			</Button>
 		{/if}
-		{#if onopen}
-			<SplitButton label={t('file_action.open')} {items} onclick={() => onopen('default')} />
+		{#if onopenat}
+			<Tooltip text={t('file_action.open_at_hint')} position="left">
+				<Button size="sm" variant="secondary" onclick={onopenat}>
+					<ExternalLink size={14} aria-hidden="true" />
+					{t('file_action.open_at')}
+				</Button>
+			</Tooltip>
+		{:else if onopen}
+			<SplitButton label={openLabel} {items} onclick={() => onopen('default')} />
 		{/if}
 	</div>
 </div>

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	applyLiveEvent,
 	hasInterruptedOperation,
+	hasLargeFilesAttention,
 	initialLiveState,
 	syncingKind,
 	type LiveState
@@ -103,6 +104,26 @@ describe('イベントの反映', () => {
 			}
 		});
 		expect(ok.state.attention).toBeNull();
+	});
+
+	it('大きいファイルによる見送りは、同期が待機に戻っても残り、操作の成功で消える', () => {
+		const skipped = applyLiveEvent(base, {
+			type: 'needs-attention',
+			payload: { project_id: 'p', reason: 'large-files' }
+		});
+		expect(skipped.state.attention).toBe('large-files');
+		expect(hasLargeFilesAttention(skipped.state)).toBe(true);
+		const idle = applyLiveEvent(skipped.state, {
+			type: 'sync-state-changed',
+			payload: { project_id: 'p', state: 'idle', retry_at: null }
+		});
+		expect(idle.state.attention).toBe('large-files');
+		const ok = applyLiveEvent(idle.state, {
+			type: 'op-finished',
+			payload: { project_id: 'p', operation: 'save', trigger: 'manual', ok: true, outcome: 'saved' }
+		});
+		expect(ok.state.attention).toBeNull();
+		expect(hasLargeFilesAttention(ok.state)).toBe(false);
 	});
 
 	it('元の状態を書き換えない', () => {

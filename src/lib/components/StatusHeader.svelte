@@ -26,6 +26,8 @@
 		attention?: 'auth' | 'unsaved-changes' | null;
 		/** 前回のアプリ終了で途中で止まった操作が残っている */
 		interrupted?: boolean;
+		/** 大きいファイルがあるため、自動の取り込みを見送った */
+		largeFiles?: boolean;
 		isOnline?: boolean;
 		unsavedCount?: number;
 		uploadPendingCount?: number;
@@ -38,6 +40,7 @@
 		onretry?: () => void;
 		onreview?: () => void;
 		oninterrupted?: () => void;
+		onlargefiles?: () => void;
 		class?: string;
 	}
 
@@ -47,6 +50,7 @@
 		syncing = null,
 		attention = null,
 		interrupted = false,
+		largeFiles = false,
 		isOnline = true,
 		unsavedCount = 0,
 		uploadPendingCount = 0,
@@ -59,6 +63,7 @@
 		onretry,
 		onreview,
 		oninterrupted,
+		onlargefiles,
 		class: className = ''
 	}: Props = $props();
 
@@ -78,7 +83,8 @@
 			fetchPendingCount,
 			uploadPendingCount,
 			attention !== null,
-			interrupted
+			interrupted,
+			largeFiles
 		)
 	);
 
@@ -96,6 +102,16 @@
 			action: {
 				label: t('header.status_interrupted_review'),
 				run: oninterrupted,
+				variant: 'primary'
+			}
+		},
+		large_files: {
+			icon: AlertTriangle,
+			color: 'fg:state-danger',
+			text: t('header.status_large_files'),
+			action: {
+				label: t('header.status_large_files_review'),
+				run: onlargefiles,
 				variant: 'primary'
 			}
 		},

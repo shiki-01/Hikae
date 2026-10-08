@@ -37,7 +37,8 @@ describe('i18n', () => {
 			'message',
 			'current',
 			'total',
-			'path'
+			'path',
+			'file'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

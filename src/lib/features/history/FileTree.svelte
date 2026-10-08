@@ -9,11 +9,12 @@
 		nodes: TreeNode[];
 		/** 1 ファイルだけを戻す操作を表示するか */
 		canRestore: boolean;
-		onopen: (path: string) => void;
+		/** この時点の版を読み取り専用で開く */
+		onopenat: (path: string) => void;
 		onrestore: (path: string) => void;
 	}
 
-	let { nodes, canRestore, onopen, onrestore }: Props = $props();
+	let { nodes, canRestore, onopenat, onrestore }: Props = $props();
 
 	const INDENT = 16;
 </script>
@@ -52,10 +53,10 @@
 							>
 						</span>
 						<span class="flex gap:2 flex-shrink:0">
-							<!-- 開くのは作業フォルダ上の現在のファイルで、この時点の版ではない -->
-							<Tooltip text={t('file_action.open_current_hint')} position="left">
-								<Button size="sm" variant="ghost" onclick={() => onopen(node.path)}>
-									{t('file_action.open_current')}
+							<!-- この時点の版を、読み取り専用の一時ファイルとして開く -->
+							<Tooltip text={t('file_action.open_at_hint')} position="left">
+								<Button size="sm" variant="ghost" onclick={() => onopenat(node.path)}>
+									{t('file_action.open_at')}
 								</Button>
 							</Tooltip>
 							{#if canRestore}

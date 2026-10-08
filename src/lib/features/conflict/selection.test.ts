@@ -12,7 +12,14 @@ import {
 
 function conflict(path: string, kind: ConflictFile['kind'] = 'both'): ConflictFile {
 	const date = new Date('2026-10-06T10:00:00');
-	return { path, kind, thisPcSavedAt: date, cloudSavedAt: date, cloudPcName: 'PC' };
+	return {
+		path,
+		kind,
+		thisPcSavedAt: date,
+		cloudSavedAt: date,
+		thisPcName: 'PC',
+		cloudPcName: 'PC'
+	};
 }
 
 describe('ぶつかり解消の選択状態', () => {

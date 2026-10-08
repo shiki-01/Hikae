@@ -26,8 +26,18 @@ describe('日時の変換', () => {
 
 	it('履歴の自動保存と手動保存を区別する', () => {
 		const base = { commit: 'abc', timestamp: '2026-01-02T03:04:05Z', message: 'm' };
-		const manual = mapSavePoint({ ...base, changed_files_count: 1, is_snapshot: false });
-		const auto = mapSavePoint({ ...base, changed_files_count: 1, is_snapshot: true });
+		const manual = mapSavePoint({
+			...base,
+			changed_files_count: 1,
+			is_snapshot: false,
+			pc_name: null
+		});
+		const auto = mapSavePoint({
+			...base,
+			changed_files_count: 1,
+			is_snapshot: true,
+			pc_name: null
+		});
 		expect(manual).toMatchObject({ id: 'abc', kind: 'save', message: 'm' });
 		expect(manual.createdAt.toISOString()).toBe('2026-01-02T03:04:05.000Z');
 		expect(auto.kind).toBe('auto');
@@ -66,7 +76,14 @@ describe('競合種別の変換', () => {
 
 	it('競合ファイルの変換でパスと種別が保たれる', () => {
 		expect(
-			mapConflict({ path: 'x', kind: 'both-modified', this_saved_at: null, cloud_saved_at: null })
+			mapConflict({
+				path: 'x',
+				kind: 'both-modified',
+				this_saved_at: null,
+				cloud_saved_at: null,
+				this_pc_name: null,
+				cloud_pc_name: null
+			})
 		).toMatchObject({
 			path: 'x',
 			kind: 'both'
@@ -89,17 +106,28 @@ describe('競合種別の変換', () => {
 	});
 
 	it('取り込み結果から競合数を取り出す', () => {
-		expect(mapPull({ outcome: 'up-to-date', conflicts: [] })).toEqual({
+		expect(mapPull({ outcome: 'up-to-date', conflicts: [], size_check: null })).toEqual({
 			mergedCount: 0,
-			conflictCount: 0
+			conflictCount: 0,
+			sizeCheck: null
 		});
 		expect(
 			mapPull({
 				outcome: 'conflicted',
-				conflicts: [{ path: 'a', kind: 'both-added', this_saved_at: null, cloud_saved_at: null }]
+				conflicts: [
+					{
+						path: 'a',
+						kind: 'both-added',
+						this_saved_at: null,
+						cloud_saved_at: null,
+						this_pc_name: null,
+						cloud_pc_name: null
+					}
+				],
+				size_check: null
 			})
-		).toEqual({ mergedCount: 0, conflictCount: 1 });
-		expect(mapPull({ outcome: 'merged', conflicts: [] }).mergedCount).toBe(1);
+		).toEqual({ mergedCount: 0, conflictCount: 1, sizeCheck: null });
+		expect(mapPull({ outcome: 'merged', conflicts: [], size_check: null }).mergedCount).toBe(1);
 	});
 });
 
@@ -129,6 +157,8 @@ describe('差分の変換', () => {
 
 describe('エラーの 3 要素の変換', () => {
 	const backend = {
+		code: 'test_unknown_code',
+		params: [] as [string, string][],
 		what_happened: '保存に失敗しました',
 		data_is_safe: 'ファイルは無事です',
 		next_action: 'もう一度試してください',
@@ -139,6 +169,8 @@ describe('エラーの 3 要素の変換', () => {
 		const error = mapError(backend);
 		expect(error.code).toBe('backend');
 		expect(error.backend).toEqual({
+			code: 'test_unknown_code',
+			params: {},
 			whatHappened: '保存に失敗しました',
 			dataIsSafe: 'ファイルは無事です',
 			nextAction: 'もう一度試してください'
@@ -161,7 +193,12 @@ describe('エラーの 3 要素の変換', () => {
 
 describe('競合の日時', () => {
 	it('Unix 秒を Date にし、無い場合は null にする', () => {
-		const base = { path: 'a.txt', kind: 'both-modified' as const };
+		const base = {
+			path: 'a.txt',
+			kind: 'both-modified' as const,
+			this_pc_name: null,
+			cloud_pc_name: null
+		};
 		const both = mapConflict({
 			...base,
 			this_saved_at: 1_700_000_000,

@@ -30,6 +30,7 @@
 		<FileActionRow
 			filename={change.path}
 			restoreLabel={t('file_action.restore_current')}
+			openLabel={t('file_action.open_current')}
 			{oncompare}
 			{onrestore}
 			{onopen}

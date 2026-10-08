@@ -163,3 +163,22 @@ describe('途中で止まった操作', () => {
 		expect(calculateStatusPriority(false, false, true, 5, 2, 1, false, false)).toBe('unsaved');
 	});
 });
+
+describe('大きいファイルによる見送り', () => {
+	it('ぶつかり・途中で止まった操作より後、処理中・オフライン・未保存より先に表示する', () => {
+		const large = (
+			...args: [boolean, boolean, boolean, number, number, number, boolean, boolean]
+		) => calculateStatusPriority(...args, true);
+		expect(large(true, false, true, 0, 0, 0, false, false)).toBe('conflict');
+		expect(large(false, false, true, 0, 0, 0, false, true)).toBe('interrupted');
+		expect(large(false, true, false, 5, 2, 1, true, false)).toBe('large_files');
+		expect(large(false, false, false, 5, 2, 1, false, false)).toBe('large_files');
+		expect(large(false, false, true, 5, 2, 1, false, false)).toBe('large_files');
+	});
+
+	it('なければ従来の順序のまま', () => {
+		expect(calculateStatusPriority(false, false, true, 5, 2, 1, false, false, false)).toBe(
+			'unsaved'
+		);
+	});
+});

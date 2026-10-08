@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { Check, Eye, Circle } from '@lucide/svelte';
 	import { t } from '#lib/i18n/index.js';
-	import { formatDateTime } from '#lib/i18n/format.js';
 	import type { Choice, ConflictFile } from '#lib/api/types.js';
 	import Button from './Button.svelte';
 	import Checkbox from './Checkbox.svelte';
 	import Radio from './Radio.svelte';
-	import { alternateName, conflictOptions } from './conflict-item';
+	import { alternateName, conflictDetail, conflictOptions } from './conflict-item';
 
 	interface Props {
 		conflict: ConflictFile;
@@ -32,20 +31,6 @@
 	const unused = $derived<Choice | null>(
 		choice === null ? null : choice === 'this' ? 'cloud' : 'this'
 	);
-
-	/** 保存日時が無い場合は説明文を出さない */
-	function detail(side: Choice): string | undefined {
-		if (side === 'this') {
-			return conflict.thisPcSavedAt
-				? t('conflict.this_pc_detail', { time: formatDateTime(conflict.thisPcSavedAt) })
-				: undefined;
-		}
-		if (!conflict.cloudSavedAt) return undefined;
-		const time = formatDateTime(conflict.cloudSavedAt);
-		return conflict.cloudPcName
-			? t('conflict.cloud_detail', { time, pc: conflict.cloudPcName })
-			: t('conflict.cloud_detail_no_pc', { time });
-	}
 
 	const keepBothHint = $derived(
 		unused
@@ -91,7 +76,7 @@
 				value={option.choice}
 				group={choice}
 				label={t(option.label)}
-				description={detail(option.choice)}
+				description={conflictDetail(option.choice, conflict)}
 				onselect={(value) => onchoice(value as Choice)}
 			/>
 		{/each}

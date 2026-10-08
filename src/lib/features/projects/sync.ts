@@ -3,6 +3,7 @@ import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
 import { t } from '#lib/i18n/index.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
+import { syncSizeRequest, type SyncSizeRequest } from './sync-size';
 
 export function invalidateProject(client: QueryClient, projectId: string): Promise<unknown> {
 	return Promise.all([
@@ -18,14 +19,22 @@ export function invalidateProject(client: QueryClient, projectId: string): Promi
 	]);
 }
 
-export function useFetch(getProjectId: () => string, onConflict?: () => void) {
+export function useFetch(
+	getProjectId: () => string,
+	onConflict?: () => void,
+	onSizeCheck?: (request: SyncSizeRequest) => void
+) {
 	const client = useQueryClient();
 	const retry = { run: () => {} };
 	const mutation = createMutation(() => ({
 		mutationFn: () => api.fetch(getProjectId()),
 		onSuccess: async (result) => {
 			await invalidateProject(client, getProjectId());
-			if (result.conflictCount > 0) {
+			const skipped = syncSizeRequest('fetch', result);
+			if (skipped) {
+				// 大きいファイルのため何も実行していない。成功のトーストは出さない
+				onSizeCheck?.(skipped);
+			} else if (result.conflictCount > 0) {
 				onConflict?.();
 			} else if (result.mergedCount > 0) {
 				pushToast({ type: 'success', message: t('toast.fetched', { count: result.mergedCount }) });
@@ -39,14 +48,19 @@ export function useFetch(getProjectId: () => string, onConflict?: () => void) {
 	return mutation;
 }
 
-export function usePush(getProjectId: () => string) {
+export function usePush(
+	getProjectId: () => string,
+	onSizeCheck?: (request: SyncSizeRequest) => void
+) {
 	const client = useQueryClient();
 	const retry = { run: () => {} };
 	const mutation = createMutation(() => ({
 		mutationFn: () => api.push(getProjectId()),
-		onSuccess: async () => {
+		onSuccess: async (result) => {
 			await invalidateProject(client, getProjectId());
-			pushToast({ type: 'success', message: t('toast.pushed') });
+			const skipped = syncSizeRequest('push', result);
+			if (skipped) onSizeCheck?.(skipped);
+			else pushToast({ type: 'success', message: t('toast.pushed') });
 		},
 		onError: (error) => reportError(error, { retry: () => retry.run() })
 	}));

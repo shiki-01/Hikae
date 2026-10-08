@@ -3,7 +3,7 @@
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import { api } from '#lib/api/index.js';
-	import type { OpenTarget, SavePoint } from '#lib/api/types.js';
+	import type { SavePoint } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';
 	import FileActionRow from '#lib/components/FileActionRow.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
@@ -17,10 +17,11 @@
 		isNow: boolean;
 		oncompare: (path: string) => void;
 		onrestore: (path: string | null) => void;
-		onopen: (path: string, target: OpenTarget) => void;
+		/** この時点の版を読み取り専用で開く */
+		onopenat: (path: string) => void;
 	}
 
-	let { projectId, point, isNow, oncompare, onrestore, onopen }: Props = $props();
+	let { projectId, point, isNow, oncompare, onrestore, onopenat }: Props = $props();
 
 	const files = usePointFiles(
 		() => projectId,
@@ -78,19 +79,20 @@
 				<FileTree
 					nodes={tree}
 					canRestore={api.capabilities.restoreFile}
-					onopen={(path) => onopen(path, 'default')}
+					{onopenat}
 					onrestore={(path) => onrestore(path)}
 				/>
 			{:else}
 				<ul class="m:0 p:0 list-style:none">
 					{#each files.data ?? [] as file (file.path)}
 						<li>
+							<!-- この時点で削除されたファイルは、この時点の版が無いため開けない -->
 							<FileActionRow
 								filename={file.path}
 								restoreLabel={t('file_action.restore_point')}
 								oncompare={() => oncompare(file.path)}
 								onrestore={api.capabilities.restoreFile ? () => onrestore(file.path) : undefined}
-								onopen={(target) => onopen(file.path, target)}
+								onopenat={file.type === 'deleted' ? undefined : () => onopenat(file.path)}
 							/>
 						</li>
 					{/each}

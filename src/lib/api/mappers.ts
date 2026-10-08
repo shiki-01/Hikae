@@ -17,6 +17,7 @@ import type {
 	PointChangeItem,
 	ProjectInfo,
 	PullResult,
+	PushResult as BackendPushResult,
 	RemoteProjectList as BackendRemoteProjectList,
 	RestoreFilePreviewData,
 	RestoreFileResult,
@@ -25,6 +26,7 @@ import type {
 	SaveSizeChoice,
 	SessionInfo,
 	SettingsPatch_Deserialize,
+	SizeCheckResult,
 	SettingsView as BackendSettingsView,
 	SyncStatus
 } from '#lib/bindings.js';
@@ -47,6 +49,7 @@ import type {
 	Owner,
 	PointFile,
 	Project,
+	PushResult,
 	RejectReason,
 	RemoteProjectList,
 	SaveOutcome,
@@ -54,6 +57,7 @@ import type {
 	SettingKey,
 	SettingsView,
 	Session,
+	SizeCheck,
 	SizeChoice
 } from './types';
 
@@ -64,6 +68,8 @@ export function mapError(error: BackendError): AppError {
 		error.technical_info ?? '',
 		{},
 		{
+			code: error.code,
+			params: Object.fromEntries(error.params),
 			whatHappened: error.what_happened,
 			dataIsSafe: error.data_is_safe,
 			nextAction: error.next_action
@@ -109,14 +115,15 @@ export function mapConflictKind(kind: BackendConflictKind): ConflictKind {
 	}
 }
 
-/** 競合ファイル。保存日時（Unix 秒）が無ければ null、PC 名はバックエンドが返さないため常に null */
+/** 競合ファイル。保存日時（Unix 秒）と PC 名は、無ければ null */
 export function mapConflict(item: ConflictItem): ConflictFile {
 	return {
 		path: item.path,
 		kind: mapConflictKind(item.kind),
 		thisPcSavedAt: fromUnixSeconds(item.this_saved_at),
 		cloudSavedAt: fromUnixSeconds(item.cloud_saved_at),
-		cloudPcName: null
+		thisPcName: item.this_pc_name,
+		cloudPcName: item.cloud_pc_name
 	};
 }
 
@@ -140,7 +147,8 @@ export function mapSavePoint(item: HistoryItem): SavePoint {
 		createdAt: parseDate(item.timestamp) ?? new Date(0),
 		message: item.message,
 		kind: item.is_snapshot ? 'auto' : 'save',
-		cloudSynced: false
+		cloudSynced: false,
+		...(item.pc_name !== null ? { pcName: item.pc_name } : {})
 	};
 }
 
@@ -195,7 +203,16 @@ export function mapImpact(preview: RestorePreviewData): ImpactItem[] {
 /** 取り込み結果。マージ件数はバックエンドが返さないため、取り込みの有無を 0 / 1 で表す */
 export function mapPull(result: PullResult): FetchResult {
 	const merged = result.outcome === 'merged' || result.outcome === 'fast-forwarded';
-	return { mergedCount: merged ? 1 : 0, conflictCount: result.conflicts.length };
+	return {
+		mergedCount: merged ? 1 : 0,
+		conflictCount: result.conflicts.length,
+		sizeCheck: mapSizeCheck(result.size_check)
+	};
+}
+
+/** アップロード結果。大きいファイルで見送った場合だけ、確認が必要な内容を持つ */
+export function mapPush(result: BackendPushResult): PushResult {
+	return { sizeCheck: mapSizeCheck(result.size_check) };
 }
 
 /** 保存時点のファイル一覧。パスの区切りは `/` に統一し、パス順に並べる */
@@ -273,6 +290,8 @@ export function restoreFileFailure(
 		outcome,
 		{},
 		{
+			code: `restore_file_${outcome}`,
+			params: {},
 			whatHappened: t(`${key}.title`, { name: path }),
 			dataIsSafe: t('restore.error_unchanged'),
 			nextAction: t(`${key}.next`)
@@ -303,16 +322,16 @@ export function mapAddFilesResult(result: AddFilesResult): AddFilesOutcome {
 
 /** 保存の結果。大きいファイルがあって保存しなかったときだけ、確認が必要な結果にする。パスは選択として送り返すため、変換しない */
 export function mapSaveResult(result: SaveResult): SaveOutcome {
-	const check = result.size_check;
-	if (check === null || (check.blocked.length === 0 && check.warned.length === 0)) {
-		return { kind: 'saved' };
-	}
-	const convert = (items: typeof check.blocked) =>
+	const check = mapSizeCheck(result.size_check);
+	return check === null ? { kind: 'saved' } : { kind: 'size_check', check };
+}
+
+/** 大きいファイルの検査結果。なし・該当ファイルなしは null。パスは変換しない */
+export function mapSizeCheck(check: SizeCheckResult | null): SizeCheck | null {
+	if (check === null || (check.blocked.length === 0 && check.warned.length === 0)) return null;
+	const convert = (items: SizeCheckResult['blocked']) =>
 		items.map((item) => ({ path: item.path, sizeBytes: item.size }));
-	return {
-		kind: 'size_check',
-		check: { blocked: convert(check.blocked), warned: convert(check.warned) }
-	};
+	return { blocked: convert(check.blocked), warned: convert(check.warned) };
 }
 
 /** 大きいファイルについての選択をバックエンドの形にする。パスは検査で返ってきた形のまま渡す */

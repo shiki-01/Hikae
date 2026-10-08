@@ -32,6 +32,11 @@ export interface LiveUpdate {
 	invalidate: boolean;
 }
 
+/** 同期が落ち着いただけでは解消しない要対応（解消するのは操作の成功） */
+function isStickyAttention(attention: AttentionReason | null): boolean {
+	return attention === 'interrupted-operation' || attention === 'large-files';
+}
+
 /** イベントを状態へ反映する純関数。無効化の要否も一緒に返す */
 export function applyLiveEvent(state: LiveState, event: LiveEvent): LiveUpdate {
 	switch (event.type) {
@@ -54,9 +59,9 @@ export function applyLiveEvent(state: LiveState, event: LiveEvent): LiveUpdate {
 				state: {
 					...state,
 					sync: event.payload.state,
-					// 同期が落ち着いても、途中で止まった操作は操作が成功するまで残す
+					// 同期が落ち着いても、途中で止まった操作と大きいファイルは操作が成功するまで残す
 					attention:
-						event.payload.state === 'idle' && state.attention !== 'interrupted-operation'
+						event.payload.state === 'idle' && !isStickyAttention(state.attention)
 							? null
 							: state.attention
 				},
@@ -73,6 +78,11 @@ export function syncingKind(operation: string | null): 'fetch' | 'push' | 'other
 	if (operation === 'pull') return 'fetch';
 	if (operation === 'push') return 'push';
 	return 'other';
+}
+
+/** 大きいファイルのため自動の取り込みを見送った状態か（イベントの要対応から判断する） */
+export function hasLargeFilesAttention(state: LiveState): boolean {
+	return state.attention === 'large-files';
 }
 
 /** 途中で止まった操作が残っているか。イベント（要対応の通知）とプロジェクトの状態（起動時の検出）のどちらかが示せば true */

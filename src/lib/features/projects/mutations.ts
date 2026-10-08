@@ -2,7 +2,9 @@ import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
 import type { AddProjectInput, ClonePhase, Project } from '#lib/api/types.js';
-import { reportError } from '#lib/features/notifications/store.svelte.js';
+import { t } from '#lib/i18n/index.js';
+import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
+import { invalidateProject } from './sync';
 
 export function useAddProject(
 	onAdded?: (project: Project) => void,
@@ -54,5 +56,19 @@ export function useCompleteOnboarding() {
 	return createMutation(() => ({
 		mutationFn: () => api.completeOnboarding(),
 		onSuccess: () => client.invalidateQueries({ queryKey: keys.session })
+	}));
+}
+
+/** 中断された操作の前の状態へ戻す。成功で関連するクエリを更新し、失敗は 3 要素のエラーで表示する */
+export function useRecoverInterrupted(getProjectId: () => string, onDone?: () => void) {
+	const client = useQueryClient();
+	return createMutation(() => ({
+		mutationFn: () => api.recoverInterrupted(getProjectId()),
+		onSuccess: async () => {
+			await invalidateProject(client, getProjectId());
+			pushToast({ type: 'success', message: t('toast.recovered') });
+			onDone?.();
+		},
+		onError: (error) => reportError(error)
 	}));
 }

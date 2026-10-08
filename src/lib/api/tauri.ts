@@ -15,6 +15,7 @@ import {
 	mapPointChange,
 	mapProject,
 	mapPull,
+	mapPush,
 	mapRemoteProjects,
 	mapResolutions,
 	mapSaveResult,
@@ -41,6 +42,7 @@ import type {
 	PointFile,
 	Project,
 	ProjectApi,
+	PushResult,
 	RestoreResult,
 	RestoreScope,
 	SaveOutcome,
@@ -257,8 +259,8 @@ export const tauriApi: ProjectApi = {
 		return mapPull(await unwrap(commands.pull(projectId)));
 	},
 
-	async push(projectId: string): Promise<void> {
-		await unwrap(commands.push(projectId));
+	async push(projectId: string): Promise<PushResult> {
+		return mapPush(await unwrap(commands.push(projectId)));
 	},
 
 	async listConflicts(projectId: string): Promise<ConflictFile[]> {
@@ -287,5 +289,14 @@ export const tauriApi: ProjectApi = {
 		if (target !== 'default') unsupported(`open file with target ${target}`);
 		// パスの検証（プロジェクト外の拒否）はバックエンド側で行う
 		await unwrap(commands.openProjectFile(projectId, path));
+	},
+
+	async openFileAt(projectId: string, savePointId: string, path: string): Promise<void> {
+		// パスの検証（.. や絶対パスの拒否）と読み取り専用化はバックエンド側で行う
+		await unwrap(commands.openFileAt(projectId, savePointId, path));
+	},
+
+	async recoverInterrupted(projectId: string): Promise<void> {
+		await unwrap(commands.recoverInterrupted(projectId));
 	}
 };

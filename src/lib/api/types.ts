@@ -99,7 +99,9 @@ export interface ConflictFile {
 	thisPcSavedAt: Date | null;
 	/** クラウド側の最終保存日時。取得できない場合は null（画面では非表示） */
 	cloudSavedAt: Date | null;
-	/** クラウド側を保存した PC 名。取得できない場合は null */
+	/** この PC 側を保存した PC の名前。記録が無い場合は null */
+	thisPcName: string | null;
+	/** クラウド側を保存した PC の名前。記録が無い場合は null */
 	cloudPcName: string | null;
 }
 
@@ -127,6 +129,13 @@ export interface RestoreResult {
 export interface FetchResult {
 	mergedCount: number;
 	conflictCount: number;
+	/** 大きいファイルがあり、何も実行せずに見送った場合の内容。なければ null */
+	sizeCheck: SizeCheck | null;
+}
+
+export interface PushResult {
+	/** 大きいファイルがあり、何も実行せずに見送った場合の内容。なければ null */
+	sizeCheck: SizeCheck | null;
 }
 
 export interface Owner {
@@ -297,13 +306,17 @@ export interface ProjectApi {
 	restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult>;
 	undoRestore(projectId: string, undoToken: string): Promise<void>;
 	fetch(projectId: string): Promise<FetchResult>;
-	push(projectId: string): Promise<void>;
+	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;
 	resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void>;
 	abortMerge(projectId: string): Promise<void>;
 
 	addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome>;
 	openFile(projectId: string, path: string, target: OpenTarget): Promise<void>;
+	/** 過去の保存時点の版を、読み取り専用で既定のアプリで開く。現在のファイルは変更しない */
+	openFileAt(projectId: string, savePointId: string, path: string): Promise<void>;
+	/** 中断された操作の直前の状態へ戻す。戻せない場合はエラー（何も変更しない） */
+	recoverInterrupted(projectId: string): Promise<void>;
 
 	/** `projectId` を指定すると、そのプロジェクトの上書きを反映した設定を返す */
 	getSettings(projectId: string | null): Promise<SettingsView>;

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { alternateName, conflictOptions } from './conflict-item';
+import { t } from '#lib/i18n/index.js';
+import type { ConflictFile } from '#lib/api/types.js';
+import { alternateName, conflictDetail, conflictOptions } from './conflict-item';
 
 describe('ぶつかり項目', () => {
 	it('両方変更型は「この PC の版」と「クラウドの版」の2択', () => {
@@ -39,5 +41,35 @@ describe('日時が不明な場合の別名', () => {
 		const name = alternateName('docs/report.docx', 'cloud', null);
 		expect(name).toMatch(/^docs\/report \([^)\s]+\)\.docx$/);
 		expect(name).not.toMatch(/\d\d-\d\d/);
+	});
+});
+
+describe('各版の説明文', () => {
+	const base: ConflictFile = {
+		path: 'a.txt',
+		kind: 'both',
+		thisPcSavedAt: new Date(2026, 9, 6, 18, 2),
+		cloudSavedAt: new Date(2026, 9, 6, 9, 30),
+		thisPcName: null,
+		cloudPcName: null
+	};
+
+	it('PC 名が無ければ従来の文言（日時だけ）', () => {
+		expect(conflictDetail('this', base)).toBe(t('conflict.this_pc_detail', { time: '10/6 18:02' }));
+		expect(conflictDetail('cloud', base)).toBe(
+			t('conflict.cloud_detail_no_pc', { time: '10/6 09:30' })
+		);
+	});
+
+	it('PC 名があれば説明に含める', () => {
+		const named = { ...base, thisPcName: 'デスクトップPC', cloudPcName: 'ノートPC' };
+		expect(conflictDetail('this', named)).toContain('デスクトップPC');
+		expect(conflictDetail('cloud', named)).toContain('ノートPC');
+	});
+
+	it('日時が無くても PC 名だけで説明できる。両方無ければ説明を出さない', () => {
+		const onlyName = { ...base, thisPcSavedAt: null, cloudSavedAt: null, cloudPcName: 'ノートPC' };
+		expect(conflictDetail('cloud', onlyName)).toBe(t('conflict.cloud_only_pc', { pc: 'ノートPC' }));
+		expect(conflictDetail('this', onlyName)).toBeUndefined();
 	});
 });

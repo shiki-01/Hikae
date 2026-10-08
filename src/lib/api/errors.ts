@@ -25,8 +25,12 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export type ErrorParams = Record<string, string | number>;
 
-/** バックエンド（Rust）が返す 3 要素のエラー文言 */
+/** バックエンド（Rust）が返す 3 要素のエラー文言。code と params で画面側の文言を引き、無ければ日本語の 3 要素をそのまま使う */
 export interface BackendMessage {
+	/** バックエンドのエラーコード（例: `file_in_use`） */
+	code: string;
+	/** 文言に差し込む値 */
+	params: ErrorParams;
 	whatHappened: string;
 	dataIsSafe: string;
 	nextAction: string;

@@ -17,7 +17,13 @@ describe('開いてよいリンクの判定', () => {
 	});
 });
 
-const backendMessage = { whatHappened: 'a', dataIsSafe: 'b', nextAction: 'c' };
+const backendMessage = {
+	code: 'login_not_configured',
+	params: {},
+	whatHappened: 'a',
+	dataIsSafe: 'b',
+	nextAction: 'c'
+};
 
 describe('ログインの設定が無いエラーの判定', () => {
 	it('クライアント ID の未設定と Device Flow の無効を設定が必要なエラーとして扱う', () => {

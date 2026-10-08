@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { AppError, ERROR_CODES } from '#lib/api/errors.js';
-import { describeError } from './error-view';
+import { mapError } from '#lib/api/mappers.js';
+import { t } from '#lib/i18n/index.js';
+import { describeError, resolveBackendMessage } from './error-view';
 
 describe('エラー表示の組み立て', () => {
 	it('すべてのエラーコードに、何が起きたか・データの安否・ボタンの文言がある', () => {
@@ -38,5 +40,58 @@ describe('エラー表示の組み立て', () => {
 		expect(view.technical).toBe('boom');
 		expect(view.primaryKind).toBe('close');
 		expect(describeError('text').technical).toBe('text');
+	});
+});
+
+describe('バックエンドのエラーコードによる文言', () => {
+	const fallback = {
+		what_happened: 'RUST_WHAT',
+		data_is_safe: 'RUST_SAFE',
+		next_action: 'RUST_NEXT',
+		technical_info: 'raw'
+	};
+
+	it('文言のあるコードは ja.ts の 3 要素で表示する', () => {
+		const view = describeError(mapError({ ...fallback, code: 'not_logged_in', params: [] }));
+		expect(view.title).toBe(t('errcode.not_logged_in.what'));
+		expect(view.message).toBe(
+			`${t('errcode.not_logged_in.safe')}\n${t('errcode.not_logged_in.next')}`
+		);
+		expect(view.technical).toBe('raw');
+	});
+
+	it('params がプレースホルダに差し込まれる', () => {
+		const view = describeError(
+			mapError({ ...fallback, code: 'file_in_use', params: [['file', '第3章.docx']] })
+		);
+		expect(view.title).toContain('第3章.docx');
+		expect(view.title).not.toContain('RUST_WHAT');
+	});
+
+	it('差し込む値が足りないときは Rust の文言を使う', () => {
+		const view = describeError(mapError({ ...fallback, code: 'file_in_use', params: [] }));
+		expect(view.title).toBe('RUST_WHAT');
+		expect(view.message).toBe('RUST_SAFE\nRUST_NEXT');
+	});
+
+	it('未知のコードは Rust の文言をそのまま使う', () => {
+		const view = describeError(mapError({ ...fallback, code: 'something_new', params: [] }));
+		expect(view.title).toBe('RUST_WHAT');
+		expect(view.message).toBe('RUST_SAFE\nRUST_NEXT');
+	});
+
+	it('復旧できないときの専用文言がある', () => {
+		for (const code of ['restore_point_not_found', 'not_recoverable']) {
+			const resolved = resolveBackendMessage({
+				code,
+				params: {},
+				whatHappened: 'RUST_WHAT',
+				dataIsSafe: 'RUST_SAFE',
+				nextAction: 'RUST_NEXT'
+			});
+			expect(resolved.whatHappened, code).not.toBe('RUST_WHAT');
+			expect(resolved.dataIsSafe, code).not.toBe('RUST_SAFE');
+			expect(resolved.nextAction, code).not.toBe('RUST_NEXT');
+		}
 	});
 });

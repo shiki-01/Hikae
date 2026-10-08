@@ -23,6 +23,7 @@ import type {
 	PointFile,
 	Project,
 	ProjectApi,
+	PushResult,
 	RemoteProject,
 	RemoteProjectList,
 	RestoreResult,
@@ -196,6 +197,7 @@ function createThesis(): ProjectState {
 				kind: 'both',
 				thisPcSavedAt: ago(14 * HOUR),
 				cloudSavedAt: ago(17 * HOUR),
+				thisPcName: t('mock.pc.desktop'),
 				cloudPcName: t('mock.pc.laptop')
 			},
 			{
@@ -203,6 +205,7 @@ function createThesis(): ProjectState {
 				kind: 'deleted_in_cloud',
 				thisPcSavedAt: ago(15 * HOUR),
 				cloudSavedAt: ago(16 * HOUR),
+				thisPcName: null,
 				cloudPcName: t('mock.pc.laptop')
 			}
 		],
@@ -432,6 +435,8 @@ export const mockApi: ProjectApi = {
 				'MissingClientId',
 				{},
 				{
+					code: 'mock_login_setup',
+					params: {},
 					whatHappened: t('mock.login.setup_missing'),
 					dataIsSafe: t('login.error.data_is_safe'),
 					nextAction: t('login.error.setup.next')
@@ -715,19 +720,24 @@ export const mockApi: ProjectApi = {
 		const state = stateOf(projectId);
 		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
 		if (state.changes.length > 0 && settings.saveBeforePull) {
+			// 取り込み前の自動保存に大きいファイルがあるときは、何も実行せずに見送る
+			const check = inspectSizes(state.changes);
+			if (check.blocked.length > 0 || check.warned.length > 0) {
+				return { mergedCount: 0, conflictCount: 0, sizeCheck: check };
+			}
 			addSavePoint(state, t('mock.memo.before_fetch'), 3);
 		}
 		if (state.conflictsOnNextFetch && state.conflicts.length > 0) {
 			state.conflictsOnNextFetch = false;
 			state.project.hasConflict = true;
-			return { mergedCount: 0, conflictCount: state.conflicts.length };
+			return { mergedCount: 0, conflictCount: state.conflicts.length, sizeCheck: null };
 		}
 		const merged = state.project.fetchPendingCount;
 		state.project.fetchPendingCount = 0;
-		return { mergedCount: merged, conflictCount: 0 };
+		return { mergedCount: merged, conflictCount: 0, sizeCheck: null };
 	},
 
-	async push(projectId: string): Promise<void> {
+	async push(projectId: string): Promise<PushResult> {
 		await sleep(WAIT_LONG + 300);
 		const state = stateOf(projectId);
 		if (state.pushFailuresLeft > 0) {
@@ -737,6 +747,7 @@ export const mockApi: ProjectApi = {
 		state.project.uploadPendingCount = 0;
 		state.project.lastUploadedAt = new Date();
 		state.savePoints = state.savePoints.map((s) => ({ ...s, cloudSynced: true }));
+		return { sizeCheck: null };
 	},
 
 	async listConflicts(projectId: string): Promise<ConflictFile[]> {
@@ -803,6 +814,15 @@ export const mockApi: ProjectApi = {
 
 	async openFile(): Promise<void> {
 		await sleep(80);
+	},
+
+	async openFileAt(): Promise<void> {
+		await sleep(80);
+	},
+
+	async recoverInterrupted(projectId: string): Promise<void> {
+		await sleep(WAIT_LONG);
+		stateOf(projectId).project.interruptedOperation = null;
 	},
 
 	async getSettings(projectId: string | null): Promise<SettingsView> {

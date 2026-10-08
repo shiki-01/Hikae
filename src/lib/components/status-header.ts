@@ -1,6 +1,7 @@
 export type StatusState =
 	| 'conflict'
 	| 'interrupted'
+	| 'large_files'
 	| 'syncing'
 	| 'offline'
 	| 'attention'
@@ -17,10 +18,12 @@ export function resolveStatus(
 	fetchPendingCount: number,
 	uploadPendingCount: number,
 	hasAttention = false,
-	hasInterrupted = false
+	hasInterrupted = false,
+	hasLargeFiles = false
 ): StatusState {
 	if (hasConflict) return 'conflict';
 	if (hasInterrupted) return 'interrupted';
+	if (hasLargeFiles) return 'large_files';
 	if (isSyncing) return 'syncing';
 	if (!isOnline) return 'offline';
 	if (hasAttention) return 'attention';
