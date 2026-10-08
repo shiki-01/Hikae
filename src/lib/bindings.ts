@@ -62,7 +62,7 @@ export const commands = {
 	/**  履歴を取得。 */
 	listHistory: (id: string, maxCount: number) => typedError<HistoryItem[], AppError>(__TAURI_INVOKE("list_history", { id, maxCount })),
 	/**  差分を取得（2つの時点の比較）。 */
-	diff: (id: string, from: string, to: string, path: string | null) => typedError<DiffLine[], AppError>(__TAURI_INVOKE("diff", { id, from, to, path })),
+	diff: (id: string, from: string, to: string, path: string | null) => typedError<DiffResult, AppError>(__TAURI_INVOKE("diff", { id, from, to, path })),
 	/**  元に戻す操作のプレビュー（影響ファイル一覧）。 */
 	restorePreview: (id: string, commit: string) => typedError<RestorePreviewData, AppError>(__TAURI_INVOKE("restore_preview", { id, commit })),
 	/**  元に戻す実行。 */
@@ -97,6 +97,20 @@ export const commands = {
 	restoreFile: (id: string, commit: string, path: string) => typedError<RestoreFileResult, AppError>(__TAURI_INVOKE("restore_file", { id, commit, path })),
 	/**  元に戻すの取り消し。`restore_point` は復元点の ref 名（`refs/hikae/` 配下）または完全な OID。 */
 	undoRestore: (id: string, restorePoint: string) => typedError<null, AppError>(__TAURI_INVOKE("undo_restore", { id, restorePoint })),
+	/**
+	 *  新規（未追跡）ファイル 1 件を「元に戻す（作成しない）」。ファイルは OS のごみ箱へ移す。
+	 * 
+	 *  安全上の不変条件 6 の唯一の例外。復元点（自動保存）にファイルの内容が入っていることを確かめて
+	 *  から移し、大きすぎて復元点に入らないファイル・追跡済みのファイル・フォルダ・リンク・プロジェクト外は
+	 *  拒否する（core-ops の `discard_new_file`）。直列キュー（不変条件 7）とジャーナルを通す。
+	 *  戻り値の `undo_token` は `undo_restore` に渡すと、この操作の前の状態に戻せる。
+	 */
+	discardNewFile: (id: string, path: string) => typedError<DiscardNewFileResult, AppError>(__TAURI_INVOKE("discard_new_file", { id, path })),
+	/**
+	 *  プロジェクトフォルダ全体のファイル一覧（保存対象のみ。読み取りのみのため直列キューは通さない）。
+	 *  上限（1 万件）を超えたら打ち切り、`truncated` を立てる。
+	 */
+	listProjectTree: (id: string) => typedError<ProjectTreeData, AppError>(__TAURI_INVOKE("list_project_tree", { id })),
 	/**  変更のぶつかり解消を中断し、取り込む前の状態に戻す。 */
 	abortMerge: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("abort_merge", { id })),
 	/**  外部のファイルをプロジェクトへコピーする（上書きせず、保存もしない）。 */
@@ -240,6 +254,10 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *  - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
  *    `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
  *    `restore_point_not_found`、`unexpected`
+ *  - 新規ファイルの「元に戻す（作成しない）」: `discard_not_untracked`（保存の対象になっている）、
+ *    `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
+ *    入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
+ *    （ごみ箱へ移せない）。どれも params は `file`（ファイル名のみ）で、ファイルは削除していない
  *  - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
  *  - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
  *    `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
@@ -367,6 +385,11 @@ export type ChangeFile = {
 	kind: ChangeKind,
 	/**  変更のぶつかり中のファイルか */
 	conflicted: boolean,
+	/**
+	 *  一度も保存されておらず、インデックスにも入っていない新規ファイルか。
+	 *  「元に戻す（作成しない）」を出せるのはこのファイルだけ
+	 */
+	untracked: boolean,
 };
 
 export type ChangeKind = "modified" | "added" | "deleted" | "renamed";
@@ -425,6 +448,34 @@ export type DiffLine = {
 };
 
 export type DiffLineKind = "added" | "removed" | "context";
+
+/**  差分の取得結果 */
+export type DiffResult = {
+	kind: DiffResultKind,
+	/**  差分の行。`kind` が `lines` のときだけ入る */
+	lines: DiffLine[],
+	/**  ファイルサイズ（バイト）。`binary` と `too-large` のときだけ入る */
+	size: number | null,
+	/**  最終更新（Unix 秒）。`binary` と `too-large` のとき、取得できれば入る */
+	modified_at: number | null,
+};
+
+/**  差分の取得結果の種類 */
+export type DiffResultKind = 
+/**  差分の行（`lines`）。新規ファイルは全行が追加。空なら差分なし */
+"lines" | 
+/**  内容が空の新規ファイル */
+"new-file-empty" | 
+/**  本文を出せない新規ファイル（バイナリ・リンク）。`size` と `modified_at` だけを持つ */
+"binary" | 
+/**  大きすぎて本文を省略した新規ファイル。`size` と `modified_at` だけを持つ */
+"too-large";
+
+/**  新規ファイルを「元に戻す（作成しない）」結果 */
+export type DiscardNewFileResult = {
+	/**  取り消しに使う復元点（`undo_restore` の `restore_point` に渡す） */
+	undo_token: string | null,
+};
 
 /**  保存時点のファイル（S3「この時点の全ファイルを見る」用） */
 export type FileEntry = {
@@ -565,6 +616,20 @@ export type PointChangeItem = {
 /**  保存時点で変更されたファイルの種類 */
 export type PointChangeKindData = "added" | "modified" | "deleted" | "renamed";
 
+/**  プロジェクトフォルダ内のファイル 1 件 */
+export type ProjectFileItem = {
+	/**  プロジェクト内の相対パス（`/` 区切り） */
+	path: string,
+	/**  ファイルサイズ（バイト）。作業フォルダに無い（削除された）ときは null */
+	size: number | null,
+	/**  最終更新（Unix 秒）。取得できなければ null */
+	modified_at: number | null,
+	/**  未保存の変更の種類。変更が無ければ null */
+	change: ChangeKind | null,
+	/**  変更のぶつかり中のファイルか */
+	conflicted: boolean,
+};
+
 /**  プロジェクト情報 */
 export type ProjectInfo = {
 	id: string,
@@ -580,6 +645,15 @@ export type ProjectInfo = {
 	 *  フォルダが見つからないときは null
 	 */
 	last_uploaded_at: string | null,
+};
+
+/**  プロジェクトフォルダ全体のファイル一覧 */
+export type ProjectTreeData = {
+	entries: ProjectFileItem[],
+	/**  上限を超えたため、一部のみを含む */
+	truncated: boolean,
+	/**  一覧に含めるファイル数の上限 */
+	limit: number,
 };
 
 /**  取り込み結果 */

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { resolveStatus as calculateStatusPriority, type StatusState } from './status-header';
+import {
+	resolveStatus as calculateStatusPriority,
+	showsSecondaryFetch,
+	type StatusState
+} from './status-header';
 
 describe('StatusHeader priority calculation', () => {
 	it('should return conflict status with highest priority', () => {
@@ -204,5 +208,49 @@ describe('GitHub に接続していない場合', () => {
 		expect(calculateStatusPriority(false, false, true, 0, 0, 0, false, false, false, false)).toBe(
 			'saved'
 		);
+	});
+});
+
+describe('控えめな「取り込む」ボタン（未保存の変更があっても出す）', () => {
+	it('未保存の変更が優先されていても、取り込み待ちがあれば出す（状態の優先順位は変えない）', () => {
+		const status = calculateStatusPriority(false, false, true, 3, 2, 1);
+		expect(status).toBe('unsaved');
+		expect(showsSecondaryFetch(status, 2)).toBe(true);
+	});
+
+	it('取り込み待ちが無ければ出さない', () => {
+		expect(showsSecondaryFetch('unsaved', 0)).toBe(false);
+		expect(showsSecondaryFetch('unsaved', -1)).toBe(false);
+	});
+
+	it('未保存の変更が理由で取り込みを見送ったときは出す。再ログインが必要なときは出さない', () => {
+		const status = calculateStatusPriority(false, false, true, 3, 2, 0, true);
+		expect(status).toBe('attention');
+		expect(showsSecondaryFetch(status, 2, 'unsaved-changes')).toBe(true);
+		expect(showsSecondaryFetch(status, 2, 'auth')).toBe(false);
+		expect(showsSecondaryFetch(status, 2, null)).toBe(false);
+	});
+
+	it('取り込み待ちが主表示のとき（主ボタンが取り込む）は足さない', () => {
+		expect(showsSecondaryFetch('fetch_pending', 2)).toBe(false);
+		expect(showsSecondaryFetch('saved', 2)).toBe(false);
+	});
+
+	it('ぶつかり・途中で止まった操作・大きいファイル・処理中・オフラインでは出さない', () => {
+		for (const status of [
+			'conflict',
+			'interrupted',
+			'large_files',
+			'syncing',
+			'offline'
+		] as StatusState[]) {
+			expect(showsSecondaryFetch(status, 2), status).toBe(false);
+		}
+	});
+
+	it('既存の優先順位は変わらない（未保存 > 取り込み待ち > アップロード待ち）', () => {
+		expect(calculateStatusPriority(false, false, true, 1, 1, 1)).toBe('unsaved');
+		expect(calculateStatusPriority(false, false, true, 0, 1, 1)).toBe('fetch_pending');
+		expect(calculateStatusPriority(false, false, true, 0, 0, 1)).toBe('push_pending');
 	});
 });

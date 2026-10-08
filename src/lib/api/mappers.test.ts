@@ -49,17 +49,22 @@ describe('日時の変換', () => {
 describe('変更種別の変換', () => {
 	it('種別を保ち、競合中のファイルに印を付ける', () => {
 		const conflicts = new Set(['b.txt']);
-		expect(mapChange({ path: 'a.txt', kind: 'added', conflicted: false }, conflicts)).toEqual({
+		expect(
+			mapChange({ path: 'a.txt', kind: 'added', conflicted: false, untracked: true }, conflicts)
+		).toEqual({
 			id: 'a.txt',
 			path: 'a.txt',
 			type: 'added',
-			isConflict: false
+			isConflict: false,
+			untracked: true
 		});
 		expect(
-			mapChange({ path: 'b.txt', kind: 'modified', conflicted: false }, conflicts).isConflict
+			mapChange({ path: 'b.txt', kind: 'modified', conflicted: false, untracked: false }, conflicts)
+				.isConflict
 		).toBe(true);
 		expect(
-			mapChange({ path: 'c.txt', kind: 'modified', conflicted: true }, conflicts).isConflict
+			mapChange({ path: 'c.txt', kind: 'modified', conflicted: true, untracked: false }, conflicts)
+				.isConflict
 		).toBe(true);
 	});
 

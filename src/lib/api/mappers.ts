@@ -10,12 +10,15 @@ import type {
 	ConflictItem,
 	ConflictKind as BackendConflictKind,
 	DiffLine,
+	DiffResult,
 	FileEntry as BackendFileEntry,
 	HistoryItem,
 	LoginStart,
 	OwnerInfo,
 	PointChangeItem,
+	ProjectFileItem,
 	ProjectInfo,
+	ProjectTreeData,
 	PullResult,
 	PushResult as BackendPushResult,
 	RemoteConnectResult,
@@ -31,6 +34,7 @@ import type {
 	SettingsView as BackendSettingsView,
 	SyncStatus
 } from '#lib/bindings.js';
+import { fileKindOf } from '#lib/utils/file-kind.js';
 import { AppError } from './errors';
 import type {
 	AddFilesOutcome,
@@ -50,6 +54,8 @@ import type {
 	Owner,
 	PointFile,
 	Project,
+	ProjectFile,
+	ProjectTree,
 	PushResult,
 	RemoteOutcome,
 	RejectReason,
@@ -100,7 +106,8 @@ export function mapChange(file: ChangeFile, conflictPaths: ReadonlySet<string>):
 		id: file.path,
 		path: file.path,
 		type: mapChangeKind(file.kind),
-		isConflict: file.conflicted || conflictPaths.has(file.path)
+		isConflict: file.conflicted || conflictPaths.has(file.path),
+		untracked: file.untracked
 	};
 }
 
@@ -196,6 +203,48 @@ export function mapDiff(lines: DiffLine[]): FileDiff {
 		}
 	});
 	return { kind: 'text', rows };
+}
+
+/**
+ * 差分の取得結果。新規（未追跡）ファイルは、全行が追加の差分行になる。空のファイル・バイナリ・
+ * 大きすぎるファイルは、本文を持たない結果（空 / ファイル情報 / 大きすぎて省略）にする。
+ */
+export function mapDiffResult(result: DiffResult, path: string): FileDiff {
+	switch (result.kind) {
+		case 'lines':
+			return mapDiff(result.lines);
+		case 'new-file-empty':
+			return { kind: 'new_empty' };
+		case 'binary':
+			return {
+				kind: 'info',
+				fileKind: fileKindOf(path),
+				sizeBytes: result.size ?? 0,
+				modifiedAt: fromUnixSeconds(result.modified_at)
+			};
+		case 'too-large':
+			return { kind: 'too_large', sizeBytes: result.size ?? 0 };
+	}
+}
+
+/** プロジェクトフォルダ内のファイル。パスの区切りは `/` に統一する */
+export function mapProjectFile(item: ProjectFileItem): ProjectFile {
+	return {
+		path: item.path.replaceAll('\\', '/'),
+		sizeBytes: item.size,
+		modifiedAt: fromUnixSeconds(item.modified_at),
+		change: item.change === null ? null : mapChangeKind(item.change),
+		isConflict: item.conflicted
+	};
+}
+
+/** プロジェクトフォルダ全体のファイル一覧 */
+export function mapProjectTree(data: ProjectTreeData): ProjectTree {
+	return {
+		files: data.entries.map(mapProjectFile),
+		truncated: data.truncated,
+		limit: data.limit
+	};
 }
 
 export function mapImpact(preview: RestorePreviewData): ImpactItem[] {

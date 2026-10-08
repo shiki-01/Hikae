@@ -21,7 +21,7 @@ describe('変更一覧の取り直しの方針', () => {
 });
 
 describe('ファイル変更の通知による無効化', () => {
-	it('変更一覧とメモの案だけを無効化し、履歴などの重い取得は触らない', async () => {
+	it('変更一覧・メモの案・すべてのファイルの一覧・差分だけを無効化し、履歴などの重い取得は触らない', async () => {
 		const invalidated: unknown[] = [];
 		const client = {
 			invalidateQueries: ({ queryKey }: { queryKey: unknown }) => {
@@ -32,6 +32,11 @@ describe('ファイル変更の通知による無効化', () => {
 
 		await invalidateChanges(client, 'p1');
 
-		expect(invalidated).toEqual([keys.changes('p1'), keys.memoSuggestion('p1')]);
+		expect(invalidated).toEqual([
+			keys.changes('p1'),
+			keys.projectTree('p1'),
+			['compare', 'p1'],
+			keys.memoSuggestion('p1')
+		]);
 	});
 });

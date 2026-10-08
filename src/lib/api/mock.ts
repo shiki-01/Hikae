@@ -15,6 +15,7 @@ import type {
 	ConflictResolution,
 	ConnectRemoteInput,
 	DeviceFlow,
+	DiscardResult,
 	DroppedFile,
 	FetchOptions,
 	FetchResult,
@@ -26,6 +27,8 @@ import type {
 	PointFile,
 	Project,
 	ProjectApi,
+	ProjectFile,
+	ProjectTree,
 	PushResult,
 	RemoteProject,
 	RemoteOutcome,
@@ -190,7 +193,7 @@ function createThesis(): ProjectState {
 			lastSavedAt: ago(HOUR),
 			remoteConnected: true,
 			lastUploadedAt: ago(DAY),
-			unsavedCount: 4,
+			unsavedCount: 5,
 			uploadPendingCount: 1,
 			fetchPendingCount: 2,
 			hasConflict: false,
@@ -237,9 +240,16 @@ function createThesis(): ProjectState {
 		currentTier: 3,
 		changes: [
 			{ id: 'c1', path: chapter, type: 'modified', isConflict: false },
-			{ id: 'c2', path: t('mock.file.fig4'), type: 'added', isConflict: false },
+			{ id: 'c2', path: t('mock.file.fig4'), type: 'added', isConflict: false, untracked: true },
 			{ id: 'c3', path: t('mock.file.old_draft'), type: 'deleted', isConflict: false },
-			{ id: 'c4', path: t('mock.file.logo'), type: 'added', isConflict: false }
+			{ id: 'c4', path: t('mock.file.logo'), type: 'added', isConflict: false, untracked: true },
+			{
+				id: 'c5',
+				path: t('mock.file.draft_new'),
+				type: 'added',
+				isConflict: false,
+				untracked: true
+			}
 		],
 		conflicts: [
 			{
@@ -695,7 +705,15 @@ export const mockApi: ProjectApi = {
 		states.set(id, {
 			project,
 			changes: largeFirst
-				? [{ id: nextId('c'), path: t('mock.file.logo'), type: 'added', isConflict: false }]
+				? [
+						{
+							id: nextId('c'),
+							path: t('mock.file.logo'),
+							type: 'added',
+							isConflict: false,
+							untracked: true
+						}
+					]
 				: [],
 			savePoints: [
 				{
@@ -826,10 +844,45 @@ export const mockApi: ProjectApi = {
 		if (path.endsWith('.png')) {
 			return { kind: 'info', fileKind: 'image', sizeBytes: 184_320, modifiedAt: ago(2 * HOUR) };
 		}
+		// 新規（未追跡）ファイルを「いま」と比べるときは、全行が追加の差分になる
+		const added = state.changes.find((c) => c.path === path);
+		if (added?.untracked && toId === 'current') {
+			return {
+				kind: 'text',
+				rows: diffLines(
+					[],
+					[t('mock.new_file.line1'), t('mock.new_file.line2'), t('mock.new_file.line3')]
+				)
+			};
+		}
 		const before = lines(path, tierOf(state, fromId)) ?? [];
 		const after = lines(path, tierOf(state, toId)) ?? [];
 		if (before.join('\n') === after.join('\n')) return { kind: 'identical' };
 		return { kind: 'text', rows: diffLines(before, after) };
+	},
+
+	async listProjectTree(projectId: string): Promise<ProjectTree> {
+		await sleep(WAIT_SHORT);
+		const state = stateOf(projectId);
+		const saved = [
+			t('mock.file.chapter3'),
+			t('mock.file.memo'),
+			t('mock.file.refs'),
+			t('mock.file.readme'),
+			t('mock.file.nested')
+		];
+		const paths = new Set([...saved, ...state.changes.map((c) => c.path)]);
+		const files = [...paths].map((path): ProjectFile => {
+			const change = state.changes.find((c) => c.path === path);
+			return {
+				path,
+				sizeBytes: change?.type === 'deleted' ? null : mockSizeOf(path),
+				modifiedAt: change?.type === 'deleted' ? null : ago(3 * HOUR),
+				change: change?.type ?? null,
+				isConflict: change?.isConflict ?? false
+			};
+		});
+		return { files, truncated: false, limit: 10_000 };
 	},
 
 	async save(projectId: string, memo: string): Promise<SaveOutcome> {
@@ -885,6 +938,46 @@ export const mockApi: ProjectApi = {
 		state.currentTier = snapshot.currentTier;
 		state.project = snapshot.project;
 		undoSnapshots.delete(undoToken);
+	},
+
+	async discardNewFile(projectId: string, path: string): Promise<DiscardResult> {
+		await sleep(WAIT_SHORT);
+		const state = stateOf(projectId);
+		const target = state.changes.find((c) => c.path === path);
+		if (!target?.untracked) {
+			throw new AppError(
+				'backend',
+				'discard refused',
+				{},
+				{
+					code: 'discard_not_untracked',
+					params: { file: path },
+					whatHappened: t('errcode.discard_not_untracked.what', { file: path }),
+					dataIsSafe: t('errcode.discard_not_untracked.safe'),
+					nextAction: t('errcode.discard_not_untracked.next')
+				}
+			);
+		}
+		// 大きいファイルは復元点に入らないため、削除せずに断る（バックエンドと同じ）
+		if (mockSizeOf(path) > LARGE_WARN_BYTES) {
+			throw new AppError(
+				'backend',
+				'discard refused',
+				{},
+				{
+					code: 'discard_file_too_large',
+					params: { file: path },
+					whatHappened: t('errcode.discard_file_too_large.what', { file: path }),
+					dataIsSafe: t('errcode.discard_file_too_large.safe'),
+					nextAction: t('errcode.discard_file_too_large.next')
+				}
+			);
+		}
+		const undoToken = nextId('undo');
+		undoSnapshots.set(undoToken, snapshotOf(state));
+		state.changes = state.changes.filter((c) => c.path !== path);
+		state.project.unsavedCount = state.changes.length;
+		return { undoToken };
 	},
 
 	async fetch(projectId: string, options?: FetchOptions): Promise<FetchResult> {
@@ -984,7 +1077,13 @@ export const mockApi: ProjectApi = {
 						: `${file.name} (${counter})`;
 			}
 			taken.add(path);
-			state.changes.push({ id: nextId('c'), path, type: 'added', isConflict: false });
+			state.changes.push({
+				id: nextId('c'),
+				path,
+				type: 'added',
+				isConflict: false,
+				untracked: true
+			});
 			return {
 				path,
 				renamed: path !== file.name,

@@ -30,8 +30,10 @@
 	import SizeCheckDialog from '#lib/features/changes/SizeCheckDialog.svelte';
 	import { choiceFor, type SizeAction } from '#lib/features/changes/size-check.js';
 	import { droppedFromPaths, listenNativeDrop } from '#lib/features/changes/native-drop.js';
-	import { useAddFiles, useSave } from '#lib/features/changes/mutations.js';
-	import { useChanges, useMemoSuggestion } from '#lib/features/changes/queries.js';
+	import DiscardNewFileDialog from '#lib/features/changes/DiscardNewFileDialog.svelte';
+	import { useAddFiles, useDiscardNewFile, useSave } from '#lib/features/changes/mutations.js';
+	import { useChanges, useMemoSuggestion, useProjectTree } from '#lib/features/changes/queries.js';
+	import type { ChangesView } from '#lib/features/changes/view.js';
 	import CompareView from '#lib/features/compare/CompareView.svelte';
 	import { pointOptions } from '#lib/features/compare/navigation.js';
 	import ConflictModal from '#lib/features/conflict/ConflictModal.svelte';
@@ -69,6 +71,10 @@
 		() => projectId,
 		() => project.data?.watching ?? false
 	);
+	const treeQuery = useProjectTree(
+		() => projectId,
+		() => tab === 'changes' && changesView === 'tree'
+	);
 	const historyQuery = useHistory(() => projectId);
 	const settingsQuery = useSettings(() => projectId);
 	const memoQuery = useMemoSuggestion(
@@ -78,6 +84,10 @@
 
 	let tab = $state<'changes' | 'history'>('changes');
 	let selectedPath = $state<string | null>(null);
+	// 変更タブの左ペインの表示範囲（変更のみ / すべてのファイル）
+	let changesView = $state<ChangesView>('changes');
+	// 「元に戻す（作成しない）」の確認待ちの新規ファイル
+	let discardPath = $state<string | null>(null);
 	let selectedPointId = $state<string | null>('now');
 	let expanded = $state<string[]>([]);
 	let memo = $state('');
@@ -111,6 +121,12 @@
 	);
 	const entries = $derived(buildTimeline(history, snapshotsMode));
 	const selectedChange = $derived(changes.find((c) => c.path === selectedPath) ?? null);
+	// 「すべてのファイル」で選んだ、変更の無いファイル（変更のあるファイルは selectedChange で扱う）
+	const selectedFile = $derived(
+		changesView === 'tree' && !selectedChange
+			? (treeQuery.data?.files.find((f) => f.path === selectedPath) ?? null)
+			: null
+	);
 	const selectedPoint = $derived(history.find((p) => p.id === selectedPointId) ?? null);
 	const suggestion = $derived(changes.length > 0 ? (memoQuery.data ?? '') : '');
 	const live = $derived(liveStateOf(projectId));
@@ -154,6 +170,10 @@
 		() => projectId,
 		() => (restoreRequest = null)
 	);
+	const discard = useDiscardNewFile(
+		() => projectId,
+		() => (discardPath = null)
+	);
 
 	const syncing = $derived(
 		fetchMutation.isPending ? 'fetch' : push.isPending ? 'push' : syncingKind(live.operation)
@@ -181,7 +201,10 @@
 		memo = next;
 	});
 
+	// 「変更のみ」では、常に変更の 1 件を選んでおく。「すべてのファイル」では、変更の無いファイルも
+	// 選べるため、選択を自動では変えない
 	$effect(() => {
+		if (changesView !== 'changes') return;
 		if (changes.length === 0) {
 			selectedPath = null;
 		} else if (!changes.some((c) => c.path === selectedPath)) {
@@ -384,7 +407,12 @@
 					lastSavedAt={project.data?.lastSavedAt ?? null}
 					dragging={dragDepth > 0}
 					{tooLarge}
+					view={changesView}
+					tree={treeQuery.data ?? null}
+					treeLoading={treeQuery.isPending}
+					onviewchange={(view) => (changesView = view)}
 					onselect={(path) => (selectedPath = path)}
+					ondiscard={(path) => (discardPath = path)}
 					onfiles={(files) => {
 						dragDepth = 0;
 						onFiles(files);
@@ -426,12 +454,17 @@
 				<ChangeDetail
 					{projectId}
 					change={selectedChange}
+					file={selectedFile}
 					{baseId}
 					{baseLabel}
 					oncompare={() => selectedChange && openCompare(selectedChange.path, baseId, 'current')}
 					onrestore={() =>
 						selectedChange && askRestore(latest, { kind: 'file', path: selectedChange.path })}
-					onopen={(target) => selectedChange && openFile(selectedChange.path, target)}
+					ondiscard={() => selectedChange && (discardPath = selectedChange.path)}
+					onopen={(target) => {
+						const path = selectedChange?.path ?? selectedFile?.path;
+						if (path) void openFile(path, target);
+					}}
 				/>
 			{:else}
 				<HistoryDetail
@@ -526,6 +559,13 @@
 		pullConfirmCount = null;
 		fetchMutation.mutate({ saveConfirmed: true });
 	}}
+/>
+
+<DiscardNewFileDialog
+	path={discardPath}
+	pending={discard.isPending}
+	oncancel={() => (discardPath = null)}
+	onconfirm={() => discardPath && discard.mutate(discardPath)}
 />
 
 <AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />

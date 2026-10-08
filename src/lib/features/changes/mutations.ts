@@ -4,6 +4,7 @@ import { t } from '#lib/i18n/index.js';
 import type { AddFilesOutcome, DroppedFile, SizeCheck, SizeChoice } from '#lib/api/types.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import { invalidateProject } from '#lib/features/projects/sync.js';
+import { fileNameOf } from './discard';
 
 export interface SaveInput {
 	memo: string;
@@ -59,4 +60,45 @@ export function useAddFiles(
 		},
 		onError: (error) => reportError(error)
 	}));
+}
+
+/**
+ * 新規ファイルを「元に戻す（作成しない）」。成功すると、ファイルはごみ箱に移っている。
+ * 取り消すと、実行前の復元点（自動保存）の内容に戻る（ごみ箱からではなく、アプリ内の控えから戻す）。
+ */
+export function useDiscardNewFile(getProjectId: () => string, onDone?: () => void) {
+	const client = useQueryClient();
+	const retry: { run?: (path: string) => void } = {};
+
+	const undo = createMutation(() => ({
+		mutationFn: (undoToken: string) => api.undoRestore(getProjectId(), undoToken),
+		onSuccess: async () => {
+			await invalidateProject(client, getProjectId());
+			pushToast({ type: 'info', message: t('toast.undone') });
+		},
+		onError: (error) => reportError(error)
+	}));
+
+	const mutation = createMutation(() => ({
+		mutationFn: (path: string) => api.discardNewFile(getProjectId(), path),
+		onSuccess: async (result, path) => {
+			await invalidateProject(client, getProjectId());
+			const undoToken = result.undoToken;
+			pushToast({
+				type: 'success',
+				message: t('toast.discarded', { name: fileNameOf(path) }),
+				...(undoToken
+					? { actionLabel: t('toast.undo'), onaction: () => undo.mutate(undoToken) }
+					: {})
+			});
+			onDone?.();
+		},
+		// 断られたとき（大きいファイル・保存済み・ごみ箱が使えないなど）は、ファイルは削除されていない
+		onError: (error, path) => {
+			onDone?.();
+			reportError(error, { retry: () => retry.run?.(path) });
+		}
+	}));
+	retry.run = (path) => mutation.mutate(path);
+	return mutation;
 }

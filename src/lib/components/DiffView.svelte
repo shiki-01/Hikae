@@ -14,6 +14,8 @@
 		leftLabel?: string;
 		rightLabel?: string;
 		emptyText?: string;
+		/** ファイル情報の見出し。変更の無いファイルでは「変更はありません」にする */
+		infoText?: string;
 		onopen?: () => void;
 		class?: string;
 	}
@@ -26,6 +28,7 @@
 		leftLabel = '',
 		rightLabel = '',
 		emptyText = t('diff.select_file'),
+		infoText = t('diff.no_preview'),
 		onopen,
 		class: className = ''
 	}: Props = $props();
@@ -100,6 +103,10 @@
 		<div class="flex align-items:center justify-content:center h:100% p:6">
 			<p class="m:0 type-body fg:fg-muted">{t('diff.identical')}</p>
 		</div>
+	{:else if diff.kind === 'new_empty'}
+		<div class="flex align-items:center justify-content:center h:100% p:6">
+			<p class="m:0 type-body fg:fg-muted">{t('diff.new_empty')}</p>
+		</div>
 	{:else if diff.kind === 'too_large'}
 		<div
 			class="flex flex-direction:column gap:3 align-items:center justify-content:center h:100% p:6"
@@ -113,14 +120,16 @@
 		<div
 			class="flex flex-direction:column gap:4 align-items:center justify-content:center h:100% p:6"
 		>
-			<p class="m:0 type-body fg:fg-muted">{t('diff.no_preview')}</p>
+			<p class="m:0 type-body fg:fg-muted">{infoText}</p>
 			<dl class="m:0 grid grid-template-columns:auto|auto gap:2 type-body">
 				<dt class="fg:fg-muted">{t('diff.file_type')}</dt>
 				<dd class="m:0">{t(`file_kind.${diff.fileKind}`)}</dd>
 				<dt class="fg:fg-muted">{t('diff.file_size')}</dt>
 				<dd class="m:0">{formatBytes(diff.sizeBytes)}</dd>
-				<dt class="fg:fg-muted">{t('diff.modified_at')}</dt>
-				<dd class="m:0">{formatDateTime(diff.modifiedAt)}</dd>
+				{#if diff.modifiedAt}
+					<dt class="fg:fg-muted">{t('diff.modified_at')}</dt>
+					<dd class="m:0">{formatDateTime(diff.modifiedAt)}</dd>
+				{/if}
 			</dl>
 			{#if onopen}
 				<Button variant="secondary" onclick={onopen}>{t('file_action.open_default')}</Button>

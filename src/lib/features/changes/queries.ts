@@ -26,3 +26,16 @@ export function useChanges(getProjectId: () => string, getWatching: () => boolea
 		refetchOnWindowFocus: isTauri
 	}));
 }
+
+/**
+ * 「すべてのファイル」の一覧。表示している間だけ取得し、ファイル監視の通知（`files-changed`）で取り直す
+ * （無効化は `invalidateChanges`）。ブラウザ単体（モック）では取り直さない。
+ */
+export function useProjectTree(getProjectId: () => string, getEnabled: () => boolean) {
+	return createQuery(() => ({
+		queryKey: keys.projectTree(getProjectId()),
+		queryFn: () => api.listProjectTree(getProjectId()),
+		enabled: getEnabled() && getProjectId() !== '',
+		refetchOnWindowFocus: isTauri
+	}));
+}

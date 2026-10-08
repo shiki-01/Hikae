@@ -147,7 +147,12 @@ describe('バックエンドのエラーコードによる文言', () => {
 			'change_list_failed',
 			'conflict_list_failed',
 			'preview_failed',
-			'open_failed'
+			'open_failed',
+			'discard_not_untracked',
+			'discard_not_a_file',
+			'discard_file_too_large',
+			'discard_not_backed_up',
+			'trash_failed'
 		];
 		const params = { count: 1, file: 'a.txt', name: 'x/y', operation: 'pull' };
 		for (const code of codes) {

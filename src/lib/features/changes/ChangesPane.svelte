@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { t } from '#lib/i18n/index.js';
 	import { formatRelative } from '#lib/i18n/format.js';
-	import type { Change } from '#lib/api/types.js';
+	import type { Change, ProjectTree } from '#lib/api/types.js';
 	import ChangeListItem from '#lib/components/ChangeListItem.svelte';
 	import DropZone from '#lib/components/DropZone.svelte';
+	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
+	import { actionsFor } from './change-actions';
+	import ProjectFileTree from './ProjectFileTree.svelte';
+	import type { ChangesView } from './view';
 
 	interface Props {
 		changes: Change[];
@@ -13,7 +17,15 @@
 		lastSavedAt: Date | null;
 		dragging: boolean;
 		tooLarge: boolean;
+		/** 「変更のみ」か「すべてのファイル」か */
+		view: ChangesView;
+		/** 「すべてのファイル」の一覧。取得中は null */
+		tree: ProjectTree | null;
+		treeLoading: boolean;
+		onviewchange: (view: ChangesView) => void;
 		onselect: (path: string) => void;
+		/** 新規ファイルの行の「元に戻す（作成しない）」 */
+		ondiscard: (path: string) => void;
 		onfiles: (files: File[]) => void;
 		onpick?: () => void;
 	}
@@ -25,15 +37,41 @@
 		lastSavedAt,
 		dragging,
 		tooLarge,
+		view,
+		tree,
+		treeLoading,
+		onviewchange,
 		onselect,
+		ondiscard,
 		onfiles,
 		onpick
 	}: Props = $props();
 </script>
 
 <div class="flex flex-direction:column flex:1 min-h:0">
+	<div class="px:3 py:2 bb:1px|solid|border flex-shrink:0">
+		<SegmentedControl
+			value={view}
+			ariaLabel={t('changes.view_label')}
+			options={[
+				{ value: 'changes', label: t('changes.view_changes') },
+				{ value: 'tree', label: t('changes.view_tree') }
+			]}
+			onchange={(value) => onviewchange(value === 'tree' ? 'tree' : 'changes')}
+		/>
+	</div>
 	<div class="flex:1 min-h:0 overflow-y:auto">
-		{#if loading}
+		{#if view === 'tree'}
+			{#if treeLoading || tree === null}
+				<div class="flex flex-direction:column gap:3 p:3" aria-busy="true">
+					{#each [0, 1, 2, 3] as row (row)}
+						<Skeleton class="h:32px" />
+					{/each}
+				</div>
+			{:else}
+				<ProjectFileTree {tree} {selectedPath} {onselect} />
+			{/if}
+		{:else if loading}
 			<div class="flex flex-direction:column gap:3 p:3" aria-busy="true">
 				{#each [0, 1, 2, 3] as row (row)}
 					<Skeleton class="h:40px" />
@@ -56,6 +94,7 @@
 							{change}
 							selected={selectedPath === change.path}
 							onclick={() => onselect(change.path)}
+							ondiscard={actionsFor(change).discard ? () => ondiscard(change.path) : undefined}
 						/>
 					</li>
 				{/each}

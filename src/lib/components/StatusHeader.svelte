@@ -17,7 +17,7 @@
 	import Button from './Button.svelte';
 	import IconButton from './IconButton.svelte';
 	import ProgressBar from './ProgressBar.svelte';
-	import { resolveStatus, type StatusState } from './status-header';
+	import { resolveStatus, showsSecondaryFetch, type StatusState } from './status-header';
 
 	interface Props {
 		projectName: string;
@@ -180,6 +180,8 @@
 	});
 
 	const display = $derived(displays[status]);
+	// 未保存の変更が優先されていても、別の PC の変更があれば、控えめな「取り込む」を状態表示とは別に出す
+	const secondaryFetch = $derived(showsSecondaryFetch(status, fetchPendingCount, attention));
 	const Icon = $derived(display.icon);
 </script>
 
@@ -208,6 +210,9 @@
 			/>
 			<span class="overflow:hidden text-overflow:ellipsis white-space:nowrap">{display.text}</span>
 		</p>
+		{#if secondaryFetch}
+			<Button size="sm" variant="ghost" onclick={onfetch}>{t('header.fetch')}</Button>
+		{/if}
 		{#if status === 'syncing'}
 			<div class="w:96px flex-shrink:0">
 				<ProgressBar indeterminate label={display.text} />

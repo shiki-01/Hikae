@@ -6,7 +6,7 @@ import {
 	mapChange,
 	mapConflict,
 	mapDeviceFlow,
-	mapDiff,
+	mapDiffResult,
 	mapFileEntries,
 	mapFileImpact,
 	mapError,
@@ -14,6 +14,7 @@ import {
 	mapOwner,
 	mapPointChange,
 	mapProject,
+	mapProjectTree,
 	mapPull,
 	mapPush,
 	mapRemoteOutcome,
@@ -37,6 +38,7 @@ import type {
 	ClonePhase,
 	ConflictFile,
 	ConnectRemoteInput,
+	DiscardResult,
 	DroppedFile,
 	FetchOptions,
 	FileDiff,
@@ -46,6 +48,7 @@ import type {
 	PointFile,
 	Project,
 	ProjectApi,
+	ProjectTree,
 	PushResult,
 	RemoteOutcome,
 	RestoreResult,
@@ -246,8 +249,12 @@ export const tauriApi: ProjectApi = {
 	suggestMemo: (projectId: string) => unwrap(commands.suggestMemo(projectId)),
 
 	async compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff> {
-		const lines = await unwrap(commands.diff(projectId, fromId, toId, path));
-		return mapDiff(lines);
+		const result = await unwrap(commands.diff(projectId, fromId, toId, path));
+		return mapDiffResult(result, path);
+	},
+
+	async listProjectTree(projectId: string): Promise<ProjectTree> {
+		return mapProjectTree(await unwrap(commands.listProjectTree(projectId)));
 	},
 
 	async save(projectId: string, memo: string): Promise<SaveOutcome> {
@@ -292,6 +299,12 @@ export const tauriApi: ProjectApi = {
 
 	async undoRestore(projectId: string, undoToken: string): Promise<void> {
 		await unwrap(commands.undoRestore(projectId, undoToken));
+	},
+
+	async discardNewFile(projectId: string, path: string): Promise<DiscardResult> {
+		// 復元点の作成・内容の確認・ごみ箱への移動・パスの検証は、すべてバックエンド側で行う
+		const result = await unwrap(commands.discardNewFile(projectId, path));
+		return { undoToken: result.undo_token };
 	},
 
 	async fetch(projectId: string, options?: FetchOptions) {

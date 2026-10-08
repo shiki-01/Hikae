@@ -56,6 +56,8 @@ export interface Change {
 	type: ChangeType;
 	oldPath?: string;
 	isConflict: boolean;
+	/** 一度も保存されておらず、登録もされていない新規ファイル。「元に戻す（作成しない）」の対象になれるのはこれだけ */
+	untracked?: boolean;
 }
 
 export interface SavePoint {
@@ -81,6 +83,27 @@ export interface FileEntry {
 	size: number | null;
 }
 
+/** プロジェクトフォルダ内のファイル 1 件（「すべてのファイル」の表示用） */
+export interface ProjectFile {
+	path: string;
+	/** バイト数。作業フォルダに無い（削除された）ときは null */
+	sizeBytes: number | null;
+	/** 最終更新。取得できないときは null */
+	modifiedAt: Date | null;
+	/** 未保存の変更の種類。変更が無ければ null */
+	change: ChangeType | null;
+	isConflict: boolean;
+}
+
+/** プロジェクトフォルダ全体のファイル一覧 */
+export interface ProjectTree {
+	files: ProjectFile[];
+	/** 件数が多く、一部しか含まない */
+	truncated: boolean;
+	/** 一覧に含める件数の上限 */
+	limit: number;
+}
+
 export type DiffRowKind = 'context' | 'add' | 'del';
 
 export interface DiffRow {
@@ -95,8 +118,11 @@ export type FileKind = 'document' | 'table' | 'image' | 'text' | 'pdf' | 'unknow
 export type FileDiff =
 	| { kind: 'text'; rows: DiffRow[] }
 	| { kind: 'identical' }
+	/** 内容が空の新規ファイル */
+	| { kind: 'new_empty' }
 	| { kind: 'too_large'; sizeBytes: number }
-	| { kind: 'info'; fileKind: FileKind; sizeBytes: number; modifiedAt: Date };
+	/** 更新日時が分からないときは null（画面では非表示） */
+	| { kind: 'info'; fileKind: FileKind; sizeBytes: number; modifiedAt: Date | null };
 
 export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 
@@ -126,6 +152,12 @@ export type RestoreScope = { kind: 'all' } | { kind: 'file'; path: string };
 export interface ImpactItem {
 	path: string;
 	type: 'modified' | 'removed' | 'restored';
+}
+
+/** 新規ファイルを「元に戻す（作成しない）」結果 */
+export interface DiscardResult {
+	/** 取り消しに使う復元点。取り消せない場合は null */
+	undoToken: string | null;
 }
 
 export interface RestoreResult {
@@ -369,6 +401,8 @@ export interface ProjectApi {
 	/** 未保存の変更から作る保存メモの案（ルールベース） */
 	suggestMemo(projectId: string): Promise<string>;
 	compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff>;
+	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */
+	listProjectTree(projectId: string): Promise<ProjectTree>;
 
 	/** 大きいファイルがあれば何も保存せず `size_check` で返す。画面は選択を求め、`saveWithSizeChoice` で再実行する */
 	save(projectId: string, memo: string): Promise<SaveOutcome>;
@@ -376,6 +410,11 @@ export interface ProjectApi {
 	restoreImpact(projectId: string, targetId: string, scope: RestoreScope): Promise<ImpactItem[]>;
 	restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult>;
 	undoRestore(projectId: string, undoToken: string): Promise<void>;
+	/**
+	 * 新規（未追跡）ファイル 1 件を作る前の状態に戻す。ファイルは OS のごみ箱へ移り、履歴の控えからも戻せる。
+	 * 大きいファイル・保存済みのファイル・フォルダなどは、何も変更せずエラーで断る
+	 */
+	discardNewFile(projectId: string, path: string): Promise<DiscardResult>;
 	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;

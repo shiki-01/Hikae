@@ -11,6 +11,7 @@ export function invalidateProject(client: QueryClient, projectId: string): Promi
 		client.invalidateQueries({ queryKey: keys.projects }),
 		client.invalidateQueries({ queryKey: keys.project(projectId) }),
 		client.invalidateQueries({ queryKey: keys.changes(projectId) }),
+		client.invalidateQueries({ queryKey: keys.projectTree(projectId) }),
 		client.invalidateQueries({ queryKey: keys.history(projectId) }),
 		client.invalidateQueries({ queryKey: keys.conflicts(projectId) }),
 		client.invalidateQueries({ queryKey: ['compare', projectId] }),

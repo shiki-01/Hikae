@@ -6,6 +6,8 @@ export const keys = {
 	history: (id: string) => ['history', id] as const,
 	pointFiles: (id: string, pointId: string) => ['point-files', id, pointId] as const,
 	filesAt: (id: string, pointId: string) => ['files-at', id, pointId] as const,
+	/** 「すべてのファイル」の一覧 */
+	projectTree: (id: string) => ['project-tree', id] as const,
 	memoSuggestion: (id: string) => ['memo-suggestion', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,

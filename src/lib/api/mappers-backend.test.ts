@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { describeError } from '#lib/features/notifications/error-view.js';
 import {
 	mapAddFilesResult,
+	mapDiffResult,
 	mapDeviceFlow,
 	mapFileImpact,
 	mapOverridden,
 	mapOwner,
 	mapPointChange,
+	mapProjectTree,
 	mapPull,
 	mapProject,
 	mapRemoteOutcome,
@@ -424,5 +426,102 @@ describe('保存先の作成・接続の結果の変換', () => {
 			size_check: { blocked: [], warned: [{ path: 'a.psd', size: 72 }] }
 		});
 		expect(outcome.sizeCheck?.warned).toEqual([{ path: 'a.psd', sizeBytes: 72 }]);
+	});
+});
+
+describe('差分の取得結果の変換', () => {
+	const none = { size: null, modified_at: null };
+
+	it('新規ファイルの差分は、全行が追加の行になる（行番号は 1 から）', () => {
+		const diff = mapDiffResult(
+			{
+				kind: 'lines',
+				lines: [
+					{ kind: 'added', content: '一行目' },
+					{ kind: 'added', content: '二行目' }
+				],
+				...none
+			},
+			'資料/新しい.txt'
+		);
+		expect(diff).toEqual({
+			kind: 'text',
+			rows: [
+				{ kind: 'add', oldNo: null, newNo: 1, text: '一行目' },
+				{ kind: 'add', oldNo: null, newNo: 2, text: '二行目' }
+			]
+		});
+	});
+
+	it('差分の行が無いときは「同一」、空の新規ファイルは専用の状態にする', () => {
+		expect(mapDiffResult({ kind: 'lines', lines: [], ...none }, 'a.txt')).toEqual({
+			kind: 'identical'
+		});
+		expect(mapDiffResult({ kind: 'new-file-empty', lines: [], ...none }, 'a.txt')).toEqual({
+			kind: 'new_empty'
+		});
+	});
+
+	it('バイナリはファイルの種類・サイズ・更新日時だけ、大きすぎるものはサイズだけにする', () => {
+		const info = mapDiffResult(
+			{ kind: 'binary', lines: [], size: 184_320, modified_at: 1_700_000_000 },
+			'図4.png'
+		);
+		expect(info).toMatchObject({ kind: 'info', fileKind: 'image', sizeBytes: 184_320 });
+		expect(info.kind === 'info' && info.modifiedAt?.getTime()).toBe(1_700_000_000_000);
+
+		const unknownTime = mapDiffResult(
+			{ kind: 'binary', lines: [], size: 8, modified_at: null },
+			'data.bin'
+		);
+		expect(unknownTime).toMatchObject({ kind: 'info', fileKind: 'unknown', modifiedAt: null });
+
+		expect(
+			mapDiffResult({ kind: 'too-large', lines: [], size: 2_000_000, modified_at: 1 }, 'big.txt')
+		).toEqual({ kind: 'too_large', sizeBytes: 2_000_000 });
+	});
+});
+
+describe('プロジェクトのファイル一覧の変換', () => {
+	it('サイズ・更新日時・変更の種類を引き継ぎ、削除されたファイルはサイズを持たない', () => {
+		const tree = mapProjectTree({
+			entries: [
+				{
+					path: '資料/第3章.docx',
+					size: 100,
+					modified_at: 1_700_000_000,
+					change: 'modified',
+					conflicted: false
+				},
+				{ path: '古い案.txt', size: null, modified_at: null, change: 'deleted', conflicted: false },
+				{ path: 'メモ.txt', size: 5, modified_at: 1, change: null, conflicted: true }
+			],
+			truncated: true,
+			limit: 10_000
+		});
+		expect(tree.truncated).toBe(true);
+		expect(tree.limit).toBe(10_000);
+		expect(tree.files[0]).toMatchObject({
+			path: '資料/第3章.docx',
+			sizeBytes: 100,
+			change: 'modified',
+			isConflict: false
+		});
+		expect(tree.files[0].modifiedAt?.getTime()).toBe(1_700_000_000_000);
+		expect(tree.files[1]).toMatchObject({
+			sizeBytes: null,
+			modifiedAt: null,
+			change: 'deleted'
+		});
+		expect(tree.files[2]).toMatchObject({ change: null, isConflict: true });
+	});
+
+	it('パスの区切りを / に統一する', () => {
+		const tree = mapProjectTree({
+			entries: [{ path: 'a\\b.txt', size: 1, modified_at: 1, change: null, conflicted: false }],
+			truncated: false,
+			limit: 10_000
+		});
+		expect(tree.files[0].path).toBe('a/b.txt');
 	});
 });
