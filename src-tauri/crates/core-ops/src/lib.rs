@@ -28,7 +28,7 @@ pub use models::{
     ConflictKind, DiffLine, DiffLineKind, FileInHistory, HistoryEntry, HistoryKind, Identity,
     Labels, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile, RelocateCheck,
     ResolveOutcome, RestoreFileChange, RestoreFileKind, RestoreFileOutcome, RestoreFilePreview,
-    RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UploadOutcome,
+    RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UnsavedPolicy, UploadOutcome,
 };
 pub use open_path::{resolve_in_project, OpenPathError};
 pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
@@ -183,12 +183,26 @@ impl Ops {
     /// `pull` に、取り込み前の自動保存のサイズ検査の閾値を指定する版。
     /// 大きいファイルがあれば何も変更せず `NeedsSizeDecision` を返す。
     pub fn pull_with(&self, repo: &Path, limits: SizeLimits) -> Result<PullOutcome, OpsError> {
+        self.pull_with_policy(repo, limits, UnsavedPolicy::SaveFirst)
+    }
+
+    /// `pull_with` に、未保存の変更の扱い（設計書 4.3、E06）を指定する版。
+    /// `UnsavedPolicy::Confirm` では、取り込む内容と未保存の変更の両方があるとき、何も変更せず
+    /// `NeedsSaveConfirmation` を返す（復元点も作らない）。取り込む内容が無ければ、未保存の変更には
+    /// 触れずに `UpToDate` を返す。
+    pub fn pull_with_policy(
+        &self,
+        repo: &Path,
+        limits: SizeLimits,
+        policy: UnsavedPolicy,
+    ) -> Result<PullOutcome, OpsError> {
         operations::pull(
             self.runner(),
             repo,
             self.now(),
             &self.labels,
             limits,
+            policy,
             self.meta(),
         )
     }

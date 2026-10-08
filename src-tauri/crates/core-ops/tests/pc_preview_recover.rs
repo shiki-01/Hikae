@@ -7,7 +7,8 @@ mod common;
 use common::*;
 use core_git::GitRunner;
 use core_ops::{
-    cleanup_old_previews, Choice, Identity, Ops, OpsError, PullOutcome, SizeLimits, UploadOutcome,
+    cleanup_old_previews, Choice, Identity, Ops, OpsError, PullOutcome, SizeLimits, UnsavedPolicy,
+    UploadOutcome,
 };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -583,5 +584,136 @@ fn restore_point_snapshots_are_signed_with_the_given_user() -> TestResult {
         author(b),
         "octocat <583231+octocat@users.noreply.github.com>"
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------- 取り込み前の保存の確認（E06）
+
+/// PC-A が keep.txt を更新してアップロードし、PC-B に未保存の変更が 2 件ある状態を作る
+fn incoming_with_unsaved(pcs: &TwoPcs) -> TestResult {
+    std::fs::write(pcs.pc_a.join("keep.txt"), "keep v2 (A)\n")?;
+    ops_named(Some("PC-A")).save(&pcs.pc_a, "A change")?;
+    ops_named(Some("PC-A")).upload(&pcs.pc_a)?;
+    std::fs::write(pcs.pc_b.join("draft.txt"), "draft\n")?;
+    std::fs::write(pcs.pc_b.join("notes.txt"), "notes\n")?;
+    Ok(())
+}
+
+#[test]
+fn confirm_policy_stops_before_changing_anything_when_there_is_unsaved_work() -> TestResult {
+    let pcs = two_pcs()?;
+    let b = &pcs.pc_b;
+    incoming_with_unsaved(&pcs)?;
+    let ops_b = ops_named(Some("PC-B"));
+    let head = get_head_commit(b);
+
+    let PullOutcome::NeedsSaveConfirmation { unsaved_count } =
+        ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?
+    else {
+        panic!("expected NeedsSaveConfirmation");
+    };
+    assert_eq!(unsaved_count, 2);
+
+    // 何も変更していない: 復元点なし、保存なし、取り込みなし、ファイルはそのまま
+    assert!(refs(b).trim().is_empty(), "{}", refs(b));
+    assert_eq!(get_head_commit(b), head);
+    assert_eq!(std::fs::read_to_string(b.join("keep.txt"))?, "keep v1\n");
+    assert_eq!(std::fs::read_to_string(b.join("draft.txt"))?, "draft\n");
+    assert!(run_git(b, &["diff", "--cached", "--name-only"])
+        .1
+        .trim()
+        .is_empty());
+
+    // 何度呼んでも同じ（確認の結果だけを返し、状態は増えない）
+    assert!(matches!(
+        ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?,
+        PullOutcome::NeedsSaveConfirmation { unsaved_count: 2 }
+    ));
+    assert!(refs(b).trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn saving_first_after_the_confirmation_makes_a_restore_point_then_pulls() -> TestResult {
+    let pcs = two_pcs()?;
+    let b = &pcs.pc_b;
+    incoming_with_unsaved(&pcs)?;
+    let ops_b = ops_named(Some("PC-B"));
+    ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?;
+
+    // 承諾後は従来どおり: 復元点 → 自動保存 → 取り込み（双方に差があるので統合）
+    let out = ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::SaveFirst)?;
+    assert!(matches!(out, PullOutcome::Merged { .. }), "{out:?}");
+    assert!(!refs(b).trim().is_empty(), "restore point expected");
+    assert_eq!(
+        std::fs::read_to_string(b.join("keep.txt"))?,
+        "keep v2 (A)\n"
+    );
+    // 未保存だったファイルは履歴に保存されている
+    let (_, tracked, _) = run_git(b, &["ls-files"]);
+    assert!(tracked.contains("draft.txt") && tracked.contains("notes.txt"));
+    assert!(run_git(b, &["status", "--porcelain"]).1.trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn confirm_policy_does_not_touch_unsaved_work_when_there_is_nothing_to_pull() -> TestResult {
+    let pcs = two_pcs()?;
+    let b = &pcs.pc_b;
+    std::fs::write(b.join("draft.txt"), "draft\n")?;
+    let ops_b = ops_named(Some("PC-B"));
+    let head = get_head_commit(b);
+
+    assert!(matches!(
+        ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?,
+        PullOutcome::UpToDate
+    ));
+    // 取り込む内容が無いので、保存も復元点も作らない
+    assert!(refs(b).trim().is_empty());
+    assert_eq!(get_head_commit(b), head);
+    assert_eq!(
+        run_git(b, &["status", "--porcelain"]).1.trim(),
+        "?? draft.txt"
+    );
+    Ok(())
+}
+
+#[test]
+fn confirm_policy_pulls_straight_away_when_nothing_is_unsaved() -> TestResult {
+    let pcs = two_pcs()?;
+    let b = &pcs.pc_b;
+    std::fs::write(pcs.pc_a.join("keep.txt"), "keep v2 (A)\n")?;
+    ops_named(Some("PC-A")).save(&pcs.pc_a, "A change")?;
+    ops_named(Some("PC-A")).upload(&pcs.pc_a)?;
+
+    assert!(matches!(
+        ops_named(Some("PC-B")).pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?,
+        PullOutcome::FastForwarded
+    ));
+    assert_eq!(
+        std::fs::read_to_string(b.join("keep.txt"))?,
+        "keep v2 (A)\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn confirmation_comes_before_the_size_check() -> TestResult {
+    let pcs = two_pcs()?;
+    let b = &pcs.pc_b;
+    incoming_with_unsaved(&pcs)?;
+    std::fs::write(b.join("huge.mp4"), vec![b'x'; 6_000])?;
+    let ops_b = ops_named(Some("PC-B"));
+
+    assert!(matches!(
+        ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::Confirm)?,
+        PullOutcome::NeedsSaveConfirmation { unsaved_count: 3 }
+    ));
+    // 承諾した後は、従来どおり大きいファイルの検査で見送る
+    assert!(matches!(
+        ops_b.pull_with_policy(b, LIMITS, UnsavedPolicy::SaveFirst)?,
+        PullOutcome::NeedsSizeDecision(_)
+    ));
+    assert!(refs(b).trim().is_empty());
     Ok(())
 }

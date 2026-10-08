@@ -51,6 +51,22 @@ pub enum PullOutcome {
     /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず取り込みを見送った（E07 / E08）。
     /// 復元点も作っていない。画面で保存してから（外す／承諾する）取り込みをやり直す
     NeedsSizeDecision(SizeFindings),
+    /// 未保存の変更があり、取り込む前の保存の確認が必要なため、何も変更せず取り込みを見送った（E06）。
+    /// 復元点も作っていない。利用者が「保存してから取り込む」を選んだら `UnsavedPolicy::SaveFirst` でやり直す
+    NeedsSaveConfirmation {
+        /// 未保存のファイルの件数
+        unsaved_count: usize,
+    },
+}
+
+/// 取り込み時に未保存の変更をどう扱うか（設計書 4.3 手順 1、設定 `save_before_pull`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnsavedPolicy {
+    /// 先に自動保存してから取り込む（設定がオン、または利用者が確認で承諾した）
+    #[default]
+    SaveFirst,
+    /// 取り込む内容と未保存の変更の両方があるときは、何も変更せず `NeedsSaveConfirmation` を返す
+    Confirm,
 }
 
 /// アップロードの結果

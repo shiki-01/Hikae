@@ -214,6 +214,7 @@ pub(crate) fn pull(
     now: OffsetDateTime,
     labels: &Labels,
     limits: SizeLimits,
+    policy: UnsavedPolicy,
     meta: Meta,
 ) -> Result<PullOutcome, OpsError> {
     // マージ競合中でないか確認
@@ -232,12 +233,23 @@ pub(crate) fn pull(
     // 復元点より先に実行し、変更が必要かどうかの判定材料にする
     runner.run_ok(repo, &["fetch", "--prune", "origin"])?;
 
-    let has_unsaved = !read_status(runner, repo)?.entries.is_empty();
+    let unsaved_count = read_status(runner, repo)?.entries.len();
+    let has_unsaved = unsaved_count > 0;
     let (_, behind_before) = ahead_behind(runner, repo)?;
 
     // 取り込む内容も自動保存する内容も無ければ何も変更しないため、復元点は作らない
     if behind_before == 0 && !has_unsaved {
         return Ok(PullOutcome::UpToDate);
+    }
+
+    // 「取り込む前に保存」を「確認する」にしているとき（E06）。保存は取り込みの前処理のため、
+    // 取り込む内容が無ければ未保存の変更には触れない。ある場合は、何も変更せず（復元点も
+    // 作らず）利用者の確認を求める
+    if has_unsaved && policy == UnsavedPolicy::Confirm {
+        if behind_before == 0 {
+            return Ok(PullOutcome::UpToDate);
+        }
+        return Ok(PullOutcome::NeedsSaveConfirmation { unsaved_count });
     }
 
     // 取り込み前の自動保存にも保存前と同じサイズ検査を行う（設計書 4.1 手順 1）。
@@ -986,7 +998,15 @@ pub(crate) fn upload(
         || stderr.contains("fetch first")
     {
         // pull を実行
-        let pull_result = pull(runner, repo, now, labels, limits, meta)?;
+        let pull_result = pull(
+            runner,
+            repo,
+            now,
+            labels,
+            limits,
+            UnsavedPolicy::SaveFirst,
+            meta,
+        )?;
 
         match &pull_result {
             PullOutcome::Conflicted { files } => {

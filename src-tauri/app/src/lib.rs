@@ -26,7 +26,7 @@ mod scheduler;
 use events::{OpTrigger, StatusChanged};
 use ops_runner::{
     memo_labels, pull_outcome_name, push_outcome_name, run_op, size_limits_for, summarize_pull,
-    summarize_push, OpContext, OpSpec, OpSummary,
+    summarize_push, unsaved_policy_for, OpContext, OpSpec, OpSummary,
 };
 use remote::{AddProjectResult, RemoteConnectResult, RemoteRequest};
 use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
@@ -877,6 +877,37 @@ async fn open_project_file(
         })
 }
 
+/// プロジェクト内のファイルを、ファイルマネージャーでフォルダを開いて選択状態で表示する（設計書 4.7）。
+/// 相対パスは `open_project_file` と同じ検証（`resolve_in_project`）を通し、プロジェクト外
+/// （`..`・絶対パス・シンボリックリンク経由）は表示しない。画面（JS）には opener の権限を与えず、
+/// Rust 側の API だけを検証の後に呼ぶ。読み取りのみのため直列キューは通さない。
+#[tauri::command]
+#[specta::specta]
+async fn reveal_project_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    relative_path: String,
+) -> Result<(), AppError> {
+    let store = state.store_clone();
+    let target = run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        core_ops::resolve_in_project(&project.path, &relative_path).map_err(open_path_error)
+    })
+    .await?;
+
+    app.opener()
+        .reveal_item_in_dir(&target)
+        .map_err(|e| AppError {
+            code: "open_failed".to_string(),
+            params: Vec::new(),
+            what_happened: "フォルダを表示できませんでした".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "フォルダの場所や権限を確認してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })
+}
+
 /// パス検証の拒否理由を AppError へ変換する。
 fn open_path_error(e: core_ops::OpenPathError) -> AppError {
     use core_ops::OpenPathError as E;
@@ -926,15 +957,21 @@ fn conflict_item(f: core_ops::ConflictFile) -> ConflictItem {
 }
 
 /// 取り込む（fetch + merge）を実行。
+///
+/// 設定「取り込む前に未保存の変更を保存」が「確認する」で、未保存の変更があり取り込む内容もあるときは、
+/// 何も変更せず結果 `needs-save-confirmation` を返す（E06）。画面は確認の後、`save_confirmed` を
+/// 真にしてもう一度呼ぶ。このとき従来どおり、復元点 → 自動保存 → 取り込みの順で実行する。
 #[tauri::command]
 #[specta::specta]
 async fn pull(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
+    save_confirmed: bool,
 ) -> Result<PullResult, AppError> {
     let ctx = OpContext::new(app, &state);
     let limits = size_limits_for(&ctx.store, &id);
+    let policy = unsaved_policy_for(&ctx.store, &id, save_confirmed);
     let result = run_op(
         &ctx,
         &id,
@@ -944,7 +981,7 @@ async fn pull(
             target: None,
             data_is_safe: "ファイルは安全です",
         },
-        move |ops, path| ops.pull_with(path, limits),
+        move |ops, path| ops.pull_with_policy(path, limits, policy),
         summarize_pull,
     )
     .await;
@@ -955,17 +992,23 @@ async fn pull(
     let outcome = result?;
 
     let name = pull_outcome_name(&outcome).to_string();
+    let mut unsaved_count = None;
     let (conflicts, size_check) = match outcome {
         core_ops::PullOutcome::Conflicted { files } => {
             (files.into_iter().map(conflict_item).collect(), None)
         }
         core_ops::PullOutcome::NeedsSizeDecision(found) => (vec![], Some(size_check_result(found))),
+        core_ops::PullOutcome::NeedsSaveConfirmation { unsaved_count: n } => {
+            unsaved_count = Some(u32::try_from(n).unwrap_or(u32::MAX));
+            (vec![], None)
+        }
         _ => (vec![], None),
     };
     Ok(PullResult {
         outcome: name,
         conflicts,
         size_check,
+        unsaved_count,
     })
 }
 
@@ -1895,6 +1938,9 @@ pub struct PullResult {
     pub conflicts: Vec<ConflictItem>,
     /// 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容（E07 / E08）。なければ null
     pub size_check: Option<SizeCheckResult>,
+    /// 未保存の変更があり、取り込む前の保存の確認を求める場合（結果 `needs-save-confirmation`）の
+    /// 未保存のファイルの件数（E06）。なければ null
+    pub unsaved_count: Option<u32>,
 }
 
 /// アップロード結果
@@ -2137,6 +2183,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             suggest_memo,
             list_files_at,
             open_project_file,
+            reveal_project_file,
             restore_file_preview,
             restore_file,
             undo_restore,

@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use core_git::GitError;
 use core_ops::{
-    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits, UploadOutcome,
+    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits, UnsavedPolicy,
+    UploadOutcome,
 };
 use core_store::{
     now_rfc3339, JournalFinish, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks,
@@ -60,6 +61,30 @@ pub(crate) fn size_limits_for(store: &Arc<Mutex<Store>>, id: &str) -> SizeLimits
         .and_then(|g| g.effective_settings(id).ok())
         .map(|s| SizeLimits::from_warn_mb(s.large_file_warn_mb))
         .unwrap_or_default()
+}
+
+/// 手動の取り込みで、未保存の変更をどう扱うか（設計書 4.3、E06）。
+/// 設定「取り込む前に未保存の変更を保存」が「確認する」で、利用者がまだ承諾していないときだけ
+/// 確認を求める。設定を読めなければ既定値（オン）として自動保存する。
+pub(crate) fn unsaved_policy_for(
+    store: &Arc<Mutex<Store>>,
+    id: &str,
+    save_confirmed: bool,
+) -> UnsavedPolicy {
+    if save_confirmed {
+        return UnsavedPolicy::SaveFirst;
+    }
+    let save_before_pull = store
+        .lock()
+        .ok()
+        .and_then(|g| g.effective_settings(id).ok())
+        .map(|s| s.save_before_pull)
+        .unwrap_or(true);
+    if save_before_pull {
+        UnsavedPolicy::SaveFirst
+    } else {
+        UnsavedPolicy::Confirm
+    }
 }
 
 /// 操作の種類・起動元・失敗時の説明
@@ -335,6 +360,7 @@ pub(crate) fn pull_outcome_name(o: &PullOutcome) -> &'static str {
         PullOutcome::Conflicted { .. } => "conflicted",
         PullOutcome::NoUpstream => "no-upstream",
         PullOutcome::NeedsSizeDecision(_) => "needs-size-decision",
+        PullOutcome::NeedsSaveConfirmation { .. } => "needs-save-confirmation",
     }
 }
 
@@ -352,7 +378,12 @@ pub(crate) fn push_outcome_name(o: &UploadOutcome) -> &'static str {
 pub(crate) fn summarize_pull(o: &PullOutcome) -> OpSummary {
     OpSummary {
         detail: pull_outcome_name(o).to_string(),
-        quiet: matches!(o, PullOutcome::UpToDate | PullOutcome::NoUpstream),
+        quiet: matches!(
+            o,
+            PullOutcome::UpToDate
+                | PullOutcome::NoUpstream
+                | PullOutcome::NeedsSaveConfirmation { .. }
+        ),
     }
 }
 
