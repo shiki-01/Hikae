@@ -2,6 +2,8 @@
 
 Oct 7, 2026 · @shiki
 
+最終更新: Oct 8, 2026。トークンの確定値と、実装済みの部品・画面を反映しました（2.1 の補足、7章）。
+
 ## 1. デザインの前提
 
 Hikae の画面は「いま安全かどうか」が一目で分かることを最優先にします。装飾よりも状態表示の明快さを重視し、Git の概念を連想させる図（枝分かれの線、ハッシュ値）は出しません。画面 ID は詳細設計書の3章と共通です。
@@ -38,6 +40,14 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | `diff-mod-bg` | 変更セル（xlsx）、変更箇所の強調 |  |
 | `snapshot` | 自動保存の点（タイムライン） | 保存ポイントより弱い色 |
 | `focus-ring` | フォーカス表示 |  |
+
+**実装での値**（`src/lib/styles/tokens.css`。ライトとダークの値を `@theme light` / `@theme dark` で定義）:
+
+- 値の出典は Figma の「Hikae / Tokens」ページ。コミット 0e12afb で仮の値を差し替えて確定した
+- Figma の値から変えた箇所は**ライトの `fg-muted` の 1 件だけ**（`git log -p -- src/lib/styles/tokens.css` で確認）。`#818080` を `#5f5e5e` に変更した（コミット 3d35447）。理由は、1章の「本文コントラスト 4.5:1 以上」を満たすため。`#818080` は `bg`（`#ffffff`）上で 3.94:1、`bg-subtle`（`#f6f6f4`）上で 3.64:1 と基準に届かない。`#5f5e5e` は 6.46:1 と 5.97:1。ダークの `fg-muted`（`#a8a8a8`）は、`bg`・`bg-subtle`・`bg-raised` 上で 7.32:1・6.69:1・6.04:1 あり、変更していない（コントラスト比は WCAG 2.x の相対輝度の式で計算した値）
+- Figma の値のままで 4.5:1 に届かないもの: `fg-faint`（ライト `#b3b3b3` は `bg` 上で 2.10:1、ダーク `#6e6e6e` は `bg` 上で 3.41:1）。用途が無効状態とプレースホルダのため、本文の基準の対象外として扱っている。読めなくなってよい文字には使わないこと。状態色（`state-*`）、`accent`、`diff-*` とそれぞれの背景とのコントラストは未検証
+- 2章の表との違い: `scrim`（ダイアログの背後の幕。`--color-scrim`）を追加した。`space-7`（28px）は定義していない（定義は `space-1`〜`space-6` と `space-8`）。文字サイズは `title` 1.25rem、`heading` 1rem、`body` 0.875rem、`small` 0.75rem、`mono` 0.8125rem
+- フォントの並びは、sans が Noto Sans JP、Hiragino Sans、Yu Gothic UI、Meiryo UI、system-ui の順、mono が JetBrains Mono、ui-monospace、Cascadia Mono、SF Mono、Menlo、Consolas の順。Noto Sans JP と JetBrains Mono は同梱しておらず（`@font-face` なし）、その PC に入っている場合だけ使われる。1章の「OS 標準」との差
 
 ### 2.2 タイポグラフィ
 
@@ -285,3 +295,34 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 - [ ] S5 設定の枠組み
 - [ ] アプリアイコン（Windows / macOS の各サイズ）
 - [ ] Phase 2 以降: ImageCompare、ModelCard、IgnoreRuleRow、S6〜S8
+
+## 7. 実装状況（2026-10-08）
+
+仮の値のまま画面を実装し、トークンは Figma の確定値に差し替えました。部品は `src/lib/components`、画面は `src/lib/features/*` と `src/routes` にあります。
+
+### 7.1 部品（全 30 種との対応）
+
+- **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
+- **3.2 Hikae 固有の部品 14 種のうち 11 種が実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、DiffView、ConflictItem、ImpactList、OwnerPicker。MVP の 27 種はすべて実装済み
+- **未実装（3 種、いずれも Phase 2）**: ImageCompare、ModelCard、IgnoreRuleRow
+- 一覧にない部品として、一覧系のローディング用に Skeleton（5章）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
+- StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
+
+### 7.2 画面（4章との対応）
+
+| 画面 | 実装 | 状況 |
+| --- | --- | --- |
+| S0 初回ウィザード | `features/projects/WelcomeScreen.svelte`（`/welcome`） | 実装済み（3 ステップ） |
+| S1 プロジェクト一覧 | `features/projects/ProjectsScreen.svelte`（`/`） | 実装済み。要対応のカードを先頭に寄せる |
+| S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
+| S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、画面側が履歴の各点を未アップロードとして扱っているため実際には出ない（design.md 12章） |
+| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分のみ（左右／統合）。画像・docx・xlsx は Phase 2 |
+| S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」の 4 タブ。詳細設定は空。S6〜S8 は未実装（`features/ai` と `features/extensions` は空） |
+| D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。新規作成は GitHub 上にリポジトリを作らない（design.md 4.6） |
+| D2 元に戻す確認 | `features/history/RestoreDialog.svelte` | 実装済み |
+| D3 変更のぶつかり解消 | `features/conflict/ConflictModal.svelte` | 実装済み（2 択と「別名で残す」） |
+| D4 エラー表示 | `features/notifications`（`ErrorDialog`、`ToastHost`） | 実装済み |
+
+設計に無かった画面として、次のダイアログを追加した: 大きいファイルの確認（`SizeCheckDialog`。保存時の E07 / E08）、取り込み・アップロードを見送ったときの案内（`SyncSizeDialog`）、途中で止まった操作の案内（`InterruptedDialog`。E15）、ファイル追加の結果（`AddFilesResultDialog`）。
+
+文言はすべて `src/lib/i18n/ja.ts` のキー経由（日本語のみ）で、部品と画面に日本語の文言を直書きしていない（区切りの「・」を除く）。

@@ -2,6 +2,8 @@
 
 Oct 7, 2026 · @shiki
 
+最終更新: Oct 8, 2026。Phase 1 の実装（コミット 59c1c94 時点）に合わせて追記・修正しました。「実装」と書いた箇所はコードを読んで確認した内容、「未実装」「未確認」と書いた箇所は該当する処理をコード上で確認できなかったものです。設計の方針は変更していません。
+
 ## 0. 確定済みの前提
 
 本アプリは「1人のユーザーが、自分のファイルを GitHub 上に安全に置き、過去の状態へいつでも戻せる」ことに特化します。以下はヒアリングで確定した事項で、以降の章はすべてこれを前提にしています。
@@ -253,13 +255,22 @@ Oct 7, 2026 · @shiki
 
 ### 4.1 保存
 
-1. 事前検査: 新規・変更ファイルのサイズを確認（50MB 超で警告、100MB 超は保存不可として5章の文言を表示）
-2. `git add -A`（.gitignore を尊重。ステージングは常に全件）
-3. メモの提案: `git diff --cached --name-status -M` の結果からルールベースで生成（10章）。LLM 有効時は非同期で差し替え候補を出す
-4. `git -c core.hooksPath= commit -m <メモ>`（ユーザー環境の hook による予期しない失敗を避ける）
-5. 「保存時に自動アップロード」がオンなら 4.5 を実行
+1. 事前検査（サイズ）: `git status --porcelain=v2 -z -uall --no-renames` で新規・変更されたファイルを 1 件ずつ列挙し、作業フォルダ上のサイズを調べる（保存対象外・未解決の競合・削除・フォルダ・リンクは対象外）
+   - 警告閾値（設定 `large_file_warn_mb`、既定 50MB、選択肢 25 / 50 / 100MB）を**超える**ものは「警告」（E08、保存はできる）。100MB（固定。GitHub の上限）を**超える**ものは「保存不可」（E07）。閾値ちょうどのファイルは対象外
+   - 該当があれば、**何も変更せず**（復元点も作らず）保存を見送り、該当ファイルのパスとサイズを構造化した結果として返す（`SaveResult.size_check`。エラーではない）。画面が選択を求め、選択を添えた `save_with_size_choice` で保存をやり直す（`saveWithSizeChoice`）
+   - 選択は 2 つ。「そのまま保存」（`accept_warned`。警告のファイルにだけ有効で、保存不可のファイルには使えない）、「保存対象から外す」（`exclude`。検査で見つかったパスだけを指定でき、それ以外は `invalid_input` で拒否する）
+2. 復元点: 検査を通ったあと、作業フォルダ・インデックスを変更する前に復元点を作る（6.2。操作名 `save`）
+3. 「外す」が選ばれたファイル: `git rm --cached --ignore-unmatch -q -- :(literal)<パス>` で追跡から外し、ルート直下の完全一致パターン（`/<パス>`。特殊文字はエスケープ）を .gitignore へ追記する（既にある行は重複させず、改行コードは既存に合わせる）。作業フォルダのファイルは削除しない（不変条件 6）
+4. `git add -A`（.gitignore を尊重。ステージングは常に全件）。外したことでステージの内容が空になった場合は、空の保存を作らず「変更なし」として終える（`git diff --cached --quiet`）
+5. `git -c core.hooksPath= commit -m <メモ>`（ユーザー環境の hook による予期しない失敗を避ける）。メモの末尾に空行を挟んで `Hikae-PC: <PC 名>` の 1 行（git のトレーラーと同じ形式）を付ける
+   - PC 名は環境変数 `COMPUTERNAME` → `HOSTNAME` → `/proc/sys/kernel/hostname` → `/etc/hostname` → `hostname` コマンド（Windows 以外）の順に取得し、最初の呼び出しで決めて使い回す。取得できなければトレーラーを付けない
+   - 制御文字（改行・タブを含む）を除き、前後の空白を削り、**64 文字**で切る。改行を混ぜて別のトレーラーを偽造することはできない。メモが空のときは付けない
+   - 履歴・競合情報の取得時にトレーラーを本文から分離して `pc_name` として返す（メモ本文の表示にはトレーラーを含めない）。取り込み前の自動保存（4.3）とぶつかり解消の保存（4.4）にも付く
+6. 「保存時に自動アップロード」（設定 `auto_push_after_save`）がオンで commit が作られた場合は、スケジューラが直列キュー経由で 4.5 を実行する（保存コマンドは完了を待たない）
 
-署名（`user.name` / `user.email`）はリポジトリ単位で、GitHub のユーザー名と noreply アドレス（`<id>+<login>@users.noreply.github.com`）を設定します。本名やメールアドレスを公開リポジトリに残さないためです。
+メモの提案（10.3）は保存操作とは独立した読み取り専用の処理で、`git status --porcelain=v2 -z -uall --no-renames` の結果（変更種別とファイルサイズ）からルールベースで作る。`--no-renames` のため、名前変更は検出せず追加と削除として扱う。LLM による差し替え候補は未実装（Phase 2）。
+
+署名（`user.name` / `user.email`）はリポジトリ単位（`git config --local`）で、GitHub のユーザー名と noreply アドレス（`<id>+<login>@users.noreply.github.com`）を設定します。本名やメールアドレスを公開リポジトリに残さないためです。実装では、プロジェクトの登録時と、保存の直前（ログイン済みでユーザー情報が分かっているとき）に更新します。未ログインやオフラインでユーザー情報を確認できないときは、保存時は既存の署名を変えず、登録時は固定のローカル用署名（`Hikae` / `hikae@users.noreply.github.com`）にします。
 
 ### 4.2 元に戻す
 
@@ -272,9 +283,14 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 5. 「戻した後に自動で保存」（初期値オン）なら、メモ「10/4 18:02 の状態に戻しました（3件）」で commit
 6. 取り消しは、トーストの「取り消す」から手順2の自動保存へ同じ手順で戻す
 
+実装の補足:
+
+- 全体を戻す操作は `git restore --source=<時点> --staged --worktree -- :`、ファイル単位は `restore_file`（操作名 `restore-file`）。どちらも実行前に復元点を作り、取り消し用の復元点の ref を返す。取り消し（`undo_restore`）は `refs/hikae/snapshots/` か `refs/hikae/backup/` の ref、または完全な OID だけを受け付け、戻す前にいまの状態の復元点（操作名 `undo-restore`）を作る
+- 手順 5（戻した後に自動で保存）は**未実装**。設定 `auto_save_after_restore` は保存されるが、元に戻す処理は commit を作らない（戻した結果は未保存の変更として残る）
+
 ### 4.3 最新を取り込む
 
-1. 未保存の変更がある場合: `snapshot()` 後、「取り込む前に自動で保存」（初期値オン）なら 4.1 で commit。オフなら確認ダイアログ
+1. 未保存の変更がある場合: `snapshot()` 後、「取り込む前に自動で保存」（初期値オン）なら 4.1 の手順で commit。オフなら確認ダイアログ（実装は下記の補足を参照）
 2. `git fetch --prune origin`
 3. `git rev-list --left-right --count HEAD...@{u}` でアップロード待ち／取り込み待ちを算出
 4. 取り込み待ちのみ: `git merge --ff-only @{u}`
@@ -282,6 +298,15 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 6. 競合なし → 完了。競合あり → 4.4
 7. 自動アップロードがオンなら 4.5
 8. 追加処理: 取り込みで「除外設定により相手側で追跡を外されたファイル」が削除される場合、マージ前の内容を作業フォルダに書き戻す（4.8 の注意点への対策）
+
+実装の補足（`core-ops` の `pull`）:
+
+- 前提: 未解決の競合が残っていれば取り込まずに `conflict` を返す。upstream が未設定なら何もせず「upstream なし」として終える
+- 順序: `fetch --prune` は作業フォルダ・インデックスを変えないため、復元点より**先**に実行する。その結果で、取り込む内容（取り込み待ち）も自動保存する内容（未保存の変更）も無いと分かれば、**復元点を作らず**「最新です」（`UpToDate`）として終える。1 回の取り込みで作る復元点は最大 1 組（操作名 `pull`）で、双方に差があるときは手順 5 の `pre-merge` が加わる
+- サイズ検査: 未保存の変更があるときは、取り込み前の自動保存にも 4.1 手順 1 と同じ検査を行う。警告（閾値超）または保存不可のファイルが 1 件でもあれば、**何も変更せず**（復元点も作らず）取り込みを見送り、該当ファイルを構造化した結果（`PullResult.size_check`。アップロード中の取り込みなら `PushResult.size_check`）で返す。取り込み側には「そのまま」の承諾は無く、画面で保存の手順（外す／承諾）を済ませてから取り込みをやり直す。自動実行のときは `NeedsAttention`（理由 `large-files`）で画面に知らせる
+- 自動保存のメモ: 「取り込み前の自動保存」（呼び出し側が渡す文言）に、4.1 と同じ `Hikae-PC` トレーラーを付ける。自動保存の commit が増えるため、自動保存後にアップロード待ちを数え直す
+- 「取り込む前に自動で保存」の設定（`save_before_pull`）をオフにした場合に働くのは、スケジューラの**自動**の取り込みだけで、未保存の変更があれば取り込まずに `NeedsAttention`（理由 `unsaved-changes`）で知らせる。手動の取り込みは、設定にかかわらず未保存の変更を自動保存してから取り込む。E06 の確認ダイアログは未接続
+- 手順 8 の実際の範囲（`restore_files_untracked_by_remote`）: 取り込み前の HEAD にあり取り込み後の HEAD に無いパス（`diff --name-only -z --no-renames --diff-filter=D`）のうち、(a) 取り込み後の .gitignore で保存対象外（`git check-ignore -q`）になっていて、(b) 作業フォルダに実体（リンクを含む）が無いものだけを、`git restore --source <取り込み前の HEAD> --worktree -- :(literal)<パス>` で 1 ファイルずつ書き戻す。相手が実際に削除したファイル（保存対象外になっていないもの）は書き戻さない。既にファイルがあるパスは上書きしない。インデックスは変更しない（`rm` は使わない）。個々の失敗は取り込みの失敗にしない（取り込み前の内容は復元点に残る）。早送り・マージ成功の直後に行い、競合で止まった取り込みでは 4.4 の解消後に行う
 
 ### 4.4 変更のぶつかり解消
 
@@ -292,6 +317,15 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 5. 行単位編集（テキストのみ、Phase 2）: `:1:`（共通の元）、`:2:`、`:3:` を取得し、アプリ内の3ペインで組み立てて書き込む
 6. 全件解消後: `git add <paths>` → `git commit --no-edit`（メモは「2台の変更をまとめました」に置換）
 7. 「あとで」: `git merge --abort`。復元点 `pre-merge` が残っているので状態は完全に戻る
+8. 解消後の書き戻し: 手順 6 の保存の**後**に、4.3 手順 8 と同じ書き戻しを行う。競合で止まった取り込みでも、相手が追跡を外したファイルが取り込みで消えていれば、競合前の HEAD（競合中も HEAD は動かない）の内容を作業フォルダへ戻す
+
+実装の補足（`core-ops` の `resolve` / `conflicts` / `abort_merge`）:
+
+- 競合情報（`ConflictFile`）には、競合の種類（両方変更・両方追加・この PC で削除・クラウドで削除・両方削除）に加えて、各側でそのファイルを最後に変更した保存の日時（Unix 秒）と、その保存を作った PC の名前（`Hikae-PC` トレーラー）を含める。取得は `git log --max-count=1 --format=%ct%x1f%B <HEAD または MERGE_HEAD> -- <パス>` で、解析できなければ `None`（画面は日時・PC 名を隠す）
+- 解消は競合している**全ファイル**分の選択を一度に受け取る（不足があれば `unexpected` で拒否）。実行前に復元点（操作名 `resolve`）を作る
+- 手順 3 の別名は、元のファイルと同じフォルダに `<名前> (<ラベル> MM-DD).<拡張子>`（ラベルは「この PC の版」「クラウドの版」）で書き出す。同名があれば `MM-DD 2` のように連番を付け、既存のファイルは上書きしない
+- 保存のメモは「2台の変更をまとめました」。「あとで」は `abort_merge`（復元点 `abort-merge` を作ってから `merge --abort`）
+- 解消の完了後は、スケジューラが取り込みとアップロードを予定する
 
 ### 4.5 アップロード
 
@@ -311,13 +345,27 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 
 Org に作成権限がない場合は API が 403 を返すため、作成ダイアログで保存先を選んだ時点で `GET /orgs/{org}/memberships/{login}` を確認し、作れない保存先は灰色表示にします。
 
+実装状況（2026-10-08）:
+
+- 保存先の一覧は実装済み。個人と `GET /user/orgs` の Organization を並べ、各 Organization について memberships（承認待ちの検出）と `GET /orgs/{org}` の `members_can_create_repositories` を確認し、作れない理由（参加の承認待ち・メンバーによる作成が不許可・情報を確認できない）を返す
+- GitHub から取得（`git clone`）は実装済み。一覧は `GET /user/repos?affiliation=owner,organization_member` をページ送りで取得し、件数が多いときは `truncated` で知らせる。取得先 URL は常に `https://github.com/<owner>/<name>.git` に固定し（owner と name は英数字・`-`・`_`・`.` のみ）、任意の URL は受け付けない。取得先のフォルダは存在しないか空である必要があり、空でなければ中身に触れず拒否する。新しいフォルダを作るだけなので復元点は作らない。git の待ち時間は 30 分に延ばし、完了後に署名と `core.autocrlf=false` / `core.precomposeUnicode=true` をリポジトリ単位で設定して登録し、操作ジャーナルへ `clone` を記録する
+- 既存フォルダの登録・新規作成のうち、**GitHub 上のリポジトリ作成（`POST /user/repos`、`POST /orgs/{org}/repos`）と `push -u` は未実装**。いまの画面からの登録は、`git init -b main`（既存の `.git` があっても同じ手順を通す）とリポジトリ単位の設定だけを行い、保存先（remote）は設定しない。保存先の無いプロジェクトは、取り込み・アップロードの自動実行の対象にならない
+
 ### 4.7 ファイルの追加・外部で開く
 
 - D&D: Rust 側でプロジェクト内へコピー（移動ではない）。同名がある場合は「置き換える／両方残す（連番）」を選択。コピー直後にサイズ検査を行う
-- 既定のアプリで開く: Tauri の opener プラグイン
+  - 実装: 置き換える選択は設けず、同名があれば常に `名前 (2).ext` のように連番を付けた別名にして、既存のファイルを上書きしない（`create_new` で作成と存在確認を同時に行う）。追加先はプロジェクト直下のみで、フォルダの選択は未実装。コピー前に復元点（操作名 `add-files`）を作り、保存（commit）はしない
+  - サイズ検査はコピー前に元のファイルで行う。100MB を**超える**ものはコピーせず理由つきで断り（E07）、50MB を**超える**ものはコピーして `large` で知らせる（E08）。この 50MB は定数で、設定 `large_file_warn_mb` には従わない。フォルダなどファイルでないもの、読めないものも理由つきで断る
+- 既定のアプリで開く: Tauri の opener プラグイン。実装は Rust 側（`OpenerExt::open_path`）からのみ呼び、画面側（JS）には opener の権限を与えない（`capabilities/default.json` は `core:default` と `dialog:default` のみ）
+  - 開く前に Rust 側でパスを検証する（`resolve_in_project`）。(1) 字句検査: 空・NUL を含むもの、先頭が `/` または `\`（絶対パス・UNC）、ドライブ指定（`C:`）、`/` と `\` のどちらで区切っても `..` を含むもの、Windows では `:` を含むもの（代替データストリーム）を拒否。(2) 実体検査: プロジェクトのルートと結合後のパスをそれぞれ `canonicalize` し、後者がルートの配下で、かつルート自身でないことを確認（シンボリックリンクやジャンクションで外へ出るものを拒否）
+  - 拒否・失敗はエラーコード `outside_project`、`file_not_found`、`file_unreadable`（5.1）で返す
 - VS Code で開く: `vscode://file/<絶対パス>` の URL スキームを使う（`code` コマンドが PATH に無い環境でも動く）。VS Code 未インストールならメニューを非表示
 - フォルダで表示: Windows は `explorer /select,`、macOS は `open -R`
+  - **VS Code で開く・フォルダで表示・パスをコピーは未実装**。メニューの項目は画面にあるが、選ぶとバックエンド未対応のエラーになる
 - 過去の版を開く: `git show <時点>:<path>` を一時フォルダに書き出し、読み取り専用属性を付けて開く
+  - 実装: 時点を完全な OID に解決し、`ls-tree` で通常のファイルとして存在することを確認してから、`git cat-file -p <OID>:<パス>` で内容を読む（許可リストは変更していない）。パスは `..`・絶対パス・ドライブ指定・`.git` 配下・先頭が `:` のものを拒否する。コミットは先頭が `-` のものや空白・制御文字を含むものを拒否する
+  - 書き出し先は `<temp>/hikae-preview/<プロジェクト ID>/<12 桁のコミット>/<相対パス>`（`<temp>` は OS の一時フォルダ）。プロジェクト ID は英数字・`-`・`_` のみ 128 文字以内を許す。作業フォルダにもリポジトリにも書かない。書き出したファイルは読み取り専用にする（開いたアプリでの編集が履歴に紛れ込まないように）。同じ内容のファイルが既にあれば書き直さない
+  - 古い一時ファイルは起動時に別スレッドで削除する。`<12 桁のコミット>` のフォルダ単位で、配下のファイルの最終更新が **7 日**より前のものを、読み取り専用を解除してから削除し、空になったプロジェクトのフォルダも片付ける。削除に失敗したもの（他のアプリで開いている等）は残す
 
 ### 4.8 保存しないファイル（.gitignore）
 
@@ -341,24 +389,71 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E04 | GitHub 側の障害 | API 5xx | GitHub が一時的に応答していません。少し時間をおいて自動で再試行します。 | 今すぐ再試行 |
 | E05 | 変更のぶつかり | merge の終了コード、`u` 行 | 別の PC でも同じファイルが変更されていました。どちらの版を使うか選んでください。両方の版は失われません。 | 選ぶ / あとで |
 | E06 | 未保存の変更がある状態での取り込み（自動保存オフ時） | `git status` | 保存していない変更が3件あります。保存してから取り込みます。 | 保存して取り込む / キャンセル |
-| E07 | 100MB を超えるファイル | 保存前のサイズ検査 | 「動画.mp4」は大きすぎるため（250MB）、クラウドに保存できません。このファイルを保存対象から外しますか。 | 外して保存 / キャンセル |
-| E08 | 50MB 超 100MB 以下のファイル | 同上 | 「素材.psd」は大きめのファイルです（72MB）。保存はできますが、アップロードに時間がかかり、保管容量を多く使います。 | このまま保存 / 外す |
+| E07 | 100MB を超えるファイル | 保存前のサイズ検査（4.1 手順 1。構造化した結果で返す） | 「動画.mp4」は大きすぎるため（250MB）、クラウドに保存できません。このファイルを保存対象から外しますか。 | 外して保存 / キャンセル |
+| E08 | 警告閾値（設定。既定 50MB）を超え 100MB 以下のファイル | 同上 | 「素材.psd」は大きめのファイルです（72MB）。保存はできますが、アップロードに時間がかかり、保管容量を多く使います。 | このまま保存 / 外す |
 | E09 | リポジトリ全体の容量超過の兆候 | `git count-objects -vH` が 1GB 超 | このプロジェクトの保管データが 1GB を超えました。GitHub では大きすぎるプロジェクトの扱いが制限される場合があります。 | 大きいファイルを確認 |
 | E10 | リポジトリ破損 | `git fsck` 失敗、オブジェクト欠落 | このプロジェクトの記録の一部が読めなくなっています。クラウドの控えから復旧できます。いまのファイルは別の場所に退避します。 | 復旧する |
 | E11 | プロジェクトフォルダが見つからない | 起動時のパス確認 | 「卒業論文」のフォルダが見つかりません。移動または名前を変更しましたか。 | 場所を指定 / 一覧から外す |
-| E12 | ファイルが他のアプリで使用中（Windows） | restore/checkout 時の共有違反 | 「第3章.docx」が Word で開かれているため、元に戻せませんでした。Word を閉じてからもう一度お試しください。 | もう一度 |
+| E12 | ファイルが他のアプリで使用中（Windows） | git の標準エラー出力の文言、または OS のエラーコード 32 / 33（共有違反・ロック違反）。詳細は 5.1 | 「第3章.docx」が Word で開かれているため、元に戻せませんでした。Word を閉じてからもう一度お試しください。 | もう一度 |
 | E13 | ディスク容量不足 | 書き込みの ENOSPC | PC の空き容量が足りないため、保存できませんでした。不要なファイルを削除してからお試しください。 | 閉じる |
 | E14 | 同時実行（他の Git ツールが操作中） | `index.lock` の存在 | 別のアプリがこのプロジェクトを操作中です。終わるまで待ってから続けます。 | 待つ / 詳細 |
-| E15 | 中断された操作が残っている | `MERGE_HEAD` 等の存在 | 前回の取り込みが途中で止まっています。取り込み前の状態に戻すか、続きを行うか選んでください。 | 続きを行う / 取り込み前に戻す |
+| E15 | 中断された操作が残っている | 操作ジャーナルの「実行中」が起動時に残っていること（6.3。`MERGE_HEAD` の検査は未実装） | 前回の取り込みが途中で止まっています。取り込み前の状態に戻すか、続きを行うか選んでください。 | 続きを行う / 取り込み前に戻す |
 | E16 | 保管場所が削除・改名された | fetch 404 | クラウドの保管場所が見つかりません。GitHub 上で削除または名前変更された可能性があります。 | 新しく作り直す / 別の保管場所を選ぶ |
 | E17 | git 実行ファイルが見つからない・古い | 起動時のバージョン確認 | アプリの構成ファイルが不足しています。再インストールしてください。 | ダウンロードページ |
 | E18 | ファイル名の問題（Windows で使えない文字、大文字小文字のみの違い） | 取り込み時のパス検査 | 別の PC で作られた「Aux.txt」は、Windows では扱えない名前のため取り込めません。 | 詳細 |
 | E19 | LLM モデルの DL 失敗・メモリ不足 | DL エラー、推論プロセスの異常終了 | AI によるメモの提案を使えませんでした。通常の提案に切り替えます。 | 閉じる / AI 設定 |
 | E20 | 拡張機能のエラー | 拡張ホストの例外・タイムアウト | 「（拡張機能名）」でこのファイルを表示できませんでした。通常の表示に切り替えます。 | 閉じる / 拡張機能を無効にする |
 
-- E03・E04 は自動再試行（30秒、2分、10分の指数バックオフ）し、成功時は控えめなトーストのみ表示する
+- E03・E04 は自動再試行し、成功時は控えめなトーストのみ表示する。実装の再試行間隔は 5.1 に記す（当初案の「30秒、2分、10分」とは異なる）
 - E10 の復旧は「作業フォルダを `<名前>_退避_<日時>` に移動 → `git clone` → 退避した中の未保存変更をコピーし直す」の順で行い、退避フォルダは自動削除しない
 - E18 は fetch 後・merge 前に \`git ls-tree -r --name-only @{u}\` で取り込み対象のパスを検査し、問題があれば merge せずに該当ファイル名を表示する。回避は「元の PC で名前を変えて保存し直す」案内とする（Git 側で該当ファイルだけを飛ばすことはできないため。`core.protectNTFS` 等の既定値を維持）
+
+### 5.1 実装でのエラーの扱い
+
+**返す型と文言の決まり方**
+
+- Rust のコマンドは失敗を `AppError` で返す。項目は `code`（機械可読なエラーコード）、`params`（文言に差し込む値。ファイル名・件数など表示用の値だけで、トークン・認証情報・git の標準エラー出力は入れない）、`what_happened` / `data_is_safe` / `next_action`（日本語の 3 要素）、`technical_info`（「技術情報を表示」欄用。git の標準エラー出力など）
+- 画面は `code` と `params` から、`src/lib/i18n/ja.ts` の `errcode.<code>.what` / `.safe` / `.next` を引く。**3 つがそろい、差し込む値も足りているときは ja.ts の文言を優先する**。コードが未知、文言が無い、値が足りないときは、Rust 側が返した 3 要素をそのまま表示する。このため、どのエラーでも「何が起きたか」「データは無事か」「次の行動」の 3 要素がそろう
+- ja.ts に `errcode.*` が無く、Rust 側の 3 要素で表示されるコードは、`status_failed`、`history_failed`、`diff_failed`、`change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`、`invalid_settings`
+- 設計書の E01〜E20 の文言（`error.E01` など）は ja.ts にあるが、バックエンドのエラー（`errcode.*`）の表示には使わない。画面側で直接生成するのは E11 だけ（下の対応表）
+
+**エラーコード**（`app/src/lib.rs` の `AppError` の説明に従う。`OpsError` と認証エラーに 1 対 1 で対応）
+
+- 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、`io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、`restore_point_not_found`、`unexpected`
+- 中断された操作の復旧（`recover_interrupted` が返す。`AppError` の説明の一覧には載っていない）: `no_interrupted_operation`、`not_recoverable`（params: `operation`）
+- ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
+- 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、`network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、`keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、`github_error`
+- 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、`destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、`clone_failed`、`clone_timeout`、`clone_register_failed`
+- プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、`project_list_failed`、`project_register_failed`、`project_remove_failed`、`relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、`relocate_failed`
+- 内部: `database_error`、`task_failed`、`lock_failed`、`settings_io_failed`、`invalid_settings`、`status_failed`、`history_failed`、`diff_failed`、`change_list_failed`、`conflict_list_failed`、`preview_failed`、`open_failed`
+
+**大きいファイル（E07 / E08）はエラーではない**: 保存・取り込み・アップロードの結果の一部として、該当ファイルのパスとサイズ（`SizeCheckResult`: `blocked` と `warned`）を返す。何も変更していないため、エラーコードは持たない。画面は専用のダイアログで 2 択を出す（4.1、4.3）。
+
+**設計の ID と実装の対応**
+
+| 設計の ID | 実装での検出 |
+| --- | --- |
+| E01 | `not_logged_in`。GitHub API の 401 と、取得（clone）の認証失敗（git の標準エラー出力の文言で判定）。自動の取り込み・アップロードの認証失敗は、同期状態「再認証が必要」と `NeedsAttention`（理由 `auth`）で知らせる。手動の取り込み・アップロードの認証失敗は `git_failed` のまま返る |
+| E02 | `github_forbidden`（API の 403）。管理者向け説明をコピーするボタンの文言は画面側にあるが、バックエンドのエラーとはつながっていない |
+| E03 | `network_unavailable`（API・取得）。自動の取り込み・アップロードの失敗は標準エラー出力の文言かタイムアウトで「オフライン」に分類し、例外ではなく同期状態として扱う。手動の取り込み・アップロードの通信失敗は `git_failed` / `git_timeout` で返る |
+| E04 | `github_unavailable`（API の 5xx）。git の失敗では 5xx を見分けず「その他」に分類する |
+| E05 | `conflict`（params: `count`）。解消は D3 |
+| E06 | 自動の取り込みを見送る場合のみ（4.3 の補足）。確認ダイアログは未接続 |
+| E07 / E08 | 上記の構造化した結果 |
+| E11 | 画面（一覧）のダイアログと、フォルダの付け替え（`relocate_project`。`relocate_*`）は実装済み。**起動時のパス確認によるフォルダ不明の検出は未実装**で、画面の `folderMissing` は常に偽 |
+| E12 | `file_in_use`（下記） |
+| E15 | 操作ジャーナル（6.3） |
+| E16 | `remote_not_found`。取得（clone）の失敗時のみ。既存のプロジェクトの fetch の 404 は見分けず「その他」に分類する |
+| E09、E10、E13、E14、E17、E18 | 専用の検出処理は確認できなかった（未実装）。E13 は `io_error` の汎用の文言になる |
+| E19、E20 | Phase 2 / Phase 3 の機能のため未実装 |
+
+**E12（ファイル使用中）の判定**: 次のどちらかに当てはまるとき `file_in_use` にする（`core-ops` の `file_in_use`。共有違反は `OpsError::FileInUse` に分類され、`Git` や `Io` としては返らない）。
+
+- git の標準エラー出力（大文字小文字を区別しない）に、OS が共有違反を直接伝える文言（`being used by another process`、`sharing violation`、`device or resource busy`）がある。または、ファイルの削除・作成の失敗を示す git の文言（`unable to unlink`、`unlink of file`、`could not unlink`、`cannot unlink`、`unable to create file`、`unable to write file`）と、その理由（`permission denied`、`invalid argument`、`busy`、`failed` のいずれか）がそろっている（`unlink of file` は文言と理由を兼ねるため、それだけで該当する）。Windows の git は共有違反を `Permission denied` や `Invalid argument` で報告するため、失敗の文言と理由の両方がそろった場合に限って採用する
+- アプリ自身のファイル操作の `std::io::Error` が、Windows の OS エラー 32（共有違反）または 33（ロック違反）
+- 判定は英語の文言に依存する。`GitRunner` は git の実行時に環境変数を引き継がず、`LC_ALL=C` を設定して出力を英語に固定する。特定できたファイルの名前は `params.file` に入れる（パスは含めない）
+
+**自動再試行の間隔**（`core-watch` の `retry_delay_secs`。失敗が続くごとに倍にし、上限で止める）: オフライン（E03）は 30 秒から上限 10 分（30 秒、1 分、2 分、4 分、8 分、10 分）。認証失敗（E01）は 5 分から上限 60 分。それ以外（GitHub 側の障害を含む）は 60 秒から上限 30 分。変更のぶつかりが残っている間は 15 分ごとに状態を確かめる。
 
 ## 6. 安全設計・内部バックアップ戦略
 
@@ -375,39 +470,94 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 実装は上の禁止リストではなく**許可リスト方式**（default deny）です。サブコマンドごとに許可するフラグを列挙し、列挙にないフラグはすべて拒否します。git は長いオプションの省略形（`--forc` など）を受け付けるため、禁止リスト方式では回避されるからです。`-c` で渡せる設定キーも許可リストで制限し（`alias.*`、`core.sshCommand` などは拒否）、`fetch --prune` は remote-tracking ref の整理のみなので許可します。
 - `update-ref` は作成・更新・削除のすべてを自アプリの名前空間（`refs/<app>/`）以外では拒否する。値は完全な OID のみ受け付け、削除を意味する全ゼロ OID も拒否する（`-d` を複数回指定して検査を回避する手口と、全ゼロ OID による削除を塞ぐため）
 
+実装の補足（`core-git`）:
+
+- 実装では `<app>` は `hikae`（`refs/hikae/`）。名前空間の定数は `refs/hikae/snapshots/` と `refs/hikae/backup/`
+- 許可リストに無いサブコマンドは「unknown subcommand」として実行前に拒否する。`reset`、`clean`、`rebase`、`filter-branch`、`gc`、`reflog`、`stash`、`tag`、`pull`、`cherry-pick`、`revert`、`worktree`、`submodule` は明示的に拒否する。`diff-tree` のように git の標準のコマンドでも、許可リストに無ければ実行時に失敗する（13.3）
+- `-c` で渡せる設定キーは、`core.hooksPath`、`core.autocrlf`、`core.precomposeUnicode`、`core.quotepath`、`core.longpaths`、`credential.helper`、`user.name`、`user.email`、`commit.gpgsign`、`init.defaultBranch`、`protocol.version` のみ。子プロセスの環境変数は引き継がず（`PATH`、`SystemRoot`、`SYSTEMDRIVE`、`TEMP`、`TMP`、`TMPDIR` だけを渡す）、`GIT_CONFIG_GLOBAL` を null デバイス、`GIT_CONFIG_NOSYSTEM=1`、`GIT_TERMINAL_PROMPT=0`、`LC_ALL=C` に固定する。読み取り専用のコマンドには `GIT_OPTIONAL_LOCKS=0` を付ける。追加で渡せる環境変数は `GIT_INDEX_FILE` と作者・コミッターの 6 個だけ
+- 待ち時間の上限は 60 秒（取得は 30 分）。超えるとプロセスを止めて `git_timeout` にする
+
 ### 6.2 第2層: 復元点（隠し ref）
 
-| 名前空間 | 作成タイミング | 指す先 | 保持期間（初期値） |
+実装では `<app>` は `hikae` です（`refs/hikae/`）。
+
+| 名前空間 | 作成タイミング | 指す先 | 保持期間 |
 | --- | --- | --- | --- |
-| `refs/<app>/snapshots/<ブランチ>/<時刻>` | ファイル監視の自動保存、元に戻す前、取り込む前、ぶつかり解消前 | 作業フォルダ全体（未保存変更を含む）の commit | 7日間は全件、30日までは1時間に1件、90日までは1日に1件 |
-| `refs/<app>/backup/<操作名>/<時刻>` | merge、restore、除外設定変更の直前 | その時点の HEAD | 90日 |
+| `refs/hikae/snapshots/<ブランチ>/<時刻>` | 状態を変える操作の直前（下記）。ファイル監視による自動保存は未実装（Phase 2） | 作業フォルダ全体（未保存変更を含む）の commit | 7日未満は全件、30日までは1時間に1件、保持期間（設定 30 / 90 / 365 日。初期値 90 日）までは1日に1件。下記の規則 |
+| `refs/hikae/backup/<操作名>/<時刻>` | 状態を変える操作の直前（下記）と、双方に差がある取り込みの merge の直前（`pre-merge`） | その時点の HEAD | 90日 |
+
+復元点を作る操作（`<操作名>`）は、保存（`save`）、取り込み（`pull`）、元に戻す（`restore`）、1 ファイルを戻す（`restore-file`）、元に戻すの取り消し（`undo-restore`）、ぶつかり解消（`resolve`）、ぶつかり解消の中止（`abort-merge`）、ファイルの追加（`add-files`）です。1 回の操作で、スナップショットと `HEAD` を指す backup ref を 1 組作ります。時刻は UTC の `YYYYMMDDTHHMMSSZ` で、同じ名前が既にあれば `-1`、`-2` と連番を付けます。`HEAD` がまだ無い（最初の保存の前）ときは backup ref を作りません。
 
 **スナップショットの作り方**（作業フォルダとインデックスを一切変更しない）:
 
-1. 一時インデックス `GIT_INDEX_FILE=<一時パス>` を `HEAD` から作る（`git read-tree HEAD`）
+1. 一時インデックス `GIT_INDEX_FILE=<リポジトリの .git>/hikae/tmp/index-<ランダムな ID>` を作る。`HEAD` があれば `git read-tree <HEAD の OID>`、無ければ `git read-tree --empty`。処理の終了時に一時インデックスを削除する
 2. 同じ一時インデックスに `git add -A` → `git write-tree`
-3. ツリーが直前のスナップショットと同一なら終了（重複を作らない）
-4. `git commit-tree <tree> -p HEAD -m "auto: <時刻>"` → `git update-ref refs/<app>/snapshots/...`
+3. ツリーが、直前のスナップショットのツリー、または `HEAD` のツリーと同一なら、スナップショットは作らない（重複を作らない）
+4. `git commit-tree <tree> -m "auto: <時刻>" -p <HEAD の OID>`（作者・コミッターは下記の署名）→ `git update-ref refs/hikae/snapshots/<ブランチ>/<時刻> <OID>`
 
-これらの ref は `refs/heads/` の外にあるため、`git push origin HEAD` では送信されず、GitHub 上の履歴にも出ません。整理（間引き）は自アプリの ref の削除のみで行い、実際のデータ削除は Git の通常の `gc`（既定の猶予期間つき）に任せます。
+**署名**: スナップショットの作者は、ログイン済みなら GitHub のユーザー名と noreply アドレス（`<id>+<login>@users.noreply.github.com`）。未ログイン、またはユーザー情報を確認できないときは、固定の `Hikae`（メールアドレスは `hikae@localhost`）。名前やメールアドレスが空、または制御文字を含むときも固定の署名にする（`-c user.name=` に不正な値を渡さないため）。
+
+これらの ref は `refs/heads/` の外にあるため、`git push origin HEAD` では送信されず、GitHub 上の履歴にも出ません。整理（間引き）は自アプリの ref の削除のみで行い、実際のデータ削除は Git の通常の `gc`（既定の猶予期間つき）に任せます。アプリ自身は `gc` を実行しません（許可リストで拒否）。
+
+**間引きの規則**（`core-safety` の `plan_thinning`。時刻を引数で受け取る純関数で、実時間に依存しない）:
+
+- 対象はスナップショットと backup の ref だけ。名前空間の外の ref、ブランチ名・操作名が空のもの、空白・制御文字・`..` を含むもの、時刻を読めないものは削除対象にしない
+- スナップショットは、ブランチごとに新しい順に見る。経過日数が 7 日**未満**のものは全件残す。7 日以上 30 日（保持期間が 30 日なら 30 日）までは **UTC の 1 時間ごとの枠**に 1 件だけ、それ以降は保持期間までは **UTC の 1 日ごとの枠**に 1 件だけ残し、枠が埋まっていれば削除する。同じ枠では新しいものを残す。保持期間を過ぎたものは削除する
+- backup は、操作名ごとに、90 日を過ぎたものを削除する
+- 次のものは期間にかかわらず残し、枠も先に使う: 各グループ（ブランチまたは操作名）で最も新しい 1 件、利用者の手動の操作に紐づく復元点（ジャーナルの `triggered_by` が `manual` の行が指す ref。6.3）、未来の時刻のもの（時計のずれ）。保護対象の一覧を読めないときは、間引き自体を見送る
+- 実行は、起動直後と 24 時間ごと（スケジューラの保守作業）。同一プロジェクトへの状態変更と同じ直列キューを通し、フォルダが見つからないプロジェクトは間引きを見送る。削除は `update-ref -d` だけで、削除した ref はジャーナルの参照からも外す
+- 保持期間は設定 `snapshot_retention_days`（プロジェクト別に上書き可）。backup の 90 日は固定
 
 ### 6.3 第3層: 操作ジャーナル
 
-- 状態変更操作の開始時に `.git/<app>/journal.json` へ「操作名・開始時刻・復元点の ref・対象パス」を書き、完了時に消す
-- 起動時やプロジェクト表示時にジャーナルが残っていれば、E15 として「続きを行う／操作前に戻す」を提示する
-- `MERGE_HEAD` や `index.lock` も合わせて検査し、他ツールによる中断と区別する
+**保存先と変更の理由**: 当初案の `.git/<app>/journal.json` から変更し、アプリ内の SQLite（`core-store` の `journal` テーブル。マイグレーション v2 で作成、v5 で完了時刻を空にできる形へ変更）に記録します。理由は、プロジェクト・開始時刻での検索（索引 `idx_journal_project_started`、`idx_journal_outcome`）と、保持期間による整理を SQL で簡単に行えるためです。リポジトリの中にアプリ独自のファイルを置かずに済む利点もあります。復元点そのもの（ref）はリポジトリ側にあり、ジャーナルの行を消しても復元点は消えません。
+
+**項目**:
+
+| 列 | 内容 |
+| --- | --- |
+| `id` | 連番 |
+| `project_id` | プロジェクト。外部キーは張らず、プロジェクトの登録を外しても記録は残す |
+| `operation` | 操作名（`save`、`pull`、`push`、`resolve`、`restore`、`restore-file`、`undo-restore`、`abort-merge`、`add-files`、`recover`、`clone`） |
+| `triggered_by` | `manual`（利用者の操作）または `auto`（スケジューラ） |
+| `started_at` / `finished_at` | RFC3339。実行中は `finished_at` が空 |
+| `outcome` | `running`（実行中）、`success`、`failure`、`interrupted`（中断） |
+| `detail` | 結果の要約（`merged`、`up-to-date` など）または失敗の種類 |
+| `snapshot_ref` / `backup_ref` | その操作が新しく作った復元点の ref（操作の前後で `refs/hikae/` の一覧を比べて特定する） |
+| `target` | 対象（元に戻す先のコミットなど） |
+
+**記録の流れ**（`app` の `run_op`。直列キューの内側で実行する）:
+
+- 操作の本体を実行する**前**に `outcome = running` の行を作り、完了したら `success` または `failure` に更新する。更新は「実行中」の行にだけ効く
+- 失敗の `detail` には種類名（`git`、`git-timeout`、`safety`、`io`、`file-in-use`、`conflict`、`invalid-input`、`restore-point-not-found`、`unexpected`）だけを入れ、エラー本文（git の標準エラー出力など）は入れない。記録する文字列は、トークンらしい語・`Authorization` / `Bearer` に続く語・`token=` / `password=` の値・URL のユーザー情報を伏せ、200 文字で切る（不変条件 9）
+- スケジューラの自動実行で何も起きなかった操作（最新だった、upstream なし、アップロードするものなし）と、オフラインによる自動実行の失敗は、行を削除して記録に残さない
+- 記録に失敗しても操作の成否は変えない。開始の記録に失敗していたときは、完了後に結果を一度に記録する
+
+**中断の検出（E15）**: アプリが操作の途中で終了すると、その行は `running` のまま残る。次の起動時に、`running` の行をすべて `interrupted` に変え（`finished_at` は検出した時刻、`detail` は `interrupted`）、プロジェクトごとに `NeedsAttention`（理由 `interrupted-operation`）を通知する。画面が開く前の通知は届かないため、`project_status` の `interrupted_operation`（最も新しい中断の操作名）にも載せ、プロジェクト画面のヘッダーに最優先の「要対応」として表示し、その確認ボタンからダイアログで「操作前の状態に戻す」を案内する。利用者が同じプロジェクトで操作を成功させると、「中断」は「失敗」に変わり、案内は出なくなる（起動直後の自動実行では変えない）。
+
+**保持期間**: 完了済み（`success` / `failure`）の行を、開始から「**自動保存の保持期間（設定 `snapshot_retention_days`: 30 / 90 / 365 日）と 90 日のうち長いほう**」を過ぎたものから削除する。つまり初期値では 90 日で、保持期間を 365 日にすると 365 日になる。復元点より先に記録が消えないよう、backup の保持期間（90 日）以上にしている。登録を外したプロジェクトの行は 90 日で削除する。`running` と `interrupted` の行は削除しない。整理は起動直後と 24 時間ごとの保守作業（6.2）で行う。
+
+**復旧（E15）**: `recover_interrupted` が、中断された操作の直前の復元点へ作業フォルダを戻す。`reset --hard` と `checkout -f` は使わない。
+
+1. 対象の操作は保存・取り込み系の `save`、`pull`、`push`、`resolve` だけ。それ以外が中断していれば、何も変更せず `not_recoverable` を返す（履歴から戻す時点を選んでもらう）。`push` は、拒否されたときに内部で取り込みを行うため、復元点は `pull` のものを探す
+2. 復元点の選び方: その操作が**始まった時刻以降**に作られた、その操作の backup ref（`refs/hikae/backup/<操作名>/<時刻>`）のうち最新のものを探す。ジャーナルには完了しなかった操作の復元点が残らないため、操作名と開始時刻から探す。見つからなければ、何も変更せず `restore_point_not_found` を返す。見つかったら、同じ時刻のスナップショット（未保存の変更を含む）があればそれを、無ければ同じ `HEAD` から作られた直近のスナップショットを、それも無ければ backup ref（その時点の `HEAD`）を戻し先にする
+3. 取り込みの途中で止まっていて `MERGE_HEAD` が残っているときは、先に `merge --abort` で取り込みを取り消す（復元点 `abort-merge` を作ってから行う）
+4. 戻す前に、いまの状態の復元点を新たに作る。戻し方は「元に戻すの取り消し」と同じ `git restore --source=<復元点> --staged --worktree`。未追跡ファイルは消さない
+5. 実行は直列キューとジャーナル（操作名 `recover`）を通す。成功すると中断の印を解除する
+
+設計の「続きを行う」（取り込みを再開する選択）と、`MERGE_HEAD` や `index.lock` の検査による他のツールの中断との区別は**未実装**です。いまの案内は「操作前の状態に戻す」だけです。
 
 ### 6.4 そのほかの保証
 
 - **未追跡ファイルを消さない**: アプリが作業フォルダからファイルを削除するのは「元に戻す」で、その時点に存在しない追跡ファイルを対象にした場合のみ。その場合も直前にスナップショットがある
 - **追跡解除でローカルを消さない**: 4.8 の「保存対象から外す」は `--cached` 固定。他 PC での削除は 4.3 手順8で書き戻す
 - **アップロード済みの履歴は変えない**: 公開側の ref を書き換える操作は存在しない
-- **復元 UI**: 設定の「詳細」に「自動保存から復元」画面を置き、スナップショットを時刻順に一覧して任意の時点のファイルを取り出せるようにする（最後の砦）
+- **復元 UI**: 設定の「詳細」に「自動保存から復元」画面を置き、スナップショットを時刻順に一覧して任意の時点のファイルを取り出せるようにする（最後の砦）。専用の画面は**未実装**で、設定の詳細設定は空。いまは履歴のタイムラインに自動保存（`refs/hikae/snapshots/`）が並ぶ
 - **自動保存をクラウドにも控える**（Phase 3、初期値オフ）: `refs/<app>/snapshots/*` を明示指定で push する。容量を使うため既定では行わない
 
 ## 7. 設定項目と初期値の根拠
 
-初期値は「1人・複数 PC」の利用形態に合わせ、クラウドとの差を常に小さく保つ方向に倒します。差が小さいほど、変更のぶつかりが発生しにくいためです。設定は「アプリ全体」と「プロジェクト別（上書き可）」の2階層です。
+初期値は「1人・複数 PC」の利用形態に合わせ、クラウドとの差を常に小さく保つ方向に倒します。差が小さいほど、変更のぶつかりが発生しにくいためです。設定は「アプリ全体」と「プロジェクト別（上書き可）」の2階層です。実装での保存方法と、各項目がいま実際に働いているかは 7.2 に記します（表の初期値はすべて実装と一致しています）。
 
 | 区分 | 項目 | 選択肢 | 初期値 | 根拠 |
 | --- | --- | --- | --- | --- |
@@ -423,7 +573,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | 自動保存 | 保持期間 | 30日 / 90日 / 1年 | 90日 | 6.2 の間引き規則と合わせ、容量増加を抑える |
 | 保存 | メモの自動提案 | ルールのみ / AI を使う | ルールのみ | LLM は任意機能のため |
 | 保存 | 元に戻した後に自動で保存 | オン / オフ | オン | 戻した結果が未保存のまま残ると、次の取り込みで混乱するため |
-| 保存 | 大きいファイルの警告閾値 | 25MB / 50MB / 100MB | 50MB | GitHub は 50MB 超で警告、100MB 超を拒否する |
+| 保存 | 大きいファイルの警告閾値 | 25MB / 50MB / 100MB | 50MB | GitHub は 50MB 超で警告、100MB 超を拒否する。判定は閾値を**超えた**とき（ちょうどは警告しない） |
 | 表示 | 自動保存をタイムラインに表示 | 折りたたむ / 表示 / 隠す | 折りたたむ | 保存ポイントを主役にする |
 | 外部アプリ | 「開く」の既定動作 | 既定のアプリ / VS Code | 既定のアプリ | 非エンジニアは VS Code を使わない前提 |
 | AI | 実行方式 | 内蔵 / Ollama（詳細設定） | 内蔵 | 10章 |
@@ -453,6 +603,36 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 
 - 「用語の表示」は2章の用語決定に対する逃げ道として追加した項目で、併記時は「保存（commit）」のように括弧で示す
 - Git LFS を有効にした場合、既存の履歴にある大きいファイルは移行しない（移行は履歴の書き換えになるため）
+
+### 7.2 設定の保存と反映状況（実装）
+
+**保存**: アプリ内の SQLite（`core-store`）に、全体の設定を `settings`（キーと JSON 値）、プロジェクト別の上書きを `project_settings`（プロジェクト ID・キー・JSON 値）として保存します（9.1）。9.1 の当初案の「OS の設定ディレクトリの JSON」は使いません。
+
+- 保存されていないキーは既定値になる。保存済みの値が壊れていた（JSON として読めない、型や選択肢に合わない）場合も、そのキーだけ既定値に戻して読み、設定の破損でアプリを使えなくしない。未知のキーは無視する
+- 更新は、指定した項目だけを書き換える部分更新。保存前に検証し、選択肢にない値は保存せず `invalid_settings` で拒否する（選択肢: 取り込み間隔 0 / 5 / 15 / 60 分、アップロード待ちの通知 0 / 1 / 24 時間、自動保存の静止時間 30 / 120 / 600 秒、保持期間 30 / 90 / 365 日、警告閾値 25 / 50 / 100MB、自動保存の容量上限 0 / 1 / 2 / 5 倍。`0` は「オフ」または「上限なし」）
+- 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
+- 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
+- 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブで、各タブの項目は即時保存。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装
+
+**反映状況**（2026-10-08）:
+
+| 設定キー | 状況 |
+| --- | --- |
+| `pull_on_startup`、`pull_interval_minutes`、`auto_push_after_save` | 反映済み。スケジューラの実行計画に使う。変更は次の巡回を待たずに反映される |
+| `save_before_pull` | 一部。オフのとき、**自動**の取り込みを未保存の変更があれば見送って通知する（4.3 の補足）。手動の取り込みは常に自動保存してから取り込む。確認ダイアログは未接続 |
+| `snapshot_retention_days` | 反映済み。復元点の間引きと操作ジャーナルの保持期間に使う（6.2、6.3） |
+| `large_file_warn_mb` | 反映済み。保存・取り込み・アップロード中の取り込みのサイズ検査に使う（プロジェクト別の上書きを含む）。ファイルの追加（D&D）の警告は 50MB 固定で、この設定には従わない |
+| `show_snapshots_in_timeline` | 反映済み。履歴のタイムラインで自動保存を折りたたむ・表示する・隠す |
+| `conflict_mode`、`push_reminder_hours` | 保存のみ。参照する処理が無い（自動の取り込みで起きたぶつかりは常に通知だけを出し、利用者が手動で取り込んで起きたときは解消画面を開く。アップロード待ちの通知は未実装） |
+| `auto_save_after_restore` | 保存のみ。元に戻した後の自動保存は未実装（4.2） |
+| `auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_size_cap_x` | 保存のみ。ファイル監視による自動保存が未実装（Phase 2） |
+| `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
+| `ai_runner`、`ai_model`、`ai_scope`、`ai_model_source`、`ai_custom_gguf_path` | 保存のみ（Phase 2） |
+| `git_executable` | 保存のみ。git は同梱されておらず、PATH 上の git を使う（8.2） |
+| `work_copy_enabled`、`extension_dev_mode`、`extension_index_urls`、`git_lfs` | 保存のみ（Phase 3 / 4） |
+
+「拡張機能の有効化」（個別のオン・オフ）は、設定としては保存しません（拡張機能の管理は `extensions` テーブルを想定していますが、未使用です。9.1）。
 
 ## 8. 技術スタック比較と推奨構成
 
@@ -487,6 +667,22 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | 配布・更新 | Tauri bundler（Windows: NSIS、macOS: dmg）+ tauri-plugin-updater + GitHub Releases | Microsoft Store、Mac App Store | ストアはサンドボックス制約で任意フォルダ操作・サイドカー実行が難しい |
 | 署名 | Windows: コード署名証明書（Azure Trusted Signing 等）、macOS: Developer ID + 公証 | 署名なし | 署名なしだと SmartScreen / Gatekeeper の警告で非エンジニアが離脱する |
 
+**実装時点の依存**（2026-10-08。バージョンは `Cargo.toml` / `package.json` で固定）:
+
+| 依存 | 使う crate / 画面側 | 用途と権限の範囲 |
+| --- | --- | --- |
+| `tauri-plugin-dialog` 2.8.1（画面側は `@tauri-apps/plugin-dialog` 2.8.1） | `app`、画面 | フォルダ・ファイルの選択ダイアログ（`pickFolder`、`pickFiles`）。`capabilities/default.json` で `main` ウィンドウにだけ `dialog:default` を許可する |
+| `tauri-plugin-opener` 2.7.0 | `app`（Rust 側のみ） | 既定のアプリで開く（`open_path`）と、ログインの確認ページを開く（`open_url`）。**画面側には権限を与えない**（capability に `opener:*` を含めない）。開くのは、Rust 側で検証したプロジェクト内のファイルと過去の版の一時ファイル（4.7）、および固定の URL `https://github.com/login/device` だけ |
+| `reqwest` 0.13（`default-features = false`、`json`・`form`・`rustls`） | `core-github` | Device Flow の POST と、GitHub REST API の GET（`/user`、`/user/orgs`、`/orgs/{org}`、`/orgs/{org}/memberships/{login}`、`/user/repos`）。User-Agent は `Hikae`。TLS は rustls |
+| `keyring` 3（`windows-native`、`apple-native`） | `core-github` | トークンの保管（サービス名 `com.shiki01.hikae`、ユーザー名 `github`） |
+| `tokio`（`time`、`sync`）、`tokio-util` | `core-github` | ログイン待機のポーリングと、待機中の中断（`CancellationToken`） |
+| `rusqlite` 0.32（`bundled`）、`chrono` | `core-store` | SQLite（9.1）。`bundled` のため OS の SQLite に依存しない |
+| `uuid`（v4）、`time` | `core-safety`、`core-ops` | 一時インデックスの名前、復元点の時刻（UTC） |
+| `tauri-specta` / `specta` 2.0.0-rc.25、`specta-typescript` 0.0.12 | `app`、`core-store` | `src/lib/bindings.ts` の生成 |
+| 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2` | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
+
+設計書にあるが、**まだ導入していない**もの: `notify` / `notify-debouncer-full`（ファイル監視。`core-watch` にあるのは実行計画と保守タイマーだけ）、`tauri-plugin-updater`、`zip` / `quick-xml` / `calamine`、`wasmtime`、`llama-server` サイドカー。同梱の git（MinGit、macOS の自前ビルド）も未導入で、`GitRunner` は PATH 上の `git` を呼ぶ（`core-preview` と `core-llm` は雛形のみ）。`tauri.conf.json` の CSP は未設定（`null`）。
+
 **ツールチェーンと設定の注意**（Phase 0 で判明）:
 
 - Rust は 1.99 以上が必要（specta rc.25 が 1.89 でコンパイルできず、tauri 2.12 は 1.90 以上を要求）。`src-tauri/rust-toolchain.toml` で固定する
@@ -494,7 +690,17 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - SvelteKit 3 では `svelte.config.js` が廃止され設定は Vite 側に書く。`$lib` は `#lib`（`package.json` の `imports`）に変わった
 - Windows では、tauri にリンクするテスト実行ファイルが起動しない（`STATUS_ENTRYPOINT_NOT_FOUND`）。型生成は別 bin（`export-bindings`）で行う
 
-**認証の詳細**: スコープは `repo`（非公開リポジトリの読み書き）と `read:org`（所属 Org の一覧）です。git への受け渡しは、アプリ自身を credential helper として登録し（`git -c credential.helper= -c credential.helper="!<アプリ> credential"`）、ユーザーのグローバル git 設定には書き込みません。
+**認証とリモートの扱い**（実装）:
+
+- 方式は GitHub OAuth App の Device Flow（GitHub App ではない）。GitHub 側の設定は「Enable Device Flow」をオン、「Expire user access tokens」（有効期限つきのトークン）をオフ、Client secret は使わない。これらは GitHub 上の設定で、コードからは確認できない（運用者の申告）。コード側は、期限なしのアクセストークンを前提に、リフレッシュトークンの処理を持たない
+- `client_id` は秘密ではない公開情報として、ソースに既定値を埋め込む（配布版の利用者は環境変数を設定できないため）。解決の優先順位は、実行時の環境変数 `HIKAE_GITHUB_CLIENT_ID` → ビルド時の同名の環境変数 → 埋め込みの既定値。空の値は無視する。Client secret はソースにもリポジトリにも置かない
+- スコープは `repo`（非公開リポジトリの読み書き）と `read:org`（所属 Org の一覧）で固定
+- ログインの流れ: `start_login` が確認コードと確認ページの URL を返す（`device_code` はバックエンド内部にだけ保持し、画面には渡さない）→ `open_login_page` が既定のブラウザで確認ページを開く（開くのは進行中のログインが保持する URL が `https://github.com/login/device` と完全に一致するときだけ）→ `wait_login` が許可されるまでポーリングする（`authorization_pending` は待機、`slow_down` は間隔を延ばす、期限切れ・拒否・中断は専用の結果で返す）。許可されたトークンは、呼び出し側がキーチェーンへ保存する
+- トークンの保管は OS のキーチェーン（Windows の資格情報マネージャー、macOS の Keychain）だけ。ファイル、ログ、操作ジャーナル、イベント、画面に返す型には出さない。トークンと `device_code` の `Debug` / `Display` は伏せ字にする。ログアウトはキーチェーンのトークンを削除するだけで、GitHub 側の許可の取り消しは行わない
+- git への受け渡しは、アプリ自身を credential helper として使う。`clone` / `fetch` / `push` / `ls-remote` の実行時だけ、`-c credential.helper=`（既存の helper の無効化）に続けて `-c credential.helper=!'<アプリ>' credential` を付ける。git が `<アプリ> credential get` を呼ぶと、アプリは画面を起動せずに応答して終了する。応答するのは `https` で `github.com` 宛ての `get` だけで（ユーザー名 `x-access-token`、パスワードはトークン）、それ以外のホスト・操作（`store`、`erase`）には何も出力しない。トークンを URL やコマンドライン引数には載せない。実行ファイルのパスに引用符や制御文字が含まれるときは helper を設定せず、認証なしで実行して認証エラーとして失敗させる。ユーザーのグローバル git 設定には書き込まない（6.1）
+- リモートは GitHub の `origin` のみ。取得先は `https://github.com/<owner>/<name>.git` に固定する（4.6）。トークンが失効・取り消しされると API は 401 を返し、セッション情報は「再認証が必要」になる（E01）。オフラインや GitHub 側の障害のときはログイン状態を変えず、ユーザー情報だけを空にして返す
+- 署名に使うユーザー情報（数値 ID とログイン名）はメモリ上に控え、保存のたびに通信しない。トークンは含めない
+- **未実装・未確認**: 新しいリポジトリの作成（4.6）。Device Flow の実認証（ブラウザでの手動承認）は未確認
 
 ### 8.3 モジュール分割
 
@@ -503,13 +709,13 @@ Rust 側は Cargo workspace で機能ごとに crate を分け、Tauri 層（`ap
 | crate / ディレクトリ | 責務 | 依存先 |
 | --- | --- | --- |
 | `core-git` | `GitRunner`（許可リスト、環境変数、タイムアウト）、出力パーサ | なし |
-| `core-safety` | スナップショット、バックアップ ref、操作ジャーナル、間引き | core-git |
+| `core-safety` | スナップショット、バックアップ ref、復元点の間引き | core-git |
 | `core-ops` | 保存、元に戻す、取り込み、アップロード、ぶつかり解消、除外設定の各ユースケース | core-git, core-safety |
-| `core-watch` | ファイル監視、静止判定、自動保存のスケジュール | core-safety |
+| `core-watch` | 取り込み・アップロードの実行計画（起動時・定期・再試行）、保守タイマー。ファイル監視、静止判定、自動保存は未実装 | core-safety |
 | `core-github` | Device Flow、REST API、keyring、credential helper | なし |
-| `core-preview` | 種別判定、テキスト／画像／docx／xlsx 抽出、拡張機能ホスト | なし |
-| `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成 | core-preview |
-| `core-store` | SQLite、設定、プロジェクト登録 | なし |
+| `core-preview` | 種別判定、テキスト／画像／docx／xlsx 抽出、拡張機能ホスト（雛形のみ） | なし |
+| `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成（雛形のみ） | core-preview |
+| `core-store` | SQLite、設定、プロジェクト登録、操作ジャーナル、プロジェクト単位のロック（`ProjectLocks`） | なし |
 | `app` | Tauri コマンド・イベント、スケジューラ、プロジェクト単位の操作キュー | 上記すべて |
 | `src/lib/features/*` | projects, changes, history, compare, conflict, settings, ai, extensions | 生成された TS バインディング |
 
@@ -533,6 +739,8 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 
 **操作キュー**: 同一プロジェクトへの状態変更は `app` 層の直列キューで1件ずつ実行します。自動取り込みと手動保存が同時に走って `index.lock` が衝突する事態を、設計上発生させないためです。読み取り（状態表示、履歴、比較）はキューを通さず並列に実行します。
 
+実装: プロジェクト ID ごとのロック（`core-store` の `ProjectLocks`。ID ごとに 1 つの `Mutex`）を、`app` の `run_exclusive` が**ブロッキング用スレッドの内側**で取ってから処理を実行します。ロックを外側で取ると、クロージャがすぐ戻ってロックが本体の実行前に解放され、直列にならないためです（Phase 1 の実装中に見つかった不具合。13.3）。保存・取り込み・アップロード・元に戻す・ぶつかり解消・ファイル追加・復旧は共通の `run_op` を通り、直列キューの内側で、ジャーナルの記録（6.3）と UI へのイベント通知まで行います。スケジューラの自動実行も同じ `run_op` を通ります。
+
 ## 9. データモデル・状態管理
 
 真実の情報源は常に Git リポジトリと Rust 側です。フロントエンドは表示用のキャッシュのみを持ち、バックエンドからのイベントでキャッシュを無効化して再取得します。履歴やファイル内容を SQLite に複製しないことで、外部ツールで操作された場合も表示が食い違いません。
@@ -541,16 +749,24 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 
 | 保存先 | 内容 | 主な項目 |
 | --- | --- | --- |
-| アプリ設定（OS の設定ディレクトリ、JSON） | アプリ全体の設定 | 7章の全体項目、UI 言語、ウィンドウ状態 |
-| SQLite `projects` | 登録プロジェクト | id、パス、表示名、remote URL、所有者（個人／Org 名）、既定ブランチ、最終表示日時、プロジェクト別設定の上書き（JSON） |
-| SQLite `snapshots` | スナップショット索引 | project\_id、ref 名、作成日時、理由（監視／元に戻す前／取り込み前など）、変更ファイル数 |
-| SQLite `skip_worktree` | 4.8 の「今後の変更だけ無視」の記録 | project\_id、パス、設定日時（他 PC での再適用提案用） |
-| SQLite `llm_models` | 導入済みモデル | id、段階、ファイルパス、SHA-256、サイズ、導入日時 |
-| SQLite `message_cache` | 生成済みメモ | 差分ツリーの OID、モデル id、生成文（同じ差分で再生成しない） |
-| SQLite `extensions` | 拡張機能 | id、バージョン、有効状態、許可済み権限 |
-| `.git/<app>/journal.json` | 操作ジャーナル | 6.3 |
-| `.git/<app>/project.json` | リポジトリに紐づく識別子 | アプリが作成したか、初回登録日時（フォルダ移動後の再紐づけに使う） |
+| SQLite `settings` / `project_settings` | アプリ全体の設定と、プロジェクト別の上書き（7.2） | キーと JSON 値。UI 言語は日本語のみで保存項目なし。ウィンドウ状態の保存は未実装 |
+| SQLite `projects` | 登録プロジェクト | id、パス（一意）、表示名、remote URL、所有者（個人のログイン名）、既定ブランチ、最終表示日時、最初の保存の OID（`initial_commit`）。`config`（旧形式の上書き JSON）は残るが未使用 |
+| SQLite `journal` | 操作ジャーナル | 6.3 |
+| SQLite `snapshots`、`skip_worktree`、`llm_models`、`message_cache`、`extensions` | 表は作成済みだが、**読み書きする処理は未実装**（Phase 2 以降の用途） | 当初案の項目のまま。スナップショットの一覧は、現状は ref から直接読んでいる（`for-each-ref`） |
+| `.git/hikae/tmp/` | スナップショット作成用の一時インデックス（処理後に削除） | 6.2 |
 | OS キーチェーン | GitHub トークン | — |
+
+SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です。外部キー制約は有効にしていません（`ON DELETE CASCADE` に頼らず、プロジェクトの登録を外すときは `project_settings` を明示的に削除します）。`.git/<app>/journal.json` と `.git/<app>/project.json` は使いません（ジャーナルは SQLite へ移し、フォルダ移動後の再紐づけには `projects.initial_commit` を使います）。
+
+**マイグレーション**（`PRAGMA user_version` で管理。起動時に未適用のものを順に実行）:
+
+| 版 | 内容 |
+| --- | --- |
+| v1 | 初期スキーマ。`projects`、`snapshots`、`skip_worktree`、`llm_models`、`message_cache`、`extensions` を作成 |
+| v2 | 操作ジャーナル `journal` と索引 `idx_journal_project_started` を作成（外部キーなし） |
+| v3 | `projects` に `initial_commit` 列を追加。保存先 URL が無いプロジェクトでも、フォルダの付け替え（`relocate_project`）時に同じ履歴か照合できるようにする。プロジェクトの登録時と最初の保存の後に記録し、記録済みなら上書きしない |
+| v4 | 設定 `settings` とプロジェクト別の `project_settings`（外部キーあり）を作成。旧 `projects.config` の有効な上書きを `project_settings` へ移す |
+| v5 | `journal` を作り直し、`finished_at` を空にできる形にする（`running` / `interrupted` の追加に対応）。`idx_journal_outcome` を追加。既存の行は移す |
 
 ### 9.2 プロジェクトの状態
 
@@ -562,7 +778,7 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 | アップロード待ち／取り込み待ち | `git rev-list --left-right --count` | 保存、fetch、push の完了 |
 | 実行中の操作 | 操作キュー | 操作の開始・進捗・終了イベント |
 | ネットワーク状態 | 直近の fetch / API 結果 | 失敗・成功時 |
-| 要対応事項 | ジャーナル、`MERGE_HEAD`、未解消のぶつかり | 起動時、操作終了時 |
+| 要対応事項 | ジャーナル、未解消のぶつかり（`MERGE_HEAD` の検査は未実装） | 起動時、操作終了時 |
 
 操作中の状態遷移は次のとおりです。`待機` 以外の状態では状態変更系のボタンを無効化し、操作キューに積まれた件数を表示します。
 
@@ -575,12 +791,29 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 | 実行中 | 失敗 | 復元点へ戻したうえで待機（エラー表示） |
 | 任意 | アプリ異常終了 → 再起動 | 要対応（E15） |
 
+実装の補足:
+
+- 「実行中 → 失敗」で復元点へ**自動で戻す処理は実装していない**。失敗した操作は、エラーを返して終わる（復元点は残るため、履歴からの操作や E15 の復旧で戻せる）。当初の設計（4章冒頭）との差
+- 未保存の変更の更新契機は、ファイル監視（未実装）ではなく、操作の完了イベントと画面の再取得。操作の開始・終了は `op_progress` / `op_finished`、状態の変化は `status_changed` で通知する
+- 「待機以外ではボタンを無効化し、操作キューに積まれた件数を表示する」ことは未確認（キュー内の件数をイベントで通知する処理は確認できなかった）
+
 ### 9.3 フロントエンドとの通信
 
-- **コマンド**（UI → Rust、tauri-specta で型生成）: `project_status`、`list_history`、`read_file_at`、`diff`、`save`、`restore`、`sync`、`push`、`resolve_conflict`、`create_repo`、`add_files`、`open_with` など
-- **イベント**（Rust → UI）: `status_changed`、`op_progress`、`op_finished`、`sync_state_changed`、`llm_download_progress`、`needs_attention`
-- TanStack Query のキーを `[projectId, 種別, 引数]` で統一し、`status_changed` で `[projectId]` 配下を一括無効化する
-- 大きいファイルの内容（画像・抽出テキスト）は JSON に載せず、Tauri のカスタムプロトコル（例: `app-blob://<project>/<oid>`）で UI に直接読ませる
+- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 39 個）:
+  - プロジェクト: `list_projects`、`add_project`、`remove_project`、`relocate_project`、`project_status`
+  - 変更・保存: `list_changes`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
+  - 履歴・比較: `list_history`、`list_point_changes`、`list_files_at`、`diff`
+  - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`
+  - 同期: `pull`、`push`、`list_conflicts`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
+  - ファイルを開く: `open_project_file`、`open_file_at`
+  - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`
+  - 設定: `get_settings`、`update_settings`、`complete_onboarding`
+  - 設計の `create_repo` と `open_with` に相当するものは未実装（4.6、4.7）
+- **イベント**（Rust → UI。名前は kebab-case）: `status-changed`、`op-progress`、`op-finished`、`sync-state-changed`、`needs-attention`、`clone-progress`。`llm_download_progress` は未実装（Phase 2）
+- 状態を変える操作は `run_op`（直列キューの内側）で実行し、読み取りは `run_blocking` でキューを通さずに実行する
+- TanStack Query のキーは、実装では `['changes', projectId]`、`['history', projectId]`、`['compare', projectId, ...]` のように**種別を先頭**にしている（`src/lib/api/keys.ts`）。操作の完了後は `status-changed` を受けて、プロジェクトに関わるキーをまとめて無効化する
+- ブラウザ単体で動かすときは Tauri が無いため、画面は mock の API（`src/lib/api/mock.ts`）に切り替わる
+- 大きいファイルの内容（画像・抽出テキスト）を Tauri のカスタムプロトコル（例: `app-blob://<project>/<oid>`）で UI に直接読ませる仕組みは**未実装**（画像比較・docx / xlsx の抽出が入る Phase 2 で実装する）
 
 ## 10. ローカル LLM 設計
 
@@ -698,7 +931,35 @@ MVP は「1台目で保存・履歴・元に戻す、2台目で取り込む」�
 
 Phase 1 で特に工数を見込むべき箇所は、Windows でのファイルロック（E12）、改行コード・文字コードの扱い、Gatekeeper / SmartScreen を含む配布の3点です。いずれも Phase 0 で一度通しておくことを推奨します。
 
-**Phase 0 の結果**（2026-10-08、Windows のみ）: 保存 → アップロード → 取り込み → 競合 → 2択解消が、2つの clone とローカル bare リポジトリで通ることを確認しました。一時インデックスのスナップショット、許可リスト付き `GitRunner`、Device Flow の実装（実認証は未確認）も完了しています。macOS での検証、CI の実行、署名・公証、操作ジャーナル（6.3）、スナップショットの間引きは未着手です。詳細は `docs/notes/phase0-report.md` を参照してください。
+**Phase 0 の結果**（2026-10-08、Windows のみ）: 保存 → アップロード → 取り込み → 競合 → 2択解消が、2つの clone とローカル bare リポジトリで通ることを確認しました。一時インデックスのスナップショット、許可リスト付き `GitRunner`、Device Flow の実装も完了しています。詳細は `docs/notes/phase0-report.md`（末尾の「Phase 0 以降の確認」を含む）を参照してください。Phase 0 の時点で未着手だった項目のうち、CI の実行（Windows・macOS とも成功）、操作ジャーナル（6.3）、スナップショットの間引き（6.2）は、Phase 1 の実装中に済ませました。
+
+**Phase 1 の実装状況**（2026-10-08、コミット 59c1c94 時点。コードを読んで確認した内容）:
+
+| 範囲 | 状況 |
+| --- | --- |
+| S0 初回ウィザード | 実装済み（ログイン → 最初のプロジェクト → 完了の 3 ステップ） |
+| S1 プロジェクト一覧、S2 変更タブ、S3 履歴タブ | 実装済み。S3 の「この時点の全ファイルを見る」（ファイルツリー）と自動保存の折りたたみを含む。ただし「ここまでクラウド」の線は、部品はあるものの、画面側が履歴の各点を「クラウドに未アップロード」として扱っているため実際には表示されない。ヘッダーの最終アップロード日時も同様に空 |
+| S4 比較ビュー | テキストの行差分のみ実装済み（左右／統合の切り替え）。画像・docx・xlsx は Phase 2 |
+| S5 設定 | 4 タブ（一般・取り込み・アップロード・自動保存）が実装済み。詳細設定は空。多くの項目が「保存のみ」（7.2） |
+| D1 プロジェクト追加 | 既存フォルダの登録と GitHub から取得は実装済み。新規作成はローカルの登録のみで、**GitHub 上のリポジトリ作成は未実装**（4.6） |
+| D2 元に戻す確認、D3 変更のぶつかり解消、D4 エラー表示 | 実装済み。D3 は 2 択と「別名で残す」。エラーの文言は 5.1 |
+| 保存、履歴、元に戻す | 実装済み（全体・ファイル単位・取り消し）。保存前のサイズ検査と選択ダイアログを含む。「戻した後に自動で保存」は未実装（4.2） |
+| 取り込み（起動時・定期）、アップロード（自動・手動） | 実装済み（スケジューラ、失敗時の自動再試行、オフライン・再認証の状態表示）。取り込み前の自動保存のサイズ検査と見送りを含む |
+| 2択の競合解消 | 実装済み（4.4） |
+| D&D で追加 | 実装済み。追加先はプロジェクト直下のみ（4.7） |
+| 外部で開く | 「既定のアプリで開く」と「過去の版を開く」のみ実装済み。VS Code で開く、フォルダで表示、パスをコピーは未実装 |
+| ルールベースのメモ | 実装済み（10.3。名前変更は検出しない） |
+| 安全設計の 3 層 | 実装済み: 許可リスト（6.1）、復元点と間引き（6.2）、操作ジャーナルと中断の復旧（6.3）。直列キュー（8.3）も実装済み。**未実装**: 失敗時の自動の巻き戻し（9.2）、`MERGE_HEAD` / `index.lock` の検査（E14）、E15 の「続きを行う」 |
+| 署名と自動更新 | **未実装**。`tauri.conf.json` に署名の設定が無く、CI は `tauri build --debug` のみ。`tauri-plugin-updater` も未導入 |
+
+Phase 1 の範囲の外または終了条件に関わる、**未実装・未確認**の項目:
+
+- 同梱の git（Phase 0 の検証項目だったが調査のみ。`docs/notes/git-bundling.md`）。いまは PATH 上の git を使うため、git が無い PC では動かない（E17 の検出も未実装）
+- Windows・macOS の実機での通し確認。CI は両 OS で `svelte-check`・`prettier`・`eslint`・`vitest`・`cargo fmt --check`・`cargo clippy -D warnings`・`cargo test --workspace`・`tauri build --debug` が成功しているが、WebView 上の操作の自動テスト（E2E）は無い。実機での確認の記録は、リポジトリからは確認できなかった
+- Device Flow の実認証（ブラウザでの手動承認から、トークンの保存、git での取得・アップロードまで）は未確認
+- 終了条件の被験者試験（Git 未経験者 5 人）は未実施
+- 性能の検証（1 万ファイル・5GB で状態表示 1 秒以内、コールドスタート 2 秒以内）は未確認
+- 署名・公証（Windows のコード署名、macOS の Developer ID と公証）の手続き。Gatekeeper / SmartScreen の確認
 
 ## 13. リスクと判断が必要な論点
 
@@ -736,3 +997,41 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 | ライセンス | OSS / プロプライエタリ | アプリ本体のライセンスを Phase 1 公開前に決定（git 同梱の GPLv2 表示は必須） | Phase 1 公開前 |
 
 上記はすべて推奨案で確定しました。ライセンス以外は 7.1 の詳細設定で変更できます。
+
+### 13.3 Phase 1 実装時点の状況（2026-10-08）
+
+**解決済み（コード上で対策を確認したもの）**
+
+| リスク | 実装した対策 |
+| --- | --- |
+| 改行コードの自動変換、日本語ファイル名 | リポジトリの登録・取得時に `core.autocrlf=false` と `core.precomposeUnicode=true` を `git config --local` で設定する。git の出力の解析は `-z` 形式を基本とする |
+| 大きいファイルでリポジトリが肥大化 | 保存・取り込み前のサイズ検査（4.1、4.3）と、ファイル追加（D&D）のコピー前検査（4.7）で E07 / E08 を実装。リポジトリ全体の容量（E09）は未実装 |
+| Org の OAuth アクセス制限 | 保存先の一覧で、Organization ごとに作成の可否と理由を判定する（4.6） |
+| 自動取り込みと手動保存の衝突（`index.lock`） | 同一プロジェクトへの状態変更を直列キューで実行（8.3） |
+| Master CSS が rc 版 | `package.json` で `@master/css` と `@master/css.vite` を `2.0.0-rc.88` に完全固定 |
+| 破壊的な git 操作の混入 | 許可リスト方式の `GitRunner` が実行時に拒否する（6.1）。拒否のテストは敵対的な入力を含む |
+
+**未解決（対策が未実装のもの）**
+
+| リスク | 状況 |
+| --- | --- |
+| Office の一時ファイル（`~$*.docx` 等）の混入 | 初期の .gitignore テンプレートの作成は未実装 |
+| クラウド同期フォルダ（OneDrive、iCloud）上のプロジェクト | 登録時のパス検査と警告、E10 の復旧手順は未実装 |
+| skip-worktree の限界（4.8） | 「保存しないファイル」の GUI ごと Phase 2。いまは、サイズ検査で「外す」を選んだときの `rm --cached` と .gitignore への追記だけ |
+| 署名・公証のコスト | 署名の設定が無く、手続きの状況はリポジトリからは確認できなかった |
+| WebView の差異（Windows と macOS の表示・D&D） | CI は両 OS で実行するが、WebView 上の E2E テストは無い |
+| ファイル監視の負荷 | ファイル監視自体が未実装 |
+
+**新しく分かったリスク**
+
+| リスク | 影響 | 対策 |
+| --- | --- | --- |
+| 許可リストに無い git のコマンドを使うコードは、実行するまで失敗に気づけない | `history()` が許可リストにない `diff-tree` を呼んでおり、履歴の一覧が実行時に必ず失敗した（コミット 2e9dc9b で `log -z` と `diff --numstat` に書き換え）。型検査やモックを使ったテストでは見つからない | 実リポジトリを一時ディレクトリに作る統合テストで、使う経路を実際に通す（修正前に失敗するテストを追加して直した）。新しい git の呼び出しは、許可リストに既にあるサブコマンドとフラグだけで組み、足りないときは許可リストの変更を設計として検討する |
+| 直列キューが、ロックの取り方で無効になる | ロックを `spawn_blocking` の外で取ると、クロージャがすぐ戻ってロックが本体の実行前に解放され、同一プロジェクトの操作が並行して走る。これを `unsafe` で `MutexGuard` を偽装して回避する実装は、安全性の根拠を失う（Phase 1 の実装中にそのような `unsafe` を取り除いた） | ロックの取得と解放を本体と同じブロッキング側の内側に置く（`run_exclusive`）。`unsafe` は使わない（`src-tauri` に無いことを確認）。同一 ID の最大同時実行数が 1 になることを、`ProjectLocks` のテストで確かめる |
+| 実時間に依存するテストが CI で揺れる | `test_project_locks_different_ids_parallel` が macOS の CI で 4 回失敗した（成功した回もあり、結果が揺れた）。`core-github` の単体テストが実時間の待ちで約 10 秒かかっていた | 経過時間を測らず、双方が同時に臨界区間に入ったことを観測する形に変更（コミット 1f67776）。`core-github` のテストは macOS の CI で約 2 秒になった |
+| 判定が git の英語の標準エラー出力に依存する | E12（ファイル使用中）、オフラインの判定、認証失敗、取得先が無い場合（E16）は、標準エラー出力の文言で分類する。git のバージョンで文言が変わると、誤分類や見逃しが起きる | `GitRunner` は `LC_ALL=C` で英語に固定している。同梱 git で版を固定し（未実装）、文言の変化を検出するテストを置く |
+| 実際の GitHub の応答がモックと食い違う | Device Flow のトークン取得は、`Accept: application/json` を付けないとフォーム形式で返り、ポーリングが毎回失敗した（コミット 59c1c94）。実際の応答形式を前提にしないモックでは見つからない | ヘッダーが付いたときだけ JSON を返すモックのテストを追加した。実認証の手動確認は引き続き必要（5.1 と 12章） |
+| app 層での git 出力の自前解析 | Phase 1 の実機確認で「変更一覧が出ない」不具合が見つかった。`app` 層が `git status` の出力を自前で解析しており、`-z`（NUL 区切り）を行単位で読む誤り、変更種別コードの誤り、未追跡ファイルの欠落、`-uall` の欠落があった | 解析を `core-ops`（`changes.rs`）に移し、変更一覧は未追跡ファイルを含めて 1 件ずつ出す。実リポジトリを使う統合テストを追加した。解析は `core-*` crate に置いてテストする |
+| 画面に出ている設定が、実際には働いていない | 設定画面の「ぶつかり発生時」「アップロード待ちの通知」「戻した後に自動で保存」「自動保存」は、値を保存するだけで挙動に反映されない（7.2）。利用者が効いていると誤解する | 反映するまで画面から外すか、「準備中」と示す。方針は判断が必要 |
+| 失敗した操作を自動では巻き戻さない | 設計は「失敗時は復元点へ戻す」だが、実装はエラーを返して終わる。操作の途中で失敗すると、作業フォルダが中途半端な状態で残りうる | 復元点は常に残るので、履歴からの操作や E15 の復旧で戻せる。自動の巻き戻しを実装するか、設計を「戻せる状態を残す」に改めるかは判断が必要 |
+| `tauri.conf.json` の CSP が未設定 | 本体の WebView に CSP が無い。拡張機能（11章）を入れる前に、本体側でも外部への接続やスクリプトの読み込みを制限する必要がある | Phase 3 の前に、本体の CSP を決めて設定する |
