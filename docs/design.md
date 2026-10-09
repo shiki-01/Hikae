@@ -202,6 +202,7 @@ Oct 7, 2026 · @shiki
 
 - 「☁ ここまでクラウド」の線で、アップロード済みの範囲を示す
 - 自動保存は「·· 自動保存 6」の形で折りたたみ、展開すると個々の時刻が並ぶ
+- **ページ送り（実装）**: タイムラインは 100 件ずつ取得する無限スクロール（TanStack Query の `createInfiniteQuery`）。末尾の目印（IntersectionObserver）が見える範囲に入ると次のページを読み込み、読み込み中は目印の位置に表示を出す。失敗したときは自動では繰り返さず、「古い履歴をもう一度読み込む」を出す。`list_history` は `offset` と `limit` を受け取り、バックエンドは毎回「先頭から `offset + limit` 件」を同じ規則（重複する自動保存の除外を含む。除外の判定は `HEAD` から辿れる全保存のツリーで行う）で数え直して末尾の `limit` 件を返すので、ページを跨いでも重複・欠落しない（`--skip` は使わない）。変更ファイル数の集計は返す件数だけに行う。1 回の取得で `git log` に並べる自動保存は新しい順に 400 件まで（コマンドライン長の上限のため）。画面は、ページの境目で同じ ID が重なった場合に先に出た方だけを残す。一覧のカードの「最終保存」は履歴を読まず、`ProjectInfo.last_saved_at`（最新の手動の保存の日時。自動保存は含めない）を使う
 
 **S4 比較ビュー**
 
@@ -485,7 +486,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | 設計の ID | 実装での検出 |
 | --- | --- |
 | E01 | `not_logged_in`。GitHub API の 401 と、取得（clone）の認証失敗（git の標準エラー出力の文言で判定）。自動の取り込み・アップロードの認証失敗は、同期状態「再認証が必要」と `NeedsAttention`（理由 `auth`）で知らせる。手動の取り込み・アップロードの認証失敗は `git_failed` のまま返る |
-| E02 | `github_forbidden`（API の 403）。管理者向け説明をコピーするボタンの文言は画面側にあるが、バックエンドのエラーとはつながっていない |
+| E02 | `github_forbidden`（API の 403）。ダイアログの主ボタンは「管理者向けの説明をコピー」（文言は `error.E02.copy_text`。コピーしてもダイアログは開いたまま） |
 | E03 | `network_unavailable`（API・取得）。自動の取り込み・アップロードの失敗は標準エラー出力の文言かタイムアウトで「オフライン」に分類し、例外ではなく同期状態として扱う。手動の取り込み・アップロードの通信失敗は `git_failed` / `git_timeout` で返る |
 | E04 | `github_unavailable`（API の 5xx）。git の失敗では 5xx を見分けず「その他」に分類する |
 | E05 | `conflict`（params: `count`）。解消は D3 |
@@ -497,6 +498,17 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E16 | `remote_not_found`。取得（clone）の失敗時のみ。既存のプロジェクトの fetch の 404 は見分けず「その他」に分類する |
 | E09、E10、E13、E14、E17、E18 | 専用の検出処理は確認できなかった（未実装）。E13 は `io_error` の汎用の文言になる |
 | E19、E20 | Phase 2 / Phase 3 の機能のため未実装 |
+
+**次の行動ボタンと自動回復（実装）**: 実際のエラーはバックエンドのコードで届くため、ボタンの種類は `error-view.ts` の対応表（コード → 種類）で決める。対応表に無いコードは「閉じる」だけ。
+
+| 種類 | ボタン | 対象のコード |
+| --- | --- | --- |
+| ログインし直す | 「ログインし直す」。ログインの手順（`/welcome?return=<いまの画面>`）へ移り、終わったら元の画面へ戻る | `not_logged_in`（E01） |
+| 説明をコピー | 「管理者向けの説明をコピー」 | `github_forbidden`（E02） |
+| もう一度 | 「もう一度」。元の操作を再実行する。**呼び出し側が再実行の手段（`reportError` の `retry`）を渡したときだけ**出し、渡されないときは「閉じる」だけ。保存、ファイル追加、元に戻す、新規ファイルを作らない、取り込み、アップロード、ぶつかり解消、中断の復旧が渡している | `file_in_use`（E12）、`git_failed`、`git_timeout`、`io_error`、`safety_check_failed`、`github_unavailable`、`github_rate_limited`、`github_error`、`clone_failed`、`clone_timeout`、`trash_failed`、`discard_not_backed_up` |
+| 保存先を確認する | 「保存先を確認する」。呼び出し側が行き先（`onprimary`）を渡したときだけ出す。保存先の作成後に失敗した場合は、プロジェクト画面の接続のダイアログ（`/project?id=…&connect=1`）を開く | `remote_name_taken`、`remote_name_invalid`、`remote_owner_invalid`、`remote_public_not_confirmed`、`remote_conflict`、`remote_orphaned` |
+
+自動で回復するもの（設計 5章の表）はダイアログにせず、Toast（warning）で知らせる。画面側のコード E03 / E04 に加えて、バックエンドの `network_unavailable`（E03 の文言）と `github_unavailable`（E04 の文言。「今すぐ再試行」は再実行の手段があるときだけ）が対象。`git_failed` / `git_timeout` は原因を見分けられないため、ダイアログ（「もう一度」）のまま。ログインし直した直後は、再認証で止まっていた取り込み・アップロードの待ちを解除し（`Scheduler::retry_all_now`）、すぐ再試行する。設定画面の「一般」にはアカウント（ユーザー名・アバター）と「ログアウト」（`logout`。この PC のログイン情報だけを消し、ファイルと履歴は消えない）を置く。
 
 **E12（ファイル使用中）の判定**: 次のどちらかに当てはまるとき `file_in_use` にする（`core-ops` の `file_in_use`。共有違反は `OpsError::FileInUse` に分類され、`Git` や `Io` としては返らない）。
 
@@ -708,7 +720,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 
 | 候補 | 機能網羅 | 速度 | 認証 | 配布 | 判定 |
 | --- | --- | --- | --- | --- | --- |
-| git CLI（同梱） | 完全。merge、競合ステージ、LFS も本家どおり | 1回の起動に数十 ms（Windows で遅め）。`-z` / `--porcelain=v2` の解析が必要 | 自作 credential helper でトークンを渡せる | Windows は MinGit、macOS は自前ビルドを同梱（数十 MB。実装状況は 8.2 と 13.3） | **採用** |
+| git CLI（同梱） | 完全。merge、競合ステージ、LFS も本家どおり | 1回の起動に数十 ms（Windows で遅め）。`-z` / `--porcelain=v2` の解析が必要 | 自作 credential helper でトークンを渡せる | Windows は MinGit、macOS は自前ビルドを同梱（数十 MB。実装状況は 8.2 と 13.3。macOS は CI でのビルドと universal 化まで確認済み） | **採用** |
 | libgit2（git2-rs） | 基本操作は可。merge 周りやフック、LFS は非対応または挙動差あり | プロセス起動なしで高速 | コールバックで実装可能 | ライブラリ静的リンクのみ | 不採用（挙動差が安全設計の前提を崩す） |
 | gitoxide（gix） | 読み取り系は成熟。書き込み・push は発展途上 | 高速 | 実装途上 | Pure Rust で配布が楽 | Phase 3 で読み取り高速化に検討 |
 | isomorphic-git | 限定的。大きいリポジトリで遅い | 遅い | HTTP のみ | JS のみで完結 | 不採用 |
@@ -750,7 +762,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 
 設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`zip` / `quick-xml` / `calamine`、`wasmtime`、`llama-server` サイドカー（`core-preview` と `core-llm` は雛形のみ）。
 
-**同梱の git**（実装済み（Windows）／仕組みのみ（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（Windows 上では実行できず、CI での実行結果も未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
+**同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
 
 **ツールチェーンと設定の注意**（Phase 0 で判明）:
 
@@ -869,13 +881,13 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 
 ### 9.3 フロントエンドとの通信
 
-- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 40 個）:
+- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 43 個）:
   - プロジェクト: `list_projects`、`add_project`、`remove_project`、`relocate_project`、`project_status`
-  - 変更・保存: `list_changes`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
-  - 履歴・比較: `list_history`、`list_point_changes`、`list_files_at`、`diff`
-  - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`
+  - 変更・保存: `list_changes`、`list_project_tree`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
+  - 履歴・比較: `list_history`（`offset` と `limit` でページ指定）、`list_point_changes`、`list_files_at`、`diff`
+  - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`、`discard_new_file`
   - 同期: `pull`、`push`、`list_conflicts`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
-  - ファイルを開く: `open_project_file`、`open_file_at`
+  - ファイルを開く: `open_project_file`、`reveal_project_file`、`open_file_at`
   - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
   - 設定: `get_settings`、`update_settings`、`complete_onboarding`
   - 設計の `create_repo` は `add_project`（新規作成・既存フォルダの登録で `remote` を渡す）と `connect_remote`（あとから接続）で実装済み（4.6）。`open_with` に相当するものは未実装（4.7）
@@ -1018,14 +1030,14 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 | 取り込み（起動時・定期）、アップロード（自動・手動） | 実装済み（スケジューラ、失敗時の自動再試行、オフライン・再認証の状態表示）。取り込み前の自動保存のサイズ検査と見送りを含む |
 | 2択の競合解消 | 実装済み（4.4） |
 | D&D で追加 | 実装済み。追加先はプロジェクト直下のみ（4.7） |
-| 外部で開く | 「既定のアプリで開く」と「過去の版を開く」のみ実装済み。VS Code で開く、フォルダで表示、パスをコピーは未実装 |
+| 外部で開く | 「既定のアプリで開く」「過去の版を開く」「フォルダで表示」「パスをコピー」は実装済み。VS Code で開くは実装しない（4.7） |
 | ルールベースのメモ | 実装済み（10.3。名前変更は検出しない） |
 | 安全設計の 3 層 | 実装済み: 許可リスト（6.1）、復元点と間引き（6.2）、操作ジャーナルと中断の復旧（6.3）。直列キュー（8.3）も実装済み。**未実装**: 失敗時の自動の巻き戻し（9.2）、`MERGE_HEAD` / `index.lock` の検査（E14）、E15 の「続きを行う」 |
 | 署名と自動更新 | **未実装**。`tauri.conf.json` に署名の設定が無く、CI は `tauri build --debug` のみ。`tauri-plugin-updater` も未導入 |
 
 Phase 1 の範囲の外または終了条件に関わる、**未実装・未確認**の項目:
 
-- 同梱の git: **Windows は実装済み**（MinGit を `tauri.conf.json` の `bundle.resources` で同梱し、実行時に優先して使う。インストーラ生成までは確認。git の無い実機での起動確認は未実施）。**macOS は仕組みのみ**（`scripts/build-git-macos.sh` と CI の手動ジョブ。ビルドの実行は未確認）。同梱 git が見つからない場合は PATH 上の git を使い、それも無い PC では動かない（E17 の検出は未実装）。署名・公証、git の版更新の運用も未着手。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」
+- 同梱の git: **Windows は実装済み**（MinGit を `tauri.conf.json` の `bundle.resources` で同梱し、実行時に優先して使う。インストーラ生成までは確認。git の無い実機での起動確認は未実施）。**macOS は CI でのビルドまで確認済み**（`scripts/build-git-macos.sh` と CI の手動ジョブで、arm64 / x86_64 のビルドと universal 化を確認。実 Mac での起動、`check` ジョブでの同梱 git によるテスト、バンドルのサイズは未確認）。同梱 git が見つからない場合は PATH 上の git を使い、それも無い PC では動かない（E17 の検出は未実装）。署名・公証、git の版更新の運用も未着手。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」
 - Windows・macOS の実機での通し確認。CI は両 OS で `svelte-check`・`prettier`・`eslint`・`vitest`（純関数のテストに加え、jsdom + モック API で画面・ダイアログを描画するスモークテスト。初期化時の例外を検出する）・`cargo fmt --check`・`cargo clippy -D warnings`・`cargo test --workspace`・`tauri build --debug` が成功しているが、WebView 上の操作の自動テスト（E2E）は無い。実機での確認の記録は、リポジトリからは確認できなかった
 - Device Flow の実認証（ブラウザでの手動承認から、トークンの保存、git での取得・アップロードまで）は未確認
 - 終了条件の被験者試験（Git 未経験者 5 人）は未実施
@@ -1084,7 +1096,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | 自動取り込みと手動保存の衝突（`index.lock`） | 同一プロジェクトへの状態変更を直列キューで実行（8.3） |
 | Master CSS が rc 版 | `package.json` で `@master/css` と `@master/css.vite` を `2.0.0-rc.88` に完全固定 |
 | 破壊的な git 操作の混入 | 許可リスト方式の `GitRunner` が実行時に拒否する（6.1）。拒否のテストは敵対的な入力を含む |
-| git が入っていない PC で動かない | **Windows**: 公式 MinGit（バージョンと SHA-256 を固定して取得）を `bundle.resources` で同梱し、`GitRunner::bundled` が優先して使う。`core-git` / `core-safety` / `core-ops` の統合テストが同梱 git でも通ることを確認。**macOS**: ビルドスクリプトと CI の手動ジョブまで（未確認）。8.2 |
+| git が入っていない PC で動かない | **Windows**: 公式 MinGit（バージョンと SHA-256 を固定して取得）を `bundle.resources` で同梱し、`GitRunner::bundled` が優先して使う。`core-git` / `core-safety` / `core-ops` の統合テストが同梱 git でも通ることを確認。**macOS**: ビルドスクリプトと CI の手動ジョブで、arm64 / x86_64 のビルドと universal 化まで確認済み（実 Mac での起動は未確認）。8.2 |
 
 **未解決（対策が未実装のもの）**
 
