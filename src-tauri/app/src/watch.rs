@@ -44,16 +44,12 @@ impl WatchManager {
         let mut changed = Vec::new();
 
         // 登録が外された、フォルダが見つからなくなった、付け替えられたプロジェクトの監視を止める
-        let stale: Vec<String> = self
-            .entries
-            .iter()
-            .filter(|(id, entry)| {
-                !targets
-                    .iter()
-                    .any(|(tid, path)| tid == *id && *path == entry.path)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let stale: Vec<String> = core_watch::stale_watches(
+            self.entries
+                .iter()
+                .map(|(id, entry)| (id.as_str(), entry.path.as_path())),
+            targets,
+        );
         for id in stale {
             if let Some(entry) = self.entries.remove(&id) {
                 if entry.watcher.is_some() {

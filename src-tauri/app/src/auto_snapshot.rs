@@ -36,6 +36,14 @@ pub(crate) async fn run(ctx: &OpContext, project: &Project) -> SnapshotAttempt {
         project.id.clone(),
         "ファイルは安全です",
         move || {
+            // 順番を待つあいだに「一覧から外す」が実行されていたら、何も作らない
+            let registered = store
+                .lock()
+                .ok()
+                .is_some_and(|g| g.get_project(&id).is_ok());
+            if !registered {
+                return Ok(Ok(AutoSnapshotOutcome::Unchanged));
+            }
             let ops = Ops::new(crate::git_runner())
                 .with_signing_user(signing.as_ref().map(|(id, login)| (*id, login.as_str())));
             let started_at = now_rfc3339();

@@ -674,6 +674,8 @@ pub async fn clone_project(
             "フォルダを選び直してください",
         ));
     }
+    // ホームフォルダ・ドライブのルート・標準フォルダ・システムフォルダには取得しない
+    crate::ensure_folder_not_too_broad(&app, &path)?;
     let repo_name = repo.split('/').nth(1).unwrap_or_default().to_string();
     let display_name = display_name
         .map(|n| n.trim().to_string())
@@ -760,6 +762,10 @@ pub async fn clone_project(
             let ops = Ops::new(runner);
             ops.clone_project(&url, &path, &identity)
                 .map_err(clone_failure)?;
+            // OS・Office の一時ファイルを、このリポジトリの除外設定に入れる。失敗しても取得は続ける
+            if let Err(e) = ops.apply_default_excludes(&path, false) {
+                eprintln!("一時ファイルの除外設定に失敗しました: {}", e.kind());
+            }
 
             emit_clone(&task_app, &task_id, ClonePhase::Finishing);
             let branch = git_runner()

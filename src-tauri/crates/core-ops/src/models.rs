@@ -187,9 +187,22 @@ pub enum OpsError {
         file: String,
     },
 
+    /// ファイルの追加（D&D）を、何もコピーせずに断った（フォルダの上限など。設計書 4.7）
+    #[error("adding files was refused: {0:?}")]
+    AddRefused(AddRefusal),
+
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
     Unexpected(String),
+}
+
+/// ファイルの追加を、何もコピーせずに断る理由（設計書 4.7、5.1）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddRefusal {
+    /// フォルダの中のファイルが多すぎる（`limit` 件まで）
+    TooManyFiles { limit: u32 },
+    /// フォルダの階層が深すぎる（`limit` 階層まで）
+    TooDeep { limit: u32 },
 }
 
 /// 新規ファイルを「作成しない」状態に戻せない理由（設計書 4.2、5.1）。どれも何も削除していない。
@@ -348,8 +361,12 @@ pub struct AddedFile {
     pub path: String,
     /// 同名ファイルがあったため別名にした
     pub renamed: bool,
-    /// 警告閾値（50MB）以上の大きいファイル
+    /// 警告閾値（設定 `large_file_warn_mb`）を超える大きいファイル
     pub large: bool,
+    /// 同名の既存ファイルを置き換えた（置き換え前の内容は復元点に残っている）
+    pub replaced: bool,
+    /// 置き換えを選ばれたが、安全に置き換えられなかったため別名にした
+    pub replace_refused: bool,
 }
 
 /// 追加しなかった理由
@@ -357,18 +374,77 @@ pub struct AddedFile {
 pub enum AddRejectReason {
     /// 100MB を超えるため追加できない（`size` は元のサイズ）
     TooLarge { size: u64 },
-    /// 通常のファイルではない（フォルダなど）
+    /// 通常のファイルではない（機器ファイルなど）
     NotAFile,
     /// 読み取れない、またはコピーに失敗した
     Unreadable,
+    /// 置き換え先のファイルが他のアプリで使用中だった
+    InUse,
 }
 
 /// 追加しなかったファイル
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RejectedFile {
-    /// 元のファイル名（パスは含めない）
+    /// 元のファイル名。フォルダの中のファイルは、ドロップしたフォルダからの相対パス
+    /// （絶対パスは含めない）
     pub name: String,
     pub reason: AddRejectReason,
+}
+
+/// コピーで、たどらずに飛ばしたもの
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkipReason {
+    /// シンボリックリンク・ジャンクション（リンクはたどらない）
+    Link,
+    /// 隠しファイル（`.` で始まる名前、Windows の隠し属性）
+    Hidden,
+    /// OS・Office の一時ファイル（`.DS_Store`、`Thumbs.db`、`~$*` など）
+    OsTemp,
+}
+
+/// 飛ばしたもの
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkippedItem {
+    /// ドロップしたものからの相対パス（絶対パスは含めない）
+    pub name: String,
+    pub reason: SkipReason,
+}
+
+/// 同名のファイルがあるときの方針（設計書 4.7）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AddConflictPolicy {
+    /// 同名があれば、何も書かずに確認が必要な一覧を返す
+    #[default]
+    Ask,
+    /// 同名があれば、`名前 (2).ext` のように別名にして両方残す
+    KeepBoth,
+    /// 同名があれば、復元点に内容を残したうえで置き換える（安全に置き換えられなければ別名にする）
+    Replace,
+}
+
+/// 同名のファイル 1 件についての選択
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AddConflictAction {
+    Replace,
+    KeepBoth,
+    /// このファイルは追加しない
+    Skip,
+}
+
+/// 追加先のパス（プロジェクトからの相対パス）ごとの選択。方針より優先する
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddConflictDecision {
+    pub path: String,
+    pub action: AddConflictAction,
+}
+
+/// 確認が必要な同名のファイル
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NameConflict {
+    /// 追加先のパス（プロジェクトからの相対パス。`/` 区切り）
+    pub path: String,
+    /// 置き換えを選べるか。大きいファイルなど、復元点に控えを残せないものは false（別名のみ）
+    pub can_replace: bool,
 }
 
 /// ファイル追加の結果
@@ -376,6 +452,44 @@ pub struct RejectedFile {
 pub struct AddFilesOutcome {
     pub added: Vec<AddedFile>,
     pub rejected: Vec<RejectedFile>,
+    /// リンク・隠しファイル・一時ファイルとして飛ばしたもの
+    pub skipped: Vec<SkippedItem>,
+    /// 空でないとき、方針が `Ask` で同名のファイルがあったため、**何も書かずに**返した。
+    /// 選択を `decisions` に載せてやり直す
+    pub needs_decision: Vec<NameConflict>,
+    /// 置き換えた場合の、取り消し用の復元点（`refs/hikae/` 配下の ref 名）。置き換えが無ければ None
+    pub undo_ref: Option<String>,
+}
+
+/// 元に戻した後に、続けて保存した結果（設計書 4.2 手順 5）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AfterRestoreSave {
+    /// 保存を頼まれなかった（設定がオフ）
+    NotRequested,
+    /// 保存した
+    Saved { commit: String },
+    /// 保存する変更が無かった
+    NothingToSave,
+    /// 大きいファイルの確認が必要なため、保存しなかった（戻す操作は成功している）。
+    /// 画面の通常の保存の流れ（サイズ確認）に任せる
+    NeedsSizeDecision,
+    /// 保存に失敗した（戻す操作は成功している。未保存の変更として残る）
+    Failed,
+}
+
+/// 全体を戻す操作（と続く保存）の結果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreAndSave {
+    /// 取り消し用の復元点（`refs/hikae/` 配下の ref 名）
+    pub undo_ref: Option<String>,
+    pub save: AfterRestoreSave,
+}
+
+/// 1 ファイルを戻す操作（と続く保存）の結果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreFileAndSave {
+    pub outcome: RestoreFileOutcome,
+    pub save: AfterRestoreSave,
 }
 
 /// フォルダの付け替え先の確認結果
@@ -464,6 +578,7 @@ impl OpsError {
             OpsError::InvalidInput(_) => "invalid-input",
             OpsError::RestorePointNotFound => "restore-point-not-found",
             OpsError::DiscardRefused { .. } => "discard-refused",
+            OpsError::AddRefused(_) => "add-refused",
             OpsError::Unexpected(_) => "unexpected",
         }
     }

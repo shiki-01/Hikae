@@ -2,8 +2,10 @@
 
 mod add_files;
 mod auto_snapshot;
+mod broad_folder;
 mod changes;
 mod clone_dest;
+mod default_excludes;
 mod discard_new_file;
 mod file_in_use;
 mod history;
@@ -20,22 +22,32 @@ mod recover;
 mod relocate;
 mod remote;
 mod restore_file;
+mod restore_save;
 mod size_check;
 
-pub use add_files::{LARGE_FILE_LIMIT_BYTES, LARGE_FILE_WARN_BYTES};
+pub use add_files::{
+    AddFilesRequest, FOLDER_MAX_DEPTH, FOLDER_MAX_FILES, LARGE_FILE_LIMIT_BYTES,
+    LARGE_FILE_WARN_BYTES,
+};
 pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
+pub use broad_folder::{check_project_folder, BroadFolderReason, BroadFolders};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
+pub use default_excludes::{
+    apply_block as apply_default_exclude_block, ExcludeOutcome, DEFAULT_EXCLUDE_PATTERNS,
+    EXCLUDE_BLOCK_BEGIN, EXCLUDE_BLOCK_END,
+};
 pub use discard_new_file::{DiscardedNewFile, Trasher};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
-    new_restore_points, AddFilesOutcome, AddRejectReason, AddedFile, Choice, ConflictFile,
-    ConflictKind, DiffLine, DiffLineKind, DiscardRefusal, FileInHistory, HistoryEntry, HistoryKind,
-    Identity, Labels, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile,
-    RelocateCheck, ResolveOutcome, RestoreFileChange, RestoreFileKind, RestoreFileOutcome,
-    RestoreFilePreview, RestorePointInfo, RestorePreview, SaveOutcome, SyncState, UnsavedPolicy,
-    UploadOutcome,
+    new_restore_points, AddConflictAction, AddConflictDecision, AddConflictPolicy, AddFilesOutcome,
+    AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave, Choice, ConflictFile, ConflictKind,
+    DiffLine, DiffLineKind, DiscardRefusal, FileInHistory, HistoryEntry, HistoryKind, Identity,
+    Labels, NameConflict, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile,
+    RelocateCheck, ResolveOutcome, RestoreAndSave, RestoreFileAndSave, RestoreFileChange,
+    RestoreFileKind, RestoreFileOutcome, RestoreFilePreview, RestorePointInfo, RestorePreview,
+    SaveOutcome, SkipReason, SkippedItem, SyncState, UnsavedPolicy, UploadOutcome,
 };
 pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};
@@ -47,6 +59,7 @@ pub use remote::{
     project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
     RemoteConnection,
 };
+pub use restore_save::memo_for_auto_save;
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
 
 use core_git::GitRunner;
@@ -426,19 +439,71 @@ impl Ops {
         restore_file::list_point_changes(self.runner(), repo, commit)
     }
 
-    /// 外部のファイルをプロジェクト配下へコピーする（上書きしない・保存はしない）。
-    /// `dest_subdir` はプロジェクトからの相対パス。空ならプロジェクト直下。
+    /// 外部のファイル・フォルダをプロジェクト配下へコピーする（保存はしない。設計書 4.7）。
+    /// 同名があるときは `request.on_conflict` と `request.decisions` に従う。`Ask` で同名があれば
+    /// 何も書かずに `needs_decision` を返す。置き換えは、復元点に既存の内容が入っていることを
+    /// 確かめられたときだけ行い、確かめられなければ別名にする。
     pub fn add_files(
         &self,
         repo: &Path,
-        sources: &[std::path::PathBuf],
-        dest_subdir: &str,
+        request: &AddFilesRequest,
     ) -> Result<AddFilesOutcome, OpsError> {
-        add_files::add_files(
+        add_files::add_files(self.runner(), repo, request, self.now(), self.meta())
+    }
+
+    /// 指定の時点へ全体を戻し、`save_memo` があれば続けて保存する（設計書 4.2 手順 5）。
+    /// 保存で大きいファイルの確認が必要なときは、保存せずに `NeedsSizeDecision` を返す。
+    pub fn restore_and_save(
+        &self,
+        repo: &Path,
+        target_commit: &str,
+        save_memo: Option<&str>,
+        limits: SizeLimits,
+    ) -> Result<RestoreAndSave, OpsError> {
+        restore_save::restore_and_save(
             self.runner(),
             repo,
-            sources,
-            dest_subdir,
+            target_commit,
+            save_memo,
+            limits,
+            self.now(),
+            self.meta(),
+        )
+    }
+
+    /// 指定時点の 1 ファイルを戻し、戻せたときだけ、`save_memo` があれば続けて保存する。
+    pub fn restore_file_and_save(
+        &self,
+        repo: &Path,
+        commit: &str,
+        path: &str,
+        save_memo: Option<&str>,
+        limits: SizeLimits,
+    ) -> Result<RestoreFileAndSave, OpsError> {
+        restore_save::restore_file_and_save(
+            self.runner(),
+            repo,
+            commit,
+            path,
+            save_memo,
+            limits,
+            self.now(),
+            self.meta(),
+        )
+    }
+
+    /// OS・Office の一時ファイルの除外パターンを、`.git/info/exclude` に入れる（設計書 13.1）。
+    /// 変更の前に復元点を作る。`only_if_missing` が真なら、管理する部分がまだ無いときだけ書く。
+    /// 作業フォルダのファイルとインデックス、`.gitignore` には触れない。
+    pub fn apply_default_excludes(
+        &self,
+        repo: &Path,
+        only_if_missing: bool,
+    ) -> Result<ExcludeOutcome, OpsError> {
+        default_excludes::apply_default_excludes(
+            self.runner(),
+            repo,
+            only_if_missing,
             self.now(),
             self.meta(),
         )

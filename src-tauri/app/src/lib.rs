@@ -52,6 +52,8 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 ///   `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
 ///   入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
 ///   （ごみ箱へ移せない）。どれも params は `file`（ファイル名のみ）で、ファイルは削除していない
+/// - ファイル・フォルダの追加: `add_too_many_files`（フォルダの中が 1,000 件を超える）、
+///   `add_folder_too_deep`（階層が 20 を超える）。params は `limit`。何もコピーしていない
 /// - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
 /// - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
 ///   `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
@@ -68,6 +70,7 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 ///   `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
 ///   `clone_failed`、`clone_timeout`、`clone_register_failed`
 /// - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、
+///   `project_folder_too_broad`（ホームフォルダ・ドライブのルート・標準フォルダ・システムフォルダ）、
 ///   `project_list_failed`、`project_register_failed`、`project_remove_failed`、
 ///   `relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、
 ///   `relocate_failed`
@@ -208,6 +211,29 @@ impl AppError {
                     Some(format!("{reason:?}")),
                 )
             }
+            // ファイル・フォルダの追加を、何もコピーせずに断った（フォルダの上限）
+            OpsError::AddRefused(reason) => {
+                let (code, what_happened, limit) = match reason {
+                    core_ops::AddRefusal::TooManyFiles { limit } => (
+                        "add_too_many_files",
+                        "ファイル数が多すぎます".to_string(),
+                        limit,
+                    ),
+                    core_ops::AddRefusal::TooDeep { limit } => (
+                        "add_folder_too_deep",
+                        "フォルダの階層が深すぎます".to_string(),
+                        limit,
+                    ),
+                };
+                params.push(("limit".to_string(), limit.to_string()));
+                (
+                    code,
+                    what_happened,
+                    "何もコピーしていません。元のファイルも変更されていません。".to_string(),
+                    "フォルダを小さく分けてから、もう一度追加してください".to_string(),
+                    Some(format!("{reason:?}")),
+                )
+            }
             OpsError::RestorePointNotFound => (
                 "restore_point_not_found",
                 "中断された操作の前の状態が見つかりませんでした".to_string(),
@@ -344,6 +370,140 @@ fn load_project(store: &Arc<Mutex<Store>>, id: &str) -> Result<Project, AppError
         next_action: "プロジェクト一覧から確認してください".to_string(),
         technical_info: Some(format!("{:?}", e)),
     })
+}
+
+/// 広すぎるフォルダの判定に使う基準のパスを、OS から得る（ホーム・標準フォルダ・システムフォルダ）。
+/// 得られないものは空のまま（その種類の判定を省く）。ドライブのルートは基準なしで判定される。
+pub(crate) fn broad_folders(app: &tauri::AppHandle) -> core_ops::BroadFolders {
+    let paths = app.path();
+    let mut standard: Vec<PathBuf> = [
+        paths.desktop_dir(),
+        paths.document_dir(),
+        paths.download_dir(),
+        paths.picture_dir(),
+        paths.audio_dir(),
+        paths.video_dir(),
+        paths.public_dir(),
+    ]
+    .into_iter()
+    .filter_map(Result::ok)
+    .collect();
+    let home = paths.home_dir().ok();
+    // ホームの直下にある標準の名前（言語や設定で場所が違っても、名前で押さえる）
+    if let Some(home) = &home {
+        for name in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Pictures",
+            "Music",
+            "Videos",
+            "Movies",
+        ] {
+            standard.push(home.join(name));
+        }
+    }
+
+    #[cfg(windows)]
+    let system: Vec<PathBuf> = {
+        let mut list: Vec<PathBuf> = [
+            "SystemRoot",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramData",
+        ]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+        list.push(PathBuf::from(r"C:\Windows"));
+        list
+    };
+    #[cfg(not(windows))]
+    let system: Vec<PathBuf> = [
+        "/System",
+        "/Library",
+        "/Applications",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/etc",
+        "/var",
+        "/private",
+        "/opt",
+        "/dev",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect();
+
+    core_ops::BroadFolders {
+        home,
+        standard,
+        system,
+    }
+}
+
+/// 広すぎるフォルダを、プロジェクトとして登録・取得させない（`project_folder_too_broad`）。
+/// 指定されたパスそのものと、実体（リンクの先）の両方で判定する。
+pub(crate) fn ensure_folder_not_too_broad(
+    app: &tauri::AppHandle,
+    path: &std::path::Path,
+) -> Result<(), AppError> {
+    match broad_folder_reason(app, path) {
+        None => Ok(()),
+        Some(reason) => Err(AppError {
+            code: "project_folder_too_broad".to_string(),
+            params: Vec::new(),
+            what_happened: "このフォルダは範囲が広すぎます".to_string(),
+            data_is_safe: "ファイルは変更されていません。".to_string(),
+            next_action: "作業用のフォルダを選んでください".to_string(),
+            technical_info: Some(format!("{reason:?}")),
+        }),
+    }
+}
+
+fn broad_folder_reason(
+    app: &tauri::AppHandle,
+    path: &std::path::Path,
+) -> Option<core_ops::BroadFolderReason> {
+    let bases = broad_folders(app);
+    if let Err(reason) = core_ops::check_project_folder(path, &bases) {
+        return Some(reason);
+    }
+    // リンク経由で広いフォルダを指していないか（存在するときだけ実体を調べる）
+    path.canonicalize()
+        .ok()
+        .and_then(|real| core_ops::check_project_folder(&real, &bases).err())
+}
+
+/// 選んだフォルダが広すぎるかを、登録の前に確かめる（フォルダ選択後の注意に使う）。
+/// 広すぎるときは理由の種類、問題なければ null。読み取りのみ。
+#[tauri::command]
+#[specta::specta]
+async fn check_project_folder(
+    app: tauri::AppHandle,
+    path: PathBuf,
+) -> Result<Option<BroadFolderKind>, AppError> {
+    run_blocking(move || {
+        Ok(broad_folder_reason(&app, &path).map(|reason| match reason {
+            core_ops::BroadFolderReason::Home => BroadFolderKind::Home,
+            core_ops::BroadFolderReason::DriveRoot => BroadFolderKind::DriveRoot,
+            core_ops::BroadFolderReason::StandardFolder => BroadFolderKind::StandardFolder,
+            core_ops::BroadFolderReason::SystemFolder => BroadFolderKind::SystemFolder,
+        }))
+    })
+    .await
+}
+
+/// 広すぎるフォルダの種類
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum BroadFolderKind {
+    Home,
+    DriveRoot,
+    StandardFolder,
+    SystemFolder,
 }
 
 /// 最初の保存の OID を、未記録のプロジェクトに限って記録する（付け替え時の照合用）。
@@ -528,6 +688,8 @@ async fn add_project(
     if let Some(request) = &remote {
         remote::check_public_confirmed(request)?;
     }
+    // ホームフォルダ・ドライブのルート・標準フォルダ・システムフォルダは登録しない（何も作る前に断る）
+    ensure_folder_not_too_broad(&app, &path)?;
     // 保存先を作る場合の所有者を、プロジェクトの所有者として記録する
     let owner = remote.as_ref().map_or(owner, |r| r.owner.clone());
     // 署名は実際のログインユーザー（数値 ID とログイン名）から決める。
@@ -545,6 +707,12 @@ async fn add_project(
 
             ops.init_project(&path, remote_url.as_deref(), &identity)
                 .map_err(AppError::from_ops_error)?;
+
+            // OS・Office の一時ファイルを、このリポジトリの除外設定に入れる（作業フォルダのファイルは
+            // 変更しない。変更の前に復元点を作る）。失敗しても登録は続ける（起動時にもう一度試す）
+            if let Err(e) = ops.apply_default_excludes(&path, false) {
+                eprintln!("一時ファイルの除外設定に失敗しました: {}", e.kind());
+            }
 
             // 既存のリポジトリがすでに保存先（origin）を持っているときは、それを使う（作り直さない）
             let existing_origin = ops.origin_url(&path).ok().flatten();
@@ -607,43 +775,47 @@ async fn add_project(
     })
 }
 
-/// プロジェクトを削除（登録のみ。フォルダは消さない）。
+/// プロジェクトを一覧から外す（設計書 4.6、5章 E11）。
+///
+/// 外すのは、アプリの中の登録・プロジェクト別の設定・ファイル監視・取り込み／アップロード／自動保存の
+/// 実行計画だけ。フォルダの中身、`.git`、`refs/hikae/` の復元点、GitHub 上のリポジトリには触れない
+/// （git も実行しない）。外した後に同じフォルダを登録し直せる（既存の `.git` と保存先を引き継ぐ）。
+///
+/// 実行中の操作（保存・取り込みなど）が終わるのを、直列キューで待ってから外す。外した直後に、
+/// 実行計画を捨てて監視の停止を促す（監視は、スケジューラの次の巡回で止まる）。
 #[tauri::command]
 #[specta::specta]
 async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result<(), AppError> {
     let store = state.store.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let store_guard = store.lock().map_err(|e| AppError {
-            code: "database_error".to_string(),
-            params: Vec::new(),
-            what_happened: "データベースアクセスに失敗しました".to_string(),
-            data_is_safe: "何も変更されていません".to_string(),
-            next_action: "もう一度試してください".to_string(),
-            technical_info: Some(e.to_string()),
-        })?;
+    let target = id.clone();
+    let result = run_exclusive(
+        state.locks.clone(),
+        id.clone(),
+        "何も変更されていません",
+        move || {
+            let store_guard = store.lock().map_err(|e| AppError {
+                code: "database_error".to_string(),
+                params: Vec::new(),
+                what_happened: "データベースアクセスに失敗しました".to_string(),
+                data_is_safe: "何も変更されていません".to_string(),
+                next_action: "もう一度試してください".to_string(),
+                technical_info: Some(e.to_string()),
+            })?;
 
-        store_guard.remove_project(&id).map_err(|e| AppError {
-            code: "project_remove_failed".to_string(),
-            params: Vec::new(),
-            what_happened: "プロジェクト削除に失敗しました".to_string(),
-            data_is_safe: "フォルダ内のファイルは残っています".to_string(),
-            next_action: "もう一度試してください".to_string(),
-            technical_info: Some(format!("{:?}", e)),
-        })?;
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| AppError {
-        code: "task_failed".to_string(),
-        params: Vec::new(),
-        what_happened: "タスク実行に失敗しました".to_string(),
-        data_is_safe: "何も変更されていません".to_string(),
-        next_action: "もう一度試してください".to_string(),
-        technical_info: Some(e.to_string()),
-    })?;
-    // 登録を外したプロジェクトの監視と自動保存の予定を、直ちに止める
-    state.scheduler.refresh();
+            store_guard.remove_project(&target).map_err(|e| AppError {
+                code: "project_remove_failed".to_string(),
+                params: Vec::new(),
+                what_happened: "プロジェクト削除に失敗しました".to_string(),
+                data_is_safe: "フォルダ内のファイルは残っています".to_string(),
+                next_action: "もう一度試してください".to_string(),
+                technical_info: Some(format!("{:?}", e)),
+            })?;
+            Ok(())
+        },
+    )
+    .await;
+    // 外したプロジェクトの実行計画を直ちに捨て、監視の停止を促す
+    state.scheduler.forget(&id);
     result
 }
 
@@ -1297,7 +1469,52 @@ async fn restore_preview(
     })?
 }
 
+/// 設定「元に戻した後に自動で保存」（プロジェクト別の上書きを含む）がオンのとき、続けて保存するメモを返す。
+/// メモの文言は呼び出し側（画面）が渡す。空、または設定がオフなら保存しない。設定を読めなければ
+/// 既定値（オン）として扱う。
+fn save_memo_after_restore(
+    store: &Arc<Mutex<Store>>,
+    id: &str,
+    memo: Option<String>,
+) -> Option<String> {
+    let enabled = store
+        .lock()
+        .ok()
+        .and_then(|g| g.effective_settings(id).ok())
+        .map(|s| s.auto_save_after_restore)
+        .unwrap_or(true);
+    core_ops::memo_for_auto_save(enabled, memo.as_deref())
+}
+
+/// 戻した後の保存の結果を、画面向けの型にする
+fn after_restore_save_data(save: &core_ops::AfterRestoreSave) -> AfterRestoreSaveKind {
+    match save {
+        core_ops::AfterRestoreSave::NotRequested => AfterRestoreSaveKind::NotRequested,
+        core_ops::AfterRestoreSave::Saved { .. } => AfterRestoreSaveKind::Saved,
+        core_ops::AfterRestoreSave::NothingToSave => AfterRestoreSaveKind::NothingToSave,
+        core_ops::AfterRestoreSave::NeedsSizeDecision => AfterRestoreSaveKind::NeedsSizeDecision,
+        core_ops::AfterRestoreSave::Failed => AfterRestoreSaveKind::Failed,
+    }
+}
+
+/// ジャーナルに残す、戻した後の保存の要約（種類名だけ）
+fn after_restore_detail(base: &str, save: &core_ops::AfterRestoreSave) -> String {
+    match save {
+        core_ops::AfterRestoreSave::NotRequested | core_ops::AfterRestoreSave::NothingToSave => {
+            base.to_string()
+        }
+        core_ops::AfterRestoreSave::Saved { .. } => format!("{base}-and-saved"),
+        core_ops::AfterRestoreSave::NeedsSizeDecision => format!("{base}-save-needs-size-decision"),
+        core_ops::AfterRestoreSave::Failed => format!("{base}-save-failed"),
+    }
+}
+
 /// 元に戻す実行。
+///
+/// 設定「元に戻した後に自動で保存」がオンで `save_memo`（画面が渡す文言。例:「10/4 18:02 の状態に
+/// 戻しました」）があれば、戻した内容を続けて保存する（既存の保存と同じ復元点・サイズ検査を通り、
+/// 戻す操作と同じ直列キューの 1 回の実行の中で行う）。保存で大きいファイルの確認が必要なときは、
+/// 戻す操作だけが成功し、保存はしない（画面の通常の保存の流れに任せる）。
 #[tauri::command]
 #[specta::specta]
 async fn restore(
@@ -1305,10 +1522,13 @@ async fn restore(
     state: tauri::State<'_, AppState>,
     id: String,
     commit: String,
+    save_memo: Option<String>,
 ) -> Result<RestoreAllResult, AppError> {
     let ctx = OpContext::new(app, &state);
     let target = commit.clone();
-    let undo_token = run_op(
+    let limits = size_limits_for(&ctx.store, &id);
+    let memo = save_memo_after_restore(&ctx.store, &id, save_memo);
+    let done = run_op(
         &ctx,
         &id,
         OpSpec {
@@ -1317,14 +1537,21 @@ async fn restore(
             target: Some(target),
             data_is_safe: "ファイルは変更されていません",
         },
-        move |ops, path| ops.restore(path, &commit),
-        |_| OpSummary {
-            detail: "restored".to_string(),
+        move |ops, path| ops.restore_and_save(path, &commit, memo.as_deref(), limits),
+        |d| OpSummary {
+            detail: after_restore_detail("restored", &d.save),
             quiet: false,
         },
     )
     .await?;
-    Ok(RestoreAllResult { undo_token })
+    // 保存したので、「保存時に自動アップロード」がオンならアップロードが予定される
+    if matches!(done.save, core_ops::AfterRestoreSave::Saved { .. }) {
+        state.scheduler.request_push(&id);
+    }
+    Ok(RestoreAllResult {
+        undo_token: done.undo_ref,
+        save: after_restore_save_data(&done.save),
+    })
 }
 
 /// 現在の競合ファイルを取得。
@@ -1461,10 +1688,13 @@ async fn restore_file(
     id: String,
     commit: String,
     path: String,
+    save_memo: Option<String>,
 ) -> Result<RestoreFileResult, AppError> {
     let ctx = OpContext::new(app, &state);
     let target = format!("{commit}:{path}");
-    let outcome = run_op(
+    let limits = size_limits_for(&ctx.store, &id);
+    let memo = save_memo_after_restore(&ctx.store, &id, save_memo);
+    let done = run_op(
         &ctx,
         &id,
         OpSpec {
@@ -1473,31 +1703,42 @@ async fn restore_file(
             target: Some(target),
             data_is_safe: "ファイルは変更されていません",
         },
-        move |ops, project_path| ops.restore_file(project_path, &commit, &path),
-        |o| OpSummary {
-            detail: match o {
+        move |ops, project_path| {
+            ops.restore_file_and_save(project_path, &commit, &path, memo.as_deref(), limits)
+        },
+        |d| {
+            let base = match d.outcome {
                 core_ops::RestoreFileOutcome::Restored { .. } => "restored",
                 core_ops::RestoreFileOutcome::NotInThatPoint => "not-in-that-point",
                 core_ops::RestoreFileOutcome::IgnoredFileInTheWay => "ignored-file-in-the-way",
+            };
+            OpSummary {
+                detail: after_restore_detail(base, &d.save),
+                quiet: false,
             }
-            .to_string(),
-            quiet: false,
         },
     )
     .await?;
+    if matches!(done.save, core_ops::AfterRestoreSave::Saved { .. }) {
+        state.scheduler.request_push(&id);
+    }
+    let save = after_restore_save_data(&done.save);
 
-    Ok(match outcome {
+    Ok(match done.outcome {
         core_ops::RestoreFileOutcome::Restored { undo_ref } => RestoreFileResult {
             outcome: RestoreFileResultKind::Restored,
             undo_token: undo_ref,
+            save,
         },
         core_ops::RestoreFileOutcome::NotInThatPoint => RestoreFileResult {
             outcome: RestoreFileResultKind::NotInThatPoint,
             undo_token: None,
+            save,
         },
         core_ops::RestoreFileOutcome::IgnoredFileInTheWay => RestoreFileResult {
             outcome: RestoreFileResultKind::IgnoredFileInTheWay,
             undo_token: None,
+            save,
         },
     })
 }
@@ -1622,7 +1863,16 @@ async fn abort_merge(
     Ok(())
 }
 
-/// 外部のファイルをプロジェクトへコピーする（上書きせず、保存もしない）。
+/// 外部のファイル・フォルダをプロジェクトへコピーする（保存はしない。設計書 4.7）。
+///
+/// - `dest_subdir` が空ならプロジェクト直下。ツリー表示のフォルダ行へのドロップでは、そのフォルダ
+/// - 同名があるときは `on_conflict` に従う。`ask`（既定）で同名があれば、**何も書かずに**
+///   `needs_decision`（確認が必要な同名のファイル）を返す。画面が選択を `decisions` に添えて呼び直す
+/// - 置き換えは、復元点に既存の内容が入っていることを確かめられたときだけ行う（できなければ別名で残す）。
+///   置き換えたときは `undo_token`（`undo_restore` に渡すと、置き換え前の内容に戻る）を返す
+/// - フォルダは中のファイルを再帰的にコピーする（上限: ファイル 1,000 件・階層 20。超えるときは
+///   何もコピーせずエラー）。リンクはたどらず、隠しファイルと OS の一時ファイルは飛ばす
+/// - 警告の閾値は設定 `large_file_warn_mb`（プロジェクト別の上書きを含む）。100MB 超は固定で追加しない
 #[tauri::command]
 #[specta::specta]
 async fn add_files(
@@ -1631,12 +1881,48 @@ async fn add_files(
     id: String,
     source_paths: Vec<PathBuf>,
     dest_subdir: String,
+    on_conflict: AddConflictPolicyData,
+    decisions: Vec<AddConflictDecisionData>,
 ) -> Result<AddFilesResult, AppError> {
     let ctx = OpContext::new(app, &state);
-    let target = if dest_subdir.is_empty() {
+    // ジャーナルに残す対象は、パスだけ（追加先と、置き換えを選ばれたファイルの追加先のパス）
+    let replaced_paths: Vec<&str> = decisions
+        .iter()
+        .filter(|d| matches!(d.action, AddConflictActionData::Replace))
+        .map(|d| d.path.as_str())
+        .collect();
+    let mut target = dest_subdir.clone();
+    if matches!(on_conflict, AddConflictPolicyData::Replace) {
+        target.push_str(" [replace-all]");
+    }
+    if !replaced_paths.is_empty() {
+        target.push_str(&format!(" [replace: {}]", replaced_paths.join(", ")));
+    }
+    let target = if target.is_empty() {
         None
     } else {
-        Some(dest_subdir.clone())
+        Some(target)
+    };
+    let request = core_ops::AddFilesRequest {
+        sources: source_paths,
+        dest_subdir,
+        on_conflict: match on_conflict {
+            AddConflictPolicyData::Ask => core_ops::AddConflictPolicy::Ask,
+            AddConflictPolicyData::KeepBoth => core_ops::AddConflictPolicy::KeepBoth,
+            AddConflictPolicyData::Replace => core_ops::AddConflictPolicy::Replace,
+        },
+        decisions: decisions
+            .into_iter()
+            .map(|d| core_ops::AddConflictDecision {
+                path: d.path,
+                action: match d.action {
+                    AddConflictActionData::Replace => core_ops::AddConflictAction::Replace,
+                    AddConflictActionData::KeepBoth => core_ops::AddConflictAction::KeepBoth,
+                    AddConflictActionData::Skip => core_ops::AddConflictAction::Skip,
+                },
+            })
+            .collect(),
+        limits: size_limits_for(&ctx.store, &id),
     };
     let outcome = run_op(
         &ctx,
@@ -1647,14 +1933,17 @@ async fn add_files(
             target,
             data_is_safe: "元のファイルは変更されていません",
         },
-        move |ops, path| ops.add_files(path, &source_paths, &dest_subdir),
+        move |ops, path| ops.add_files(path, &request),
         |o| OpSummary {
-            detail: if o.added.is_empty() {
-                "nothing-added"
+            detail: if !o.needs_decision.is_empty() {
+                "needs-decision".to_string()
+            } else if o.added.is_empty() {
+                "nothing-added".to_string()
+            } else if o.added.iter().any(|f| f.replaced) {
+                "added-and-replaced".to_string()
             } else {
-                "added"
-            }
-            .to_string(),
+                "added".to_string()
+            },
             quiet: false,
         },
     )
@@ -1668,6 +1957,8 @@ async fn add_files(
                 path: f.path,
                 renamed: f.renamed,
                 large: f.large,
+                replaced: f.replaced,
+                replace_refused: f.replace_refused,
             })
             .collect(),
         rejected: outcome
@@ -1680,6 +1971,7 @@ async fn add_files(
                     }
                     core_ops::AddRejectReason::NotAFile => (AddRejectKind::NotAFile, None),
                     core_ops::AddRejectReason::Unreadable => (AddRejectKind::Unreadable, None),
+                    core_ops::AddRejectReason::InUse => (AddRejectKind::InUse, None),
                 };
                 RejectedFileItem {
                     name: r.name,
@@ -1688,6 +1980,27 @@ async fn add_files(
                 }
             })
             .collect(),
+        skipped: outcome
+            .skipped
+            .into_iter()
+            .map(|s| SkippedFileItem {
+                name: s.name,
+                reason: match s.reason {
+                    core_ops::SkipReason::Link => SkipKind::Link,
+                    core_ops::SkipReason::Hidden => SkipKind::Hidden,
+                    core_ops::SkipReason::OsTemp => SkipKind::OsTemp,
+                },
+            })
+            .collect(),
+        needs_decision: outcome
+            .needs_decision
+            .into_iter()
+            .map(|c| NameConflictItem {
+                path: c.path,
+                can_replace: c.can_replace,
+            })
+            .collect(),
+        undo_token: outcome.undo_ref,
     })
 }
 
@@ -2355,12 +2668,30 @@ pub enum RestoreFileResultKind {
     IgnoredFileInTheWay,
 }
 
+/// 元に戻した後の保存の結果（設計書 4.2 手順 5）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AfterRestoreSaveKind {
+    /// 保存しなかった（設定がオフ、またはメモが渡されなかった）
+    NotRequested,
+    /// 保存した
+    Saved,
+    /// 保存する変更が無かった
+    NothingToSave,
+    /// 大きいファイルの確認が必要なため保存しなかった（戻す操作は成功。画面の通常の保存の流れに任せる）
+    NeedsSizeDecision,
+    /// 保存に失敗した（戻す操作は成功。未保存の変更として残っている）
+    Failed,
+}
+
 /// 1 ファイルを戻した結果
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RestoreFileResult {
     pub outcome: RestoreFileResultKind,
     /// 取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）。戻していなければ null
     pub undo_token: Option<String>,
+    /// 戻した後の保存の結果
+    pub save: AfterRestoreSaveKind,
 }
 
 /// 全体を元に戻した結果
@@ -2368,6 +2699,8 @@ pub struct RestoreFileResult {
 pub struct RestoreAllResult {
     /// 取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）
     pub undo_token: Option<String>,
+    /// 戻した後の保存の結果
+    pub save: AfterRestoreSaveKind,
 }
 
 /// 保存時点で変更されたファイルの種類
@@ -2396,8 +2729,12 @@ pub struct AddedFileItem {
     pub path: String,
     /// 同名があったため別名にした
     pub renamed: bool,
-    /// 大きいファイル（50MB 以上）。アップロードに時間がかかることを知らせる
+    /// 大きいファイル（警告閾値 `large_file_warn_mb` を超える）。アップロードに時間がかかることを知らせる
     pub large: bool,
+    /// 同名の既存ファイルを置き換えた（置き換え前の内容は復元点に残っている）
+    pub replaced: bool,
+    /// 置き換えを選ばれたが、安全に置き換えられなかったため別名にした
+    pub replace_refused: bool,
 }
 
 /// 追加しなかった理由
@@ -2406,20 +2743,81 @@ pub struct AddedFileItem {
 pub enum AddRejectKind {
     /// 100MB を超えるため追加できない
     TooLarge,
-    /// フォルダなど、ファイルではない
+    /// 通常のファイルではない
     NotAFile,
     /// 読み取れない、またはコピーに失敗した
     Unreadable,
+    /// 置き換え先のファイルが他のアプリで使用中
+    InUse,
 }
 
 /// 追加しなかったファイル
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RejectedFileItem {
-    /// 元のファイル名
+    /// 元のファイル名。フォルダの中のものは、ドロップしたフォルダからの相対パス
     pub name: String,
     pub reason: AddRejectKind,
     /// `too-large` のときの元のサイズ（バイト）
     pub size: Option<f64>,
+}
+
+/// 飛ばした理由
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkipKind {
+    /// リンク（シンボリックリンク・ジャンクション）。たどらない
+    Link,
+    /// 隠しファイル
+    Hidden,
+    /// OS・Office の一時ファイル
+    OsTemp,
+}
+
+/// 飛ばしたもの
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SkippedFileItem {
+    /// ドロップしたものからの相対パス
+    pub name: String,
+    pub reason: SkipKind,
+}
+
+/// 同名のファイルがあるときの方針
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AddConflictPolicyData {
+    /// 同名があれば、何も書かずに確認が必要な一覧を返す
+    Ask,
+    /// 同名があれば、別名にして両方残す
+    KeepBoth,
+    /// 同名があれば置き換える（復元点に控えを残せないものは別名にする）
+    Replace,
+}
+
+/// 同名のファイル 1 件についての選択
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AddConflictActionData {
+    Replace,
+    KeepBoth,
+    /// このファイルは追加しない
+    Skip,
+}
+
+/// 追加先のパスごとの選択（方針より優先する）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct AddConflictDecisionData {
+    /// 追加先のパス（プロジェクトからの相対パス）
+    pub path: String,
+    pub action: AddConflictActionData,
+}
+
+/// 確認が必要な同名のファイル
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct NameConflictItem {
+    /// 追加先のパス（プロジェクトからの相対パス）
+    pub path: String,
+    /// 置き換えを選べるか。復元点に控えを残せない大きさのものは false（別名のみ）
+    pub can_replace: bool,
 }
 
 /// ファイル追加の結果
@@ -2427,6 +2825,12 @@ pub struct RejectedFileItem {
 pub struct AddFilesResult {
     pub added: Vec<AddedFileItem>,
     pub rejected: Vec<RejectedFileItem>,
+    /// リンク・隠しファイル・一時ファイルとして飛ばしたもの
+    pub skipped: Vec<SkippedFileItem>,
+    /// 空でないとき、同名のファイルがあって何も書かずに返した。選択を添えて呼び直す
+    pub needs_decision: Vec<NameConflictItem>,
+    /// 置き換えたときの取り消し用の復元点（`undo_restore` に渡す）。置き換えが無ければ null
+    pub undo_token: Option<String>,
 }
 
 // ========== Tauri Setup ==========
@@ -2460,6 +2864,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             list_project_tree,
             abort_merge,
             add_files,
+            check_project_folder,
             relocate_project,
             list_point_changes,
             open_file_at,

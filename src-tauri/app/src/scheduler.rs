@@ -90,6 +90,25 @@ impl SchedulerHandle {
         self.wake();
     }
 
+    /// 登録を外したプロジェクトの、取り込み・アップロード・自動保存の実行計画と監視の印を直ちに捨てる。
+    /// ファイル監視そのものは、巡回で登録に無いと分かった時点で止まる（`WatchManager::sync`）。
+    /// ここでも巡回を促すので、外した直後に止まる。
+    pub fn forget(&self, id: &str) {
+        if let Ok(mut map) = self.inner.planners.lock() {
+            map.remove(id);
+        }
+        if let Ok(mut map) = self.inner.snapshot_planners.lock() {
+            map.remove(id);
+        }
+        if let Ok(mut set) = self.inner.watching.lock() {
+            set.remove(id);
+        }
+        if let Ok(mut set) = self.inner.watch_failed.lock() {
+            set.remove(id);
+        }
+        self.wake();
+    }
+
     fn with_planner(&self, id: &str, f: impl FnOnce(&mut SyncPlanner, u64)) {
         let now = self.now();
         if let Ok(mut map) = self.inner.planners.lock() {
@@ -187,7 +206,7 @@ impl SchedulerHandle {
             return;
         };
         let wanted: HashSet<&str> = targets.iter().map(|(id, _)| id.as_str()).collect();
-        map.retain(|id, _| wanted.contains(id.as_str()));
+        core_watch::retain_registered(&mut map, &wanted);
         for (id, policy) in targets {
             match map.get_mut(id) {
                 Some(planner) => planner.set_policy(*policy),
@@ -229,7 +248,7 @@ impl SchedulerHandle {
             return;
         };
         let wanted: HashSet<&str> = targets.iter().map(|(p, _)| p.id.as_str()).collect();
-        map.retain(|id, _| wanted.contains(id.as_str()));
+        core_watch::retain_registered(&mut map, &wanted);
         for (project, policy) in targets {
             match map.get_mut(&project.id) {
                 Some(planner) => planner.set_policy(*policy, now),

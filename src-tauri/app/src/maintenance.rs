@@ -2,6 +2,10 @@
 //
 // - 復元点（`refs/hikae/snapshots/` と `refs/hikae/backup/`）の間引き（設計書 6.2）
 // - 保持期間を過ぎた操作ジャーナルの整理（設計書 6.3、7章の保持期間）
+// - 既存のプロジェクトへの、OS・Office の一時ファイルの除外設定（`.git/info/exclude`）の適用。
+//   管理する部分がまだ無いプロジェクトに 1 回だけ。変更の前に復元点を作り、作業フォルダのファイルは
+//   変更しない（設計書 13.1）。`run_op` ではなく `run_exclusive` と結果の記録だけを使う
+//   （実行中にアプリが終了しても、中断された操作（E15）として利用者に案内しないため）
 //
 // 実行は `run_exclusive`（同一プロジェクトへの状態変更と同じ直列キュー）を通す。
 // 間引きは `core-safety` の `thin_restore_points`（`update-ref -d` で `refs/hikae/` 配下の
@@ -9,8 +13,12 @@
 
 use std::collections::HashSet;
 
+use core_ops::{ExcludeOutcome, Ops};
 use core_safety::{thin_restore_points, ThinPolicy, BACKUP_RETENTION_DAYS};
-use core_store::{journal_cutoff_from_now, AppSettings, Project};
+use core_store::{
+    journal_cutoff_from_now, now_rfc3339, AppSettings, JournalOutcome, JournalTrigger,
+    NewJournalEntry, Project,
+};
 use tauri_specta::Event;
 use time::OffsetDateTime;
 
@@ -39,6 +47,7 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
     let id = project.id.clone();
     let path = project.path.clone();
     let snapshot_days = settings.snapshot_retention_days;
+    let signing = ctx.signing_user();
 
     let outcome = run_exclusive(
         ctx.locks.clone(),
@@ -46,6 +55,38 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
         "ファイルは安全です",
         move || {
             let mut deleted = 0usize;
+
+            // 順番を待つあいだに「一覧から外す」が実行されていたら、何もしない
+            let registered = store
+                .lock()
+                .ok()
+                .is_some_and(|g| g.get_project(&id).is_ok());
+            if !registered {
+                return Ok(0);
+            }
+
+            // 一時ファイルの除外設定（管理する部分がまだ無いプロジェクトに 1 回だけ）
+            if path.is_dir() {
+                let ops = Ops::new(crate::git_runner())
+                    .with_signing_user(signing.as_ref().map(|(uid, login)| (*uid, login.as_str())));
+                let started_at = now_rfc3339();
+                if let Ok(ExcludeOutcome::Written) = ops.apply_default_excludes(&path, true) {
+                    if let Ok(guard) = store.lock() {
+                        let _ = guard.record_journal(&NewJournalEntry {
+                            project_id: id.clone(),
+                            operation: "set-excludes".to_string(),
+                            trigger: JournalTrigger::Auto,
+                            started_at,
+                            finished_at: now_rfc3339(),
+                            outcome: JournalOutcome::Success,
+                            detail: Some("applied".to_string()),
+                            snapshot_ref: None,
+                            backup_ref: None,
+                            target: None,
+                        });
+                    }
+                }
+            }
 
             // 利用者の手動の操作に紐づく復元点は間引かない。保護対象を読めないときは間引きを見送る
             let protected: Option<HashSet<String>> = store

@@ -1107,6 +1107,25 @@ fn test_22_list_point_changes_reports_kinds() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// 同名は別名にする従来の呼び方（確認なし）
+fn add_simple(
+    ops: &Ops,
+    repo: &std::path::Path,
+    sources: &[std::path::PathBuf],
+    dest: &str,
+) -> Result<core_ops::AddFilesOutcome, core_ops::OpsError> {
+    ops.add_files(
+        repo,
+        &core_ops::AddFilesRequest {
+            sources: sources.to_vec(),
+            dest_subdir: dest.to_string(),
+            on_conflict: core_ops::AddConflictPolicy::KeepBoth,
+            decisions: Vec::new(),
+            limits: core_ops::SizeLimits::default(),
+        },
+    )
+}
+
 #[test]
 fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1121,12 +1140,12 @@ fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
     let head_before = get_head_commit(repo);
 
     // 直下へ追加。2回目は別名になり、1回目のファイルは上書きされない
-    let first = ops.add_files(repo, std::slice::from_ref(&src), "")?;
+    let first = add_simple(&ops, repo, std::slice::from_ref(&src), "")?;
     assert_eq!(first.added.len(), 1);
     assert_eq!(first.added[0].path, "x.txt");
     assert!(!first.added[0].renamed);
     std::fs::write(repo.join("x.txt"), "edited in project")?;
-    let second = ops.add_files(repo, std::slice::from_ref(&src), "")?;
+    let second = add_simple(&ops, repo, std::slice::from_ref(&src), "")?;
     assert_eq!(second.added[0].path, "x (2).txt");
     assert!(second.added[0].renamed);
     assert_eq!(read(repo, "x.txt"), "edited in project");
@@ -1134,7 +1153,7 @@ fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
     assert!(src.exists(), "コピー元は動かさない");
 
     // サブフォルダへ
-    let sub = ops.add_files(repo, std::slice::from_ref(&src), "docs")?;
+    let sub = add_simple(&ops, repo, std::slice::from_ref(&src), "docs")?;
     assert_eq!(sub.added[0].path, "docs/x.txt");
     assert_eq!(read(repo, "docs/x.txt"), "from outside");
 
@@ -1157,17 +1176,14 @@ fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
         "no-such-dir",
     ] {
         assert!(
-            ops.add_files(repo, std::slice::from_ref(&src), bad)
-                .is_err(),
+            add_simple(&ops, repo, std::slice::from_ref(&src), bad).is_err(),
             "{bad:?}"
         );
     }
     // 追加先がファイルの場合も拒否する
-    assert!(ops
-        .add_files(repo, std::slice::from_ref(&src), "x.txt")
-        .is_err());
+    assert!(add_simple(&ops, repo, std::slice::from_ref(&src), "x.txt").is_err());
 
-    // フォルダ・存在しないもの・100MB 超は追加せず理由を返す
+    // 存在しないもの・100MB 超は追加せず理由を返す（フォルダのコピーは tests/add_files.rs）
     let big = src_dir.join("big.bin");
     let f = std::fs::File::create(&big)?;
     f.set_len(core_ops::LARGE_FILE_LIMIT_BYTES + 1)?;
@@ -1178,28 +1194,18 @@ fn test_23_add_files_never_overwrites_and_rejects_bad_destinations(
     let over = src_dir.join("over.bin");
     let f = std::fs::File::create(&over)?;
     f.set_len(core_ops::LARGE_FILE_WARN_BYTES + 1)?;
-    let sources = vec![
-        src_dir.clone(),
-        src_dir.join("missing.txt"),
-        big,
-        warn,
-        over,
-    ];
-    let out = ops.add_files(repo, &sources, "")?;
+    let sources = vec![src_dir.join("missing.txt"), big, warn, over];
+    let out = add_simple(&ops, repo, &sources, "")?;
     assert_eq!(out.added.len(), 2);
     assert_eq!(out.added[0].path, "warn.bin");
     assert!(!out.added[0].large, "ちょうど 50MB は警告しない");
     assert_eq!(out.added[1].path, "over.bin");
     assert!(out.added[1].large, "50MB を 1 バイトでも超えれば警告する");
-    assert_eq!(out.rejected.len(), 3);
+    assert_eq!(out.rejected.len(), 2);
     assert!(out.rejected.iter().any(|r| matches!(
         r.reason,
         core_ops::AddRejectReason::TooLarge { size } if size == core_ops::LARGE_FILE_LIMIT_BYTES + 1
     )));
-    assert!(out
-        .rejected
-        .iter()
-        .any(|r| r.reason == core_ops::AddRejectReason::NotAFile));
     assert!(out
         .rejected
         .iter()
