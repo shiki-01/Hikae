@@ -39,6 +39,8 @@
 		switch (status) {
 			case 'folder_missing':
 				return { variant: 'danger' as const, label: t('badge.folder_missing') };
+			case 'repo_broken':
+				return { variant: 'danger' as const, label: t('badge.repo_broken') };
 			case 'conflict':
 			case 'interrupted':
 				return { variant: 'danger' as const, label: t('badge.danger') };

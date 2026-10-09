@@ -17,6 +17,10 @@ export interface Project {
 	folderMissing: boolean;
 	/** 前回のアプリ終了で途中で止まった操作の名前（`save` / `pull` など）。なければ null */
 	interruptedOperation: string | null;
+	/** 保存の記録の一部が読めなくなっている疑いがある（E10）。true の間、他の操作はしない */
+	repoBroken: boolean;
+	/** 保存のデータが大きくなっている（1GB 超。E09） */
+	repoLarge: boolean;
 	/** ファイル監視が動いている。true の間、変更一覧は定期的に取り直さず、変更の通知で更新する */
 	watching: boolean;
 	/** 最後に自動保存を作った時刻。まだ一度も作っていなければ null */
@@ -174,6 +178,28 @@ export interface RestoreResult {
 
 /** プロジェクトにするには広すぎるフォルダの種類 */
 export type BroadFolderKind = 'home' | 'drive_root' | 'standard_folder' | 'system_folder';
+
+/** フォルダについての注意。登録はできるが、利用者に選んでもらう */
+export type FolderWarning = 'cloud_sync';
+
+/** 選んだフォルダの確認結果 */
+export interface FolderCheck {
+	/** 広すぎるフォルダの種類。問題なければ null（広すぎるときは登録できない） */
+	broad: BroadFolderKind | null;
+	/** 登録はできるが注意が必要なこと（クラウド同期フォルダの上など） */
+	warnings: FolderWarning[];
+}
+
+/** 保存に必要な部品（git）の入手元 */
+export type PartsSource = 'explicit' | 'bundled' | 'path';
+
+/** アプリ全体の健全性（E17）。保存に必要な部品が使えないときは、アプリ全体を止めて案内する */
+export interface AppHealth {
+	partsAvailable: boolean;
+	partsSource: PartsSource;
+	/** 使えない理由。使えるときは null */
+	partsProblem: 'not_found' | 'broken' | null;
+}
 
 export interface FetchResult {
 	mergedCount: number;
@@ -502,8 +528,13 @@ export interface ProjectApi {
 		files: DroppedFile[],
 		options?: AddFilesOptions
 	): Promise<AddFilesOutcome>;
-	/** 選んだフォルダが、プロジェクトにするには広すぎるか（ホーム・ドライブのルート・標準フォルダ・システムフォルダ）。問題なければ null */
-	checkProjectFolder(path: string): Promise<BroadFolderKind | null>;
+	/**
+	 * 選んだフォルダの確認。広すぎるか（ホーム・ドライブのルート・標準フォルダ・システムフォルダ）と、
+	 * 登録はできるが注意が必要なこと（クラウド同期フォルダの上）を返す
+	 */
+	checkProjectFolder(path: string): Promise<FolderCheck>;
+	/** アプリ全体の健全性。保存に必要な部品が使えるか */
+	getAppHealth(): Promise<AppHealth>;
 	openFile(projectId: string, path: string, target: OpenAction): Promise<void>;
 	/** 過去の保存時点の版を、読み取り専用で既定のアプリで開く。現在のファイルは変更しない */
 	openFileAt(projectId: string, savePointId: string, path: string): Promise<void>;

@@ -58,6 +58,7 @@
 	import { flattenHistoryPages } from '#lib/features/history/paging.js';
 	import { useHistory } from '#lib/features/history/queries.js';
 	import { useSettings } from '#lib/features/settings/queries.js';
+	import { AppError } from '#lib/api/errors.js';
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
 	import { reloginSearch } from './relogin';
@@ -72,6 +73,7 @@
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
 	import AutoSaveStatus from './AutoSaveStatus.svelte';
+	import RepoLargeNotice from './RepoLargeNotice.svelte';
 
 	interface Props {
 		projectId: string;
@@ -134,6 +136,14 @@
 	// エラーの案内から保存先の確認へ誘導されたとき（?connect=1）は、接続のダイアログを開く
 	$effect(() => {
 		if (page.url.searchParams.get('connect') === '1') connectOpen = true;
+	});
+	// 保存の記録が読めなくなっている（E10）と分かったら、案内を出して一覧へ戻る。
+	// このプロジェクトに対する操作はバックエンドが行わない
+	$effect(() => {
+		const current = project.data;
+		if (!current?.repoBroken) return;
+		reportError(new AppError('E10', `repo unreadable: ${current.path}`, { name: current.name }));
+		void goto(resolve('/'));
 	});
 	// 大きいファイルのため、取り込み・アップロードを見送った内容
 	let syncSize = $state<SyncSizeRequest | null>(null);
@@ -425,6 +435,16 @@
 		onconnect={() => (connectOpen = true)}
 		onrelogin={() => goto(`${resolve('/welcome')}${reloginSearch(page.url)}`)}
 	/>
+
+	{#if project.data?.repoLarge}
+		<RepoLargeNotice
+			onreview={() => {
+				// 大きいファイルを探せるよう、変更だけでなくすべてのファイルを見せる
+				tab = 'changes';
+				changesView = 'tree';
+			}}
+		/>
+	{/if}
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
 		<div

@@ -3,7 +3,9 @@ import { describeError } from '#lib/features/notifications/error-view.js';
 import {
 	mapAddFilesResult,
 	mapAfterRestoreSave,
+	mapAppHealth,
 	mapBroadFolder,
+	mapFolderCheck,
 	toBackendConflictDecisions,
 	toBackendConflictPolicy,
 	mapDiffResult,
@@ -379,6 +381,8 @@ describe('プロジェクトの変換', () => {
 		is_syncing: false,
 		interrupted_operation: null,
 		folder_missing: false,
+		repo_broken: false,
+		repo_large: false,
 		watching: false,
 		last_auto_snapshot_at: null
 	};
@@ -608,5 +612,59 @@ describe('プロジェクトのファイル一覧の変換', () => {
 			limit: 10_000
 		});
 		expect(tree.files[0].path).toBe('a/b.txt');
+	});
+});
+
+describe('フォルダの確認と健全性の変換', () => {
+	it('フォルダの確認結果を変換する', () => {
+		expect(mapFolderCheck({ broad: null, warnings: [] })).toEqual({ broad: null, warnings: [] });
+		expect(mapFolderCheck({ broad: 'drive-root', warnings: ['cloud-sync'] })).toEqual({
+			broad: 'drive_root',
+			warnings: ['cloud_sync']
+		});
+	});
+
+	it('保存に必要な部品の状態を変換する', () => {
+		expect(mapAppHealth({ git_available: true, git_source: 'bundled', git_problem: null })).toEqual(
+			{ partsAvailable: true, partsSource: 'bundled', partsProblem: null }
+		);
+		expect(
+			mapAppHealth({ git_available: false, git_source: 'path', git_problem: 'not-found' })
+		).toMatchObject({ partsAvailable: false, partsProblem: 'not_found' });
+		expect(
+			mapAppHealth({ git_available: false, git_source: 'explicit', git_problem: 'broken' })
+		).toMatchObject({ partsProblem: 'broken' });
+	});
+
+	it('破損の疑いと容量の注意を、状態から引き継ぐ', () => {
+		const info = {
+			id: 'p',
+			display_name: 'P',
+			path: 'C:\\p',
+			remote_url: null,
+			owner: 'me',
+			last_viewed_at: '2026-10-08T00:00:00Z',
+			folder_missing: false,
+			last_uploaded_at: null,
+			last_saved_at: null
+		};
+		const status = {
+			unsaved_changes: 0,
+			upload_pending: 0,
+			pull_pending: 0,
+			has_conflicts: false,
+			is_syncing: false,
+			interrupted_operation: null,
+			folder_missing: false,
+			repo_broken: true,
+			repo_large: true,
+			watching: false,
+			last_auto_snapshot_at: null
+		};
+		expect(mapProject(info, status)).toMatchObject({ repoBroken: true, repoLarge: true });
+		expect(mapProject(info, { ...status, repo_broken: false, repo_large: false })).toMatchObject({
+			repoBroken: false,
+			repoLarge: false
+		});
 	});
 });

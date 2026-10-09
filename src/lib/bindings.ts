@@ -146,10 +146,18 @@ export const commands = {
 	 */
 	addFiles: (id: string, sourcePaths: string[], destSubdir: string, onConflict: AddConflictPolicyData, decisions: AddConflictDecisionData[]) => typedError<AddFilesResult, AppError>(__TAURI_INVOKE("add_files", { id, sourcePaths, destSubdir, onConflict, decisions })),
 	/**
-	 *  選んだフォルダが広すぎるかを、登録の前に確かめる（フォルダ選択後の注意に使う）。
-	 *  広すぎるときは理由の種類、問題なければ null。読み取りのみ。
+	 *  選んだフォルダを、登録の前に確かめる（フォルダ選択後の注意に使う）。読み取りのみ。
+	 * 
+	 *  - broad: 広すぎるときは理由の種類、問題なければ null（登録は断る）
+	 *  - warnings: 登録はできるが注意が必要なもの。いまは、クラウド同期フォルダ上（cloud-sync）。
+	 *    拒否はしない（続けるかどうかは利用者が選ぶ）
 	 */
-	checkProjectFolder: (path: string) => typedError<"home" | "drive-root" | "standard-folder" | "system-folder" | null, AppError>(__TAURI_INVOKE("check_project_folder", { path })),
+	checkProjectFolder: (path: string) => typedError<FolderCheck, AppError>(__TAURI_INVOKE("check_project_folder", { path })),
+	/**
+	 *  アプリの健全性を返す。git が実行できるかを、リポジトリではない一時フォルダで確かめる（読み取りのみ）。
+	 *  バージョンは取得しない（git の呼び出しは許可リスト経由で、`--version` だけの呼び出しを受け付けないため）。
+	 */
+	appHealth: () => typedError<AppHealth, AppError>(__TAURI_INVOKE("app_health")),
 	/**
 	 *  フォルダが見つからないプロジェクトの登録パスを付け替える。
 	 *  付け替え先が同じプロジェクトと確認できた場合のみ更新し、ファイルは一切変更しない。
@@ -383,6 +391,16 @@ export type AppError = {
 	technical_info: string | null,
 };
 
+/**  アプリ全体の健全性（設計書 5章 E17）。起動直後に画面が確かめる */
+export type AppHealth = {
+	/**  保存に必要な部品（git）が使える */
+	git_available: boolean,
+	/**  使っている（使おうとした）git の入手元 */
+	git_source: GitSourceKind,
+	/**  使えない理由。使えるときは null */
+	git_problem: GitProblem | null,
+};
+
 /**  全体設定（またはプロジェクト別の上書きを反映した、実際に使う設定） */
 export type AppSettings = {
 	/**  初回設定（ログインと保存先の案内）を完了したか */
@@ -461,7 +479,13 @@ export type AttentionReason =
  *  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。自動の取り込み・
  *  アップロードは、フォルダが戻るまで見送る
  */
-"folder-missing";
+"folder-missing" | 
+/**  保存のデータが 1GB を超えた（E09）。自動では何も削除しない */
+"repo-large" | 
+/**  リポジトリの記録が読めなくなっている疑いがある（E10）。自動の取り込み・アップロードは見送る */
+"repo-broken" | 
+/**  取り込む側に、この PC では作れないファイル名があるため、自動の取り込みを見送った（E18） */
+"unsupported-file-names";
 
 /**  広すぎるフォルダの種類 */
 export type BroadFolderKind = "home" | "drive-root" | "standard-folder" | "system-folder";
@@ -580,8 +604,37 @@ export type FilesChanged = {
 	project_id: string,
 };
 
+/**  フォルダの確認結果 */
+export type FolderCheck = {
+	/**  広すぎるフォルダの種類。問題なければ null */
+	broad: BroadFolderKind | null,
+	/**  登録はできるが注意が必要なこと */
+	warnings: FolderWarning[],
+};
+
+/**  フォルダについての注意 */
+export type FolderWarning = 
+/**  クラウド同期ソフト（OneDrive・iCloud Drive・Dropbox・Google Drive など）の対象フォルダ */
+"cloud-sync";
+
 /**  git 実行ファイルの種類 */
 export type GitExecutable = "bundled" | "system";
+
+/**  git が使えない理由 */
+export type GitProblem = 
+/**  実行ファイルが見つからない */
+"not-found" | 
+/**  実行ファイルはあるが、起動できない・応答がおかしい */
+"broken";
+
+/**  アプリが使う git の入手元 */
+export type GitSourceKind = 
+/**  環境変数 HIKAE_GIT_PATH で指定された */
+"explicit" | 
+/**  アプリに同梱 */
+"bundled" | 
+/**  PC の PATH 上 */
+"path";
 
 /**  履歴アイテム */
 export type HistoryItem = {
@@ -1131,6 +1184,10 @@ export type SyncStatus = {
 	interrupted_operation: string | null,
 	/**  登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない */
 	folder_missing: boolean,
+	/**  リポジトリの記録が読めなくなっている疑いがある（E10）。true のとき他の git は実行していない */
+	repo_broken: boolean,
+	/**  保存のデータが大きくなっている（1GB 超。E09） */
+	repo_large: boolean,
 	/**  ファイル監視が動いている。true の間、UI は変更一覧の定期的な取り直しをやめる（変更は `files_changed` で届く） */
 	watching: boolean,
 	/**  最後に自動保存を作った時刻（RFC3339）。まだ一度も作っていなければ null */

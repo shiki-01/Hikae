@@ -58,6 +58,8 @@ const BACKEND_ACTIONS: Record<string, Exclude<PrimaryKind, 'close'>> = {
 	github_forbidden: 'copy',
 	// 一時的な失敗: 元の操作をもう一度行う
 	file_in_use: 'retry',
+	// 別のアプリが同じプロジェクトを操作中（E14）: 終わってからもう一度行う
+	index_locked: 'retry',
 	git_failed: 'retry',
 	git_timeout: 'retry',
 	io_error: 'retry',

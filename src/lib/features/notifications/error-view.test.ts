@@ -155,9 +155,21 @@ describe('バックエンドのエラーコードによる文言', () => {
 			'trash_failed',
 			'add_too_many_files',
 			'add_folder_too_deep',
-			'project_folder_too_broad'
+			'project_folder_too_broad',
+			'git_unavailable',
+			'disk_full',
+			'index_locked',
+			'index_lock_stale',
+			'unsupported_file_names'
 		];
-		const params = { count: 1, file: 'a.txt', name: 'x/y', operation: 'pull', limit: 1000 };
+		const params = {
+			count: 1,
+			file: 'a.txt',
+			name: 'x/y',
+			operation: 'pull',
+			limit: 1000,
+			lock: '.git/index.lock'
+		};
 		for (const code of codes) {
 			const resolved = resolveBackendMessage({
 				code,
@@ -221,6 +233,37 @@ describe('バックエンドのコードによる次の行動ボタン', () => {
 			expect(noRetry.primaryKind, code).toBe('close');
 			expect(noRetry.primaryLabel, code).toBe(t('error.close'));
 		}
+	});
+
+	it('別のアプリが操作中のとき（E14）は「もう一度」、容量不足・取り込めない名前・部品の欠落は閉じるだけ', () => {
+		expect(view('index_locked').primaryKind).toBe('retry');
+		expect(view('index_locked', { retry: false, guide: false }).primaryKind).toBe('close');
+		// 古いロックは待っても消えないため、再実行を促さない（案内の通りに対応してもらう）
+		for (const code of [
+			'index_lock_stale',
+			'disk_full',
+			'unsupported_file_names',
+			'git_unavailable'
+		]) {
+			const result = view(code);
+			expect(result.primaryKind, code).toBe('close');
+			expect(result.autoRecovering, code).toBe(false);
+		}
+	});
+
+	it('取り込めない名前の文言に、件数と最初のファイル名が入る', () => {
+		const result = describeError(
+			mapError({
+				...raw,
+				code: 'unsupported_file_names',
+				params: [
+					['file', 'Aux.txt'],
+					['count', '3']
+				]
+			})
+		);
+		expect(result.title).toContain('Aux.txt');
+		expect(result.title).toContain('3');
 	});
 
 	it('保存先に関わるエラーは、行き先がある場合だけ誘導のボタンになる', () => {

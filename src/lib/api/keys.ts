@@ -1,5 +1,7 @@
 export const keys = {
 	session: ['session'] as const,
+	/** アプリ全体の健全性（保存に必要な部品が使えるか） */
+	appHealth: ['app-health'] as const,
 	projects: ['projects'] as const,
 	project: (id: string) => ['project', id] as const,
 	changes: (id: string) => ['changes', id] as const,

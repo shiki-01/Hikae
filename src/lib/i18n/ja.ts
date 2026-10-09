@@ -374,6 +374,27 @@ const messages = {
 	'add_project.error_folder': 'フォルダを選んでください',
 	'add_project.error_folder_too_broad':
 		'このフォルダは範囲が広すぎます。作業用のフォルダを選んでください',
+	'cloud_sync.title': '同期ソフトの対象のフォルダです',
+	'cloud_sync.message':
+		'このフォルダは同期ソフトの対象です。保存の履歴が壊れる原因になることがあります。同期の対象外のフォルダをおすすめします。',
+	'cloud_sync.keep': 'このまま追加する',
+	'cloud_sync.change': '別のフォルダを選ぶ',
+	'cloud_sync.kept': '同期ソフトの対象のまま追加します。',
+	'repo_large.message': '保存の容量が大きくなっています。大きいファイルを確認してください。',
+	'repo_large.detail':
+		'このプロジェクトの保存データが 1GB を超えました。GitHub では大きすぎるプロジェクトの扱いが制限される場合があります。ファイルは削除していません。',
+	'repo_large.review': '大きいファイルを確認',
+	'app_health.title.not_found': '保存に必要な部品が見つかりません',
+	'app_health.title.broken': '保存に必要な部品を起動できません',
+	'app_health.safe': 'ファイルと履歴はこの PC に残っています。',
+	'app_health.next': 'アプリを再インストールしてください。',
+	'app_health.retry': 'もう一度確認する',
+	'app_health.checking': '確認しています…',
+	'app_health.detail': '詳しい情報',
+	'app_health.source': '部品の場所: {source}',
+	'app_health.source_bundled': 'アプリに同梱',
+	'app_health.source_path': 'この PC にあるもの',
+	'app_health.source_explicit': '指定された場所',
 	'add_project.error_remote': '取得するプロジェクトを選んでください',
 	'add_project.error_name': 'プロジェクト名を入力してください',
 	'add_project.error_name_chars': '名前に使えない文字が含まれています',
@@ -426,6 +447,7 @@ const messages = {
 	'badge.sync_pending': 'クラウドと差あり',
 	'badge.danger': '要対応',
 	'badge.folder_missing': 'フォルダが見つかりません',
+	'badge.repo_broken': '記録を読めません',
 
 	'account.title': 'GitHub アカウント',
 	'account.logged_in_as': '{name} としてログインしています',
@@ -582,8 +604,9 @@ const messages = {
 	'error.E09.message': 'GitHub では大きすぎるプロジェクトの扱いが制限される場合があります。',
 	'error.E09.button': '大きいファイルを確認',
 	'error.E10.title': 'このプロジェクトの記録の一部が読めなくなっています',
-	'error.E10.message': 'クラウドの控えから復旧できます。いまのファイルは別の場所に退避します。',
-	'error.E10.button': '復旧する',
+	'error.E10.message':
+		'ファイルはこの PC に残っています。GitHub に保存済みの内容は、一覧から外したあと「GitHub から取得」で取得し直せます。',
+	'error.E10.button': '閉じる',
 	'error.E11.title': '「{name}」のフォルダが見つかりません',
 	'error.E11.message':
 		'移動または名前を変更しましたか。プロジェクトの記録はクラウドに残っています。',
@@ -608,9 +631,10 @@ const messages = {
 	'error.E16.message':
 		'GitHub 上で削除または名前変更された可能性があります。この PC のファイルは無事です。',
 	'error.E16.button': '新しく作り直す',
-	'error.E17.title': 'アプリの構成ファイルが不足しています',
-	'error.E17.message': '再インストールしてください。ファイルは変更されていません。',
-	'error.E17.button': 'ダウンロードページ',
+	'error.E17.title': '保存に必要な部品が見つかりません',
+	'error.E17.message':
+		'アプリを再インストールしてください。ファイルと履歴はこの PC に残っています。',
+	'error.E17.button': '閉じる',
 	'error.E18.title': '「{name}」は Windows では扱えない名前のため、取り込めません',
 	'error.E18.message': '別の PC で作られたファイルです。この PC のファイルは変更されていません。',
 	'error.E18.button': '詳細',
@@ -675,6 +699,25 @@ const messages = {
 	'errcode.add_folder_too_deep.what': 'フォルダの階層が深すぎます（上限 {limit} 階層）',
 	'errcode.add_folder_too_deep.safe': '何もコピーしていません。元のファイルも変更されていません。',
 	'errcode.add_folder_too_deep.next': 'フォルダを小さく分けてから、もう一度追加してください。',
+	'errcode.git_unavailable.what': '保存に必要な部品が見つかりません',
+	'errcode.git_unavailable.safe': 'ファイルと履歴はこの PC に残っています。',
+	'errcode.git_unavailable.next': 'アプリを再インストールしてください。',
+	'errcode.disk_full.what': 'PC の空き容量が足りないため、操作を完了できませんでした',
+	'errcode.disk_full.safe': '元のファイルは失われていません。',
+	'errcode.disk_full.next':
+		'不要なファイルを削除して空き容量を確保してから、もう一度お試しください。',
+	'errcode.index_locked.what': '別のアプリがこのプロジェクトを操作中です',
+	'errcode.index_locked.safe': 'ファイルと履歴は無事です。',
+	'errcode.index_locked.next': 'ほかのアプリの操作が終わるまで待ってから、もう一度お試しください。',
+	'errcode.index_lock_stale.what': '前回の操作が途中で終わったままになっています',
+	'errcode.index_lock_stale.safe': 'ファイルと履歴は無事です。',
+	'errcode.index_lock_stale.next':
+		'ほかのアプリでこのプロジェクトを開いていないことを確かめてから、プロジェクトのフォルダにある「{lock}」を削除して、もう一度お試しください。',
+	'errcode.unsupported_file_names.what':
+		'別の PC で作られたファイルのうち、{count} 件（「{file}」など）はこの PC では扱えない名前のため、取り込めませんでした',
+	'errcode.unsupported_file_names.safe': 'この PC のファイルは変更していません。',
+	'errcode.unsupported_file_names.next':
+		'元の PC でファイルの名前を変えて保存し直してから、もう一度お試しください。',
 	'errcode.project_folder_too_broad.what': 'このフォルダは範囲が広すぎます',
 	'errcode.project_folder_too_broad.safe': 'ファイルは変更されていません。',
 	'errcode.project_folder_too_broad.next': '作業用のフォルダを選んでください。',

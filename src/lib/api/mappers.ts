@@ -8,7 +8,10 @@ import type {
 	AfterRestoreSaveKind,
 	AppError as BackendError,
 	AppSettings as BackendSettings,
+	AppHealth as BackendAppHealth,
 	BroadFolderKind as BackendBroadFolderKind,
+	FolderCheck as BackendFolderCheck,
+	FolderWarning as BackendFolderWarning,
 	ChangeFile,
 	ChangeKind,
 	ConflictChoice,
@@ -48,7 +51,10 @@ import type {
 	AddFilesOutcome,
 	AfterRestoreSave,
 	AppSettings,
+	AppHealth,
 	BroadFolderKind,
+	FolderCheck,
+	FolderWarning,
 	Change,
 	ChangeType,
 	Choice,
@@ -188,6 +194,8 @@ export function mapProject(info: ProjectInfo, status: SyncStatus): Project {
 		hasConflict: status.has_conflicts,
 		folderMissing: info.folder_missing || status.folder_missing,
 		interruptedOperation: status.interrupted_operation,
+		repoBroken: status.repo_broken,
+		repoLarge: status.repo_large,
 		watching: status.watching,
 		lastAutoSnapshotAt:
 			status.last_auto_snapshot_at === null ? null : parseDate(status.last_auto_snapshot_at)
@@ -463,6 +471,32 @@ const BROAD_FOLDER_KINDS: Record<BackendBroadFolderKind, BroadFolderKind> = {
 /** 広すぎるフォルダの種類。問題なければ null */
 export function mapBroadFolder(kind: BackendBroadFolderKind | null): BroadFolderKind | null {
 	return kind === null ? null : BROAD_FOLDER_KINDS[kind];
+}
+
+const FOLDER_WARNINGS: Record<BackendFolderWarning, FolderWarning> = {
+	'cloud-sync': 'cloud_sync'
+};
+
+/** フォルダの確認結果 */
+export function mapFolderCheck(check: BackendFolderCheck): FolderCheck {
+	return {
+		broad: mapBroadFolder(check.broad),
+		warnings: check.warnings.map((warning) => FOLDER_WARNINGS[warning])
+	};
+}
+
+/** アプリ全体の健全性 */
+export function mapAppHealth(health: BackendAppHealth): AppHealth {
+	return {
+		partsAvailable: health.git_available,
+		partsSource: health.git_source,
+		partsProblem:
+			health.git_problem === null
+				? null
+				: health.git_problem === 'not-found'
+					? 'not_found'
+					: 'broken'
+	};
 }
 
 /** 保存の結果。大きいファイルがあって保存しなかったときだけ、確認が必要な結果にする。パスは選択として送り返すため、変換しない */

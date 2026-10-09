@@ -4,7 +4,8 @@ import { joinPath } from '#lib/utils/path.js';
 import {
 	mapAddFilesResult,
 	mapAfterRestoreSave,
-	mapBroadFolder,
+	mapAppHealth,
+	mapFolderCheck,
 	mapChange,
 	mapConflict,
 	mapDeviceFlow,
@@ -38,7 +39,8 @@ import type {
 	AddProjectInput,
 	AddProjectResult,
 	AppSettings,
-	BroadFolderKind,
+	AppHealth,
+	FolderCheck,
 	Change,
 	ClonePhase,
 	ConflictFile,
@@ -365,8 +367,12 @@ export const tauriApi: ProjectApi = {
 		return mapAddFilesResult(result);
 	},
 
-	async checkProjectFolder(path: string): Promise<BroadFolderKind | null> {
-		return mapBroadFolder(await unwrap(commands.checkProjectFolder(path)));
+	async checkProjectFolder(path: string): Promise<FolderCheck> {
+		return mapFolderCheck(await unwrap(commands.checkProjectFolder(path)));
+	},
+
+	async getAppHealth(): Promise<AppHealth> {
+		return mapAppHealth(await unwrap(commands.appHealth()));
 	},
 
 	async openFile(projectId: string, path: string, target: OpenAction): Promise<void> {

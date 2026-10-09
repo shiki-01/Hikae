@@ -47,6 +47,11 @@
 			});
 			return;
 		}
+		// 保存の記録が読めなくなっている（E10）プロジェクトは、開かずに案内する
+		if (project.repoBroken) {
+			reportError(new AppError('E10', `repo unreadable: ${project.path}`, { name: project.name }));
+			return;
+		}
 		void goto(`${resolve('/project')}?id=${encodeURIComponent(project.id)}`);
 	}
 </script>

@@ -10,7 +10,9 @@ import type {
 	AddProjectResult,
 	AfterRestoreSave,
 	AppSettings,
-	BroadFolderKind,
+	AppHealth,
+	FolderCheck,
+	FolderWarning,
 	Change,
 	ClonePhase,
 	ConflictFile,
@@ -200,6 +202,8 @@ function createThesis(): ProjectState {
 			fetchPendingCount: 2,
 			hasConflict: false,
 			folderMissing: false,
+			repoBroken: false,
+			repoLarge: false,
 			interruptedOperation: null,
 			watching: false,
 			lastAutoSnapshotAt: ago(7 * MINUTE)
@@ -293,6 +297,8 @@ function createMaterials(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
+			repoBroken: false,
+			repoLarge: false,
 			interruptedOperation: 'pull',
 			watching: false,
 			lastAutoSnapshotAt: null
@@ -333,6 +339,8 @@ function createAlbum(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: true,
+			repoBroken: false,
+			repoLarge: false,
 			interruptedOperation: null,
 			watching: false,
 			lastAutoSnapshotAt: null
@@ -365,6 +373,8 @@ function createLocalNotes(): ProjectState {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
+			repoBroken: false,
+			repoLarge: false,
 			interruptedOperation: null,
 			watching: false,
 			lastAutoSnapshotAt: null
@@ -729,6 +739,8 @@ export const mockApi: ProjectApi = {
 			fetchPendingCount: 0,
 			hasConflict: false,
 			folderMissing: false,
+			repoBroken: false,
+			repoLarge: false,
 			interruptedOperation: null,
 			watching: false,
 			lastAutoSnapshotAt: null
@@ -1197,13 +1209,35 @@ export const mockApi: ProjectApi = {
 		};
 	},
 
-	async checkProjectFolder(path: string): Promise<BroadFolderKind | null> {
+	async checkProjectFolder(path: string): Promise<FolderCheck> {
 		await sleep(40);
 		// 画面確認用の簡易判定（実際の判定はバックエンド）。ドライブのルートとホームフォルダだけ
 		const normalized = path.replaceAll('\\', '/').replace(/\/+$/, '');
-		if (normalized === '' || /^[A-Za-z]:$/.test(normalized)) return 'drive_root';
-		if (/^(C:)?\/(Users|home)\/[^/]+$/i.test(normalized)) return 'home';
-		return null;
+		// 同期フォルダの目印になる名前（OneDrive・Dropbox・iCloud Drive・Google Drive）
+		const synced = /(^|\/)(OneDrive|Dropbox|iCloud ?Drive|Google Drive)(\/| - |-|$)/i.test(
+			normalized
+		);
+		const warnings: FolderWarning[] = synced ? ['cloud_sync'] : [];
+		if (normalized === '' || /^[A-Za-z]:$/.test(normalized))
+			return { broad: 'drive_root', warnings };
+		if (/^(C:)?\/(Users|home)\/[^/]+$/i.test(normalized)) return { broad: 'home', warnings };
+		return { broad: null, warnings };
+	},
+
+	async getAppHealth(): Promise<AppHealth> {
+		await sleep(20);
+		// 画面確認用: localStorage の hikae.mock.parts を "missing" にすると、部品が無い状態になる
+		let missing = false;
+		try {
+			missing = localStorage.getItem('hikae.mock.parts') === 'missing';
+		} catch {
+			// 読めなければ、部品はある状態にする
+		}
+		return {
+			partsAvailable: !missing,
+			partsSource: 'bundled',
+			partsProblem: missing ? 'not_found' : null
+		};
 	},
 
 	async openFile(): Promise<void> {

@@ -99,8 +99,25 @@ describe('モックの元に戻した後の保存', () => {
 
 describe('モックの広すぎるフォルダの確認', () => {
 	it('ドライブのルートとホームフォルダは広すぎ、作業用のフォルダは問題ない', async () => {
-		expect(await mockApi.checkProjectFolder('C:\\')).toBe('drive_root');
-		expect(await mockApi.checkProjectFolder('C:\\Users\\taro')).toBe('home');
-		expect(await mockApi.checkProjectFolder('C:\\Users\\taro\\卒業論文')).toBeNull();
+		expect((await mockApi.checkProjectFolder('C:\\')).broad).toBe('drive_root');
+		expect((await mockApi.checkProjectFolder('C:\\Users\\taro')).broad).toBe('home');
+		const ok = await mockApi.checkProjectFolder('C:\\Users\\taro\\卒業論文');
+		expect(ok.broad).toBeNull();
+		expect(ok.warnings).toEqual([]);
+	});
+
+	it('同期フォルダの配下は、登録できるが注意を返す', async () => {
+		for (const path of [
+			'C:\\Users\\taro\\OneDrive\\卒業論文',
+			'C:\\Users\\taro\\OneDrive - 研究室\\x',
+			'/Users/taro/Dropbox/x',
+			'/Users/taro/iCloud Drive/x'
+		]) {
+			const check = await mockApi.checkProjectFolder(path);
+			expect(check.broad, path).toBeNull();
+			expect(check.warnings, path).toEqual(['cloud_sync']);
+		}
+		const plain = await mockApi.checkProjectFolder('C:\\Users\\taro\\OneDriveBackup\\x');
+		expect(plain.warnings).toEqual([]);
 	});
 });

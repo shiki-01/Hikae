@@ -18,6 +18,8 @@ function project(overrides: Partial<Project> = {}): Project {
 		fetchPendingCount: 0,
 		hasConflict: false,
 		folderMissing: false,
+		repoBroken: false,
+		repoLarge: false,
 		interruptedOperation: null,
 		watching: false,
 		lastAutoSnapshotAt: null,
@@ -28,6 +30,7 @@ function project(overrides: Partial<Project> = {}): Project {
 describe('プロジェクトカードの状態', () => {
 	it('フォルダ不明は他の状態より優先される', () => {
 		expect(cardStatus(project({ folderMissing: true, hasConflict: true }))).toBe('folder_missing');
+		expect(cardStatus(project({ repoBroken: true, hasConflict: true }))).toBe('repo_broken');
 	});
 
 	it('ぶつかり、未保存、取り込み待ち、アップロード待ち、保存済みの順に判定する', () => {
@@ -56,6 +59,7 @@ describe('プロジェクトカードの状態', () => {
 	it('要対応はぶつかりとフォルダ不明', () => {
 		expect(needsAttention(project({ hasConflict: true }))).toBe(true);
 		expect(needsAttention(project({ folderMissing: true }))).toBe(true);
+		expect(needsAttention(project({ repoBroken: true }))).toBe(true);
 		expect(needsAttention(project({ unsavedCount: 3 }))).toBe(false);
 	});
 });
@@ -80,6 +84,7 @@ describe('GitHub への接続の案内', () => {
 
 	it('フォルダが見つからないときは、先にフォルダの対応が必要なので案内しない', () => {
 		expect(needsConnection(project({ remoteConnected: false, folderMissing: true }))).toBe(false);
+		expect(needsConnection(project({ remoteConnected: false, repoBroken: true }))).toBe(false);
 	});
 
 	it('接続していないだけでは要対応にしない（カードの状態も保存済みのまま）', () => {

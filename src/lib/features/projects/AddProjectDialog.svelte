@@ -21,6 +21,7 @@
 	} from './add-project';
 	import { useAddProject } from './mutations';
 	import { useOwners, useRemoteProjects } from './queries';
+	import CloudSyncNotice from './CloudSyncNotice.svelte';
 	import RemoteTargetFields from './RemoteTargetFields.svelte';
 
 	interface Props {
@@ -45,6 +46,9 @@
 	let picking = $state(false);
 	// 選んだ既存のフォルダが、プロジェクトにするには広すぎる（ホーム・ドライブのルートなど）
 	let folderTooBroad = $state(false);
+	// 選んだフォルダが同期ソフトの対象（OneDrive など）。登録はできるが、続けるかを利用者が選ぶ
+	let cloudSynced = $state(false);
+	let cloudSyncAccepted = $state(false);
 	let clonePhase = $state<ClonePhase | null>(null);
 
 	const remote = useRemoteProjects(
@@ -66,6 +70,8 @@
 		clonePhase = null;
 		search = '';
 		folderTooBroad = false;
+		cloudSynced = false;
+		cloudSyncAccepted = false;
 		step = initialMode ? 'form' : 'choose';
 		form = emptyForm(initialMode ?? 'existing', defaultOwner);
 	});
@@ -116,6 +122,8 @@
 		form = emptyForm(mode, defaultOwner);
 		submitted = false;
 		folderTooBroad = false;
+		cloudSynced = false;
+		cloudSyncAccepted = false;
 		step = 'form';
 	}
 
@@ -126,10 +134,13 @@
 			if (folder === null) return;
 			form.folder = folder;
 			if (form.mode === 'existing' && !form.name.trim()) form.name = nameFromFolder(form.folder);
+			const check = await api.checkProjectFolder(folder);
 			// 既存のフォルダはそのものを見守るので、広すぎないかを登録の前に知らせる（バックエンドも拒否する）。
 			// 取得・新規作成は、選んだフォルダの中に新しいフォルダを作るので対象外
-			folderTooBroad =
-				form.mode === 'existing' ? (await api.checkProjectFolder(folder)) !== null : false;
+			folderTooBroad = form.mode === 'existing' ? check.broad !== null : false;
+			// 同期フォルダの上は、どの方法でも注意する（拒否はしない）。フォルダを選び直したら選択も戻す
+			cloudSynced = check.warnings.includes('cloud_sync');
+			cloudSyncAccepted = false;
 		} catch (error) {
 			reportError(error);
 		} finally {
@@ -140,6 +151,8 @@
 	function submit() {
 		submitted = true;
 		if (folderTooBroad || !canSubmit(form, ownerList, cloudAvailable)) return;
+		// 同期フォルダの上のときは、「このまま追加する」が選ばれるまで進めない
+		if (cloudSynced && !cloudSyncAccepted) return;
 		const picked = pickedRemote;
 		clonePhase = null;
 		add.mutate({
@@ -280,6 +293,14 @@
 				</Button>
 			</div>
 
+			{#if cloudSynced && !folderTooBroad}
+				<CloudSyncNotice
+					accepted={cloudSyncAccepted}
+					onkeep={() => (cloudSyncAccepted = true)}
+					onchange={pickFolder}
+				/>
+			{/if}
+
 			{#if form.mode === 'github' && cloneTarget}
 				<p class="m:0 type-small fg:fg-muted overflow-wrap:anywhere">
 					{t('add_project.github_clone_target', { path: cloneTarget })}
@@ -326,7 +347,11 @@
 			<Button variant="secondary" disabled={add.isPending} onclick={onclose}>
 				{t('add_project.cancel')}
 			</Button>
-			<Button loading={add.isPending} onclick={submit}>
+			<Button
+				loading={add.isPending}
+				disabled={cloudSynced && !cloudSyncAccepted && !folderTooBroad}
+				onclick={submit}
+			>
 				{t('add_project.button')}
 			</Button>
 		{:else}
