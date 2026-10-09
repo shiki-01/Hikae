@@ -40,7 +40,10 @@ describe('i18n', () => {
 			'path',
 			'min',
 			'unit',
-			'file'
+			'file',
+			'folder',
+			'limit',
+			'replaced'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

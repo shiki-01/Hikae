@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { Clock, CloudOff, Folder, User, Users } from '@lucide/svelte';
+	import { Clock, CloudOff, Ellipsis, Folder, FolderMinus, User, Users } from '@lucide/svelte';
 	import { t } from '#lib/i18n/index.js';
 	import { formatRelative } from '#lib/i18n/format.js';
 	import type { Project } from '#lib/api/types.js';
 	import Badge from './Badge.svelte';
 	import Button from './Button.svelte';
+	import IconButton from './IconButton.svelte';
+	import Menu from './Menu.svelte';
 	import { cardStatus, needsAttention, needsConnection } from './project-card';
 
 	interface Props {
@@ -13,10 +15,22 @@
 		onclick?: () => void;
 		/** GitHub に接続していないプロジェクトの「接続する」。指定しなければ案内の文言だけを出す */
 		onconnect?: () => void;
+		/** 「一覧から外す」。指定すると、カードの右上に「⋯」のメニューを出す（確認は呼び出し側） */
+		onremove?: () => void;
 		class?: string;
 	}
 
-	let { project, syncing = false, onclick, onconnect, class: className = '' }: Props = $props();
+	let {
+		project,
+		syncing = false,
+		onclick,
+		onconnect,
+		onremove,
+		class: className = ''
+	}: Props = $props();
+
+	let menuOpen = $state(false);
+	let menuHost = $state<HTMLDivElement>();
 
 	const status = $derived(cardStatus(project));
 	const unconnected = $derived(needsConnection(project));
@@ -48,13 +62,15 @@
 </script>
 
 <!-- カード全体はプロジェクトを開くボタン。「接続する」は別のボタンなので、入れ子にならないよう兄弟に置く -->
-<div class={`flex flex-direction:column w:100% r:md bg:bg-raised fg:fg ${frame} ${className}`}>
+<div
+	class={`position:relative flex flex-direction:column w:100% r:md bg:bg-raised fg:fg ${frame} ${className}`}
+>
 	<button
 		type="button"
 		{onclick}
 		class="flex flex-direction:column gap:3 w:100% p:4 r:md bg:transparent fg:fg text-align:left cursor:pointer b:0"
 	>
-		<span class="flex align-items:center gap:2 min-w:0">
+		<span class={`flex align-items:center gap:2 min-w:0 ${onremove ? 'pr:8' : ''}`}>
 			<Folder size={20} class="fg:fg-muted flex-shrink:0" aria-hidden="true" />
 			<span class="type-heading overflow:hidden text-overflow:ellipsis white-space:nowrap">
 				{project.name}
@@ -82,6 +98,25 @@
 			</span>
 		</span>
 	</button>
+	{#if onremove}
+		<div bind:this={menuHost} class="position:absolute top:2 right:2">
+			<IconButton
+				label={t('project_card.menu', { name: project.name })}
+				variant="subtle"
+				onclick={() => (menuOpen = !menuOpen)}
+			>
+				<Ellipsis size={18} aria-hidden="true" />
+			</IconButton>
+			<Menu
+				items={[{ label: t('project_card.remove'), icon: FolderMinus, onselect: onremove }]}
+				open={menuOpen}
+				label={t('project_card.menu', { name: project.name })}
+				align="end"
+				ignore={menuHost}
+				onclose={() => (menuOpen = false)}
+			/>
+		</div>
+	{/if}
 	{#if unconnected}
 		<div class="flex align-items:center justify-content:space-between gap:2 px:4 pb:3">
 			<span class="inline-flex align-items:center gap:1 type-small fg:fg-muted min-w:0">

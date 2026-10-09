@@ -44,6 +44,7 @@ describe('設定項目の定義', () => {
 		expect(keys).toEqual(
 			[
 				'autoPushAfterSave',
+				'autoSaveAfterRestore',
 				'autoSnapshotDelaySecs',
 				'autoSnapshotEnabled',
 				'largeFileWarnMb',

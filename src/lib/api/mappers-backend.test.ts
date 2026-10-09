@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { describeError } from '#lib/features/notifications/error-view.js';
 import {
 	mapAddFilesResult,
+	mapAfterRestoreSave,
+	mapBroadFolder,
+	toBackendConflictDecisions,
+	toBackendConflictPolicy,
 	mapDiffResult,
 	mapDeviceFlow,
 	mapFileImpact,
@@ -144,22 +148,85 @@ describe('1 ファイルを戻す操作の変換', () => {
 });
 
 describe('ファイル追加結果の変換', () => {
+	const empty = { skipped: [], needs_decision: [], undo_token: null };
+
 	it('区切りを / にし、理由を画面側の名前にする', () => {
 		const outcome = mapAddFilesResult({
-			added: [{ path: 'dir\\a (2).txt', renamed: true, large: false }],
+			...empty,
+			added: [
+				{
+					path: 'dir\\a (2).txt',
+					renamed: true,
+					large: false,
+					replaced: false,
+					replace_refused: false
+				}
+			],
 			rejected: [
 				{ name: 'big.mp4', reason: 'too-large', size: 200 },
 				{ name: 'dir', reason: 'not-a-file', size: null },
-				{ name: 'x', reason: 'unreadable', size: null }
+				{ name: 'x', reason: 'unreadable', size: null },
+				{ name: 'y', reason: 'in-use', size: null }
 			]
 		});
-		expect(outcome.added).toEqual([{ path: 'dir/a (2).txt', renamed: true, large: false }]);
+		expect(outcome.added).toEqual([
+			{ path: 'dir/a (2).txt', renamed: true, large: false, replaced: false, replaceRefused: false }
+		]);
 		expect(outcome.rejected.map((f) => f.reason)).toEqual([
 			'too_large',
 			'not_a_file',
-			'unreadable'
+			'unreadable',
+			'in_use'
 		]);
 		expect(outcome.rejected[0].size).toBe(200);
+	});
+
+	it('置き換え・飛ばしたもの・確認が必要な同名・取り消し用の復元点を変換する', () => {
+		const outcome = mapAddFilesResult({
+			added: [
+				{ path: 'a.txt', renamed: false, large: true, replaced: true, replace_refused: false },
+				{ path: 'b (2).psd', renamed: true, large: false, replaced: false, replace_refused: true }
+			],
+			rejected: [],
+			skipped: [
+				{ name: '資料/ショートカット', reason: 'link' },
+				{ name: '資料/.DS_Store', reason: 'os-temp' },
+				{ name: '資料/.hidden', reason: 'hidden' }
+			],
+			needs_decision: [{ path: '資料/c.docx', can_replace: false }],
+			undo_token: 'refs/hikae/snapshots/main/20261009T000000Z'
+		});
+		expect(outcome.added[0]).toMatchObject({ replaced: true, replaceRefused: false });
+		expect(outcome.added[1]).toMatchObject({ replaced: false, replaceRefused: true });
+		expect(outcome.skipped.map((s) => s.reason)).toEqual(['link', 'os_temp', 'hidden']);
+		// 確認の一覧のパスは、選択として送り返すため変換しない
+		expect(outcome.needsDecision).toEqual([{ path: '資料/c.docx', canReplace: false }]);
+		expect(outcome.undoToken).toBe('refs/hikae/snapshots/main/20261009T000000Z');
+	});
+
+	it('同名の方針と選択を、バックエンドの名前にする', () => {
+		expect(toBackendConflictPolicy('ask')).toBe('ask');
+		expect(toBackendConflictPolicy('keep_both')).toBe('keep-both');
+		expect(toBackendConflictPolicy('replace')).toBe('replace');
+		expect(
+			toBackendConflictDecisions([
+				{ path: 'a.txt', action: 'replace' },
+				{ path: '資料/b.txt', action: 'keep_both' },
+				{ path: 'c.txt', action: 'skip' }
+			])
+		).toEqual([
+			{ path: 'a.txt', action: 'replace' },
+			{ path: '資料/b.txt', action: 'keep-both' },
+			{ path: 'c.txt', action: 'skip' }
+		]);
+	});
+
+	it('元に戻した後の保存の結果と、広すぎるフォルダの種類を変換する', () => {
+		expect(mapAfterRestoreSave('needs-size-decision')).toBe('needs_size_decision');
+		expect(mapAfterRestoreSave('not-requested')).toBe('not_requested');
+		expect(mapBroadFolder(null)).toBeNull();
+		expect(mapBroadFolder('drive-root')).toBe('drive_root');
+		expect(mapBroadFolder('standard-folder')).toBe('standard_folder');
 	});
 });
 

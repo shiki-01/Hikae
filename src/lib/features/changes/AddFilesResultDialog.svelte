@@ -36,6 +36,34 @@
 				</section>
 			{/if}
 
+			{#if summary.replaced.length > 0}
+				<section class="flex flex-direction:column gap:2">
+					<h3 class="m:0 type-body font-weight:700">{t('add_files.replaced_heading')}</h3>
+					<ul class="m:0 p:0 list-style:none b:1px|solid|border r:md">
+						{#each summary.replaced as file (file.path)}
+							<li class="px:3 py:2 bb:1px|solid|border type-body overflow-wrap:anywhere">
+								{file.path}
+							</li>
+						{/each}
+					</ul>
+					<p class="m:0 type-small fg:fg-muted">{t('add_files.replaced_detail')}</p>
+				</section>
+			{/if}
+
+			{#if summary.replaceRefused.length > 0}
+				<section class="flex flex-direction:column gap:2">
+					<h3 class="m:0 type-body font-weight:700">{t('add_files.replace_refused_heading')}</h3>
+					<ul class="m:0 p:0 list-style:none b:1px|solid|border r:md">
+						{#each summary.replaceRefused as file (file.path)}
+							<li class="px:3 py:2 bb:1px|solid|border type-body overflow-wrap:anywhere">
+								{file.path}
+							</li>
+						{/each}
+					</ul>
+					<p class="m:0 type-small fg:fg-muted">{t('add_files.replace_refused_detail')}</p>
+				</section>
+			{/if}
+
 			{#if summary.renamed.length > 0}
 				<section class="flex flex-direction:column gap:2">
 					<h3 class="m:0 type-body font-weight:700">{t('add_files.renamed_heading')}</h3>
@@ -46,6 +74,27 @@
 							</li>
 						{/each}
 					</ul>
+				</section>
+			{/if}
+
+			{#if summary.skippedLinkCount > 0}
+				<section class="flex flex-direction:column gap:2">
+					<h3 class="m:0 type-body font-weight:700">{t('add_files.skipped_links_heading')}</h3>
+					<ul class="m:0 p:0 list-style:none b:1px|solid|border r:md">
+						{#each summary.skippedLinks as item (item.name)}
+							<li class="px:3 py:2 bb:1px|solid|border type-body overflow-wrap:anywhere">
+								{item.name}
+							</li>
+						{/each}
+						{#if summary.skippedLinkCount > summary.skippedLinks.length}
+							<li class="px:3 py:2 type-small fg:fg-muted">
+								{t('add_files.skipped_more', {
+									count: summary.skippedLinkCount - summary.skippedLinks.length
+								})}
+							</li>
+						{/if}
+					</ul>
+					<p class="m:0 type-small fg:fg-muted">{t('add_files.skipped_links_detail')}</p>
 				</section>
 			{/if}
 
@@ -61,6 +110,12 @@
 					</ul>
 					<p class="m:0 type-small fg:fg-muted">{t('add_files.large_detail')}</p>
 				</section>
+			{/if}
+
+			{#if summary.skippedHiddenCount > 0}
+				<p class="m:0 type-small fg:fg-muted">
+					{t('add_files.skipped_hidden', { count: summary.skippedHiddenCount })}
+				</p>
 			{/if}
 		</div>
 	{/if}

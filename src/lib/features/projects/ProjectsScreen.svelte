@@ -9,9 +9,10 @@
 	import ProjectCard from '#lib/components/ProjectCard.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import { AppError } from '#lib/api/errors.js';
-	import { reportError } from '#lib/features/notifications/store.svelte.js';
+	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import AddProjectDialog from './AddProjectDialog.svelte';
 	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
+	import RemoveProjectDialog from './RemoveProjectDialog.svelte';
 	import { useRelocateProject, useRemoveProject } from './mutations';
 	import { useProjects, useSession } from './queries';
 	import { sortProjects } from './sort';
@@ -20,6 +21,13 @@
 	const session = useSession();
 	const relocate = useRelocateProject();
 	const remove = useRemoveProject();
+	// カードのメニューから「一覧から外す」を選んだプロジェクト（確認のダイアログを開いている間だけ入る）
+	let removing = $state<Project | null>(null);
+	const removeConfirmed = useRemoveProject(() => {
+		if (removing)
+			pushToast({ type: 'info', message: t('toast.project_removed', { name: removing.name }) });
+		removing = null;
+	});
 
 	let adding = $state(false);
 	// GitHub に接続するプロジェクト（ダイアログを開いている間だけ入る）
@@ -90,6 +98,7 @@
 							{project}
 							onclick={() => openProject(project)}
 							onconnect={() => (connecting = project)}
+							onremove={() => (removing = project)}
 						/>
 					</li>
 				{/each}
@@ -102,6 +111,13 @@
 	open={adding}
 	onclose={() => (adding = false)}
 	onadded={(project) => goto(`${resolve('/project')}?id=${encodeURIComponent(project.id)}`)}
+/>
+
+<RemoveProjectDialog
+	name={removing?.name ?? null}
+	pending={removeConfirmed.isPending}
+	onconfirm={() => removing && removeConfirmed.mutate(removing.id)}
+	oncancel={() => (removing = null)}
 />
 
 <ConnectRemoteDialog

@@ -45,6 +45,12 @@ export type SettingRow = ToggleRow | SelectRow | NumberRow;
 export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 	general: [
 		{
+			type: 'toggle',
+			key: 'autoSaveAfterRestore',
+			label: 'settings.auto_save_after_restore',
+			text: 'settings.auto_save_after_restore_text'
+		},
+		{
 			type: 'number',
 			key: 'largeFileWarnMb',
 			label: 'settings.large_file_warn',

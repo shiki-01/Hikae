@@ -33,7 +33,16 @@ export const commands = {
 	 */
 	adopt_existing: boolean,
 } | null) => typedError<AddProjectResult, AppError>(__TAURI_INVOKE("add_project", { id, displayName, path, owner, remoteUrl, remote })),
-	/**  プロジェクトを削除（登録のみ。フォルダは消さない）。 */
+	/**
+	 *  プロジェクトを一覧から外す（設計書 4.6、5章 E11）。
+	 * 
+	 *  外すのは、アプリの中の登録・プロジェクト別の設定・ファイル監視・取り込み／アップロード／自動保存の
+	 *  実行計画だけ。フォルダの中身、`.git`、`refs/hikae/` の復元点、GitHub 上のリポジトリには触れない
+	 *  （git も実行しない）。外した後に同じフォルダを登録し直せる（既存の `.git` と保存先を引き継ぐ）。
+	 * 
+	 *  実行中の操作（保存・取り込みなど）が終わるのを、直列キューで待ってから外す。外した直後に、
+	 *  実行計画を捨てて監視の停止を促す（監視は、スケジューラの次の巡回で止まる）。
+	 */
 	removeProject: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { id })),
 	/**  プロジェクトの状態を取得（未保存の変更、アップロード待ち、競合など）。 */
 	projectStatus: (id: string) => typedError<SyncStatus, AppError>(__TAURI_INVOKE("project_status", { id })),
@@ -68,8 +77,15 @@ export const commands = {
 	diff: (id: string, from: string, to: string, path: string | null) => typedError<DiffResult, AppError>(__TAURI_INVOKE("diff", { id, from, to, path })),
 	/**  元に戻す操作のプレビュー（影響ファイル一覧）。 */
 	restorePreview: (id: string, commit: string) => typedError<RestorePreviewData, AppError>(__TAURI_INVOKE("restore_preview", { id, commit })),
-	/**  元に戻す実行。 */
-	restore: (id: string, commit: string) => typedError<RestoreAllResult, AppError>(__TAURI_INVOKE("restore", { id, commit })),
+	/**
+	 *  元に戻す実行。
+	 * 
+	 *  設定「元に戻した後に自動で保存」がオンで `save_memo`（画面が渡す文言。例:「10/4 18:02 の状態に
+	 *  戻しました」）があれば、戻した内容を続けて保存する（既存の保存と同じ復元点・サイズ検査を通り、
+	 *  戻す操作と同じ直列キューの 1 回の実行の中で行う）。保存で大きいファイルの確認が必要なときは、
+	 *  戻す操作だけが成功し、保存はしない（画面の通常の保存の流れに任せる）。
+	 */
+	restore: (id: string, commit: string, saveMemo: string | null) => typedError<RestoreAllResult, AppError>(__TAURI_INVOKE("restore", { id, commit, saveMemo })),
 	/**  現在の競合ファイルを取得。 */
 	listConflicts: (id: string) => typedError<ConflictItem[], AppError>(__TAURI_INVOKE("list_conflicts", { id })),
 	/**  競合を解消。 */
@@ -97,7 +113,7 @@ export const commands = {
 	/**  1 ファイルだけを戻した場合の影響（読み取りのみのため直列キューは通さない）。 */
 	restoreFilePreview: (id: string, commit: string, path: string) => typedError<RestoreFilePreviewData, AppError>(__TAURI_INVOKE("restore_file_preview", { id, commit, path })),
 	/**  指定した保存時点の 1 ファイルだけを戻す。復元点は core-ops が作る。 */
-	restoreFile: (id: string, commit: string, path: string) => typedError<RestoreFileResult, AppError>(__TAURI_INVOKE("restore_file", { id, commit, path })),
+	restoreFile: (id: string, commit: string, path: string, saveMemo: string | null) => typedError<RestoreFileResult, AppError>(__TAURI_INVOKE("restore_file", { id, commit, path, saveMemo })),
 	/**  元に戻すの取り消し。`restore_point` は復元点の ref 名（`refs/hikae/` 配下）または完全な OID。 */
 	undoRestore: (id: string, restorePoint: string) => typedError<null, AppError>(__TAURI_INVOKE("undo_restore", { id, restorePoint })),
 	/**
@@ -116,8 +132,24 @@ export const commands = {
 	listProjectTree: (id: string) => typedError<ProjectTreeData, AppError>(__TAURI_INVOKE("list_project_tree", { id })),
 	/**  変更のぶつかり解消を中断し、取り込む前の状態に戻す。 */
 	abortMerge: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("abort_merge", { id })),
-	/**  外部のファイルをプロジェクトへコピーする（上書きせず、保存もしない）。 */
-	addFiles: (id: string, sourcePaths: string[], destSubdir: string) => typedError<AddFilesResult, AppError>(__TAURI_INVOKE("add_files", { id, sourcePaths, destSubdir })),
+	/**
+	 *  外部のファイル・フォルダをプロジェクトへコピーする（保存はしない。設計書 4.7）。
+	 * 
+	 *  - `dest_subdir` が空ならプロジェクト直下。ツリー表示のフォルダ行へのドロップでは、そのフォルダ
+	 *  - 同名があるときは `on_conflict` に従う。`ask`（既定）で同名があれば、**何も書かずに**
+	 *    `needs_decision`（確認が必要な同名のファイル）を返す。画面が選択を `decisions` に添えて呼び直す
+	 *  - 置き換えは、復元点に既存の内容が入っていることを確かめられたときだけ行う（できなければ別名で残す）。
+	 *    置き換えたときは `undo_token`（`undo_restore` に渡すと、置き換え前の内容に戻る）を返す
+	 *  - フォルダは中のファイルを再帰的にコピーする（上限: ファイル 1,000 件・階層 20。超えるときは
+	 *    何もコピーせずエラー）。リンクはたどらず、隠しファイルと OS の一時ファイルは飛ばす
+	 *  - 警告の閾値は設定 `large_file_warn_mb`（プロジェクト別の上書きを含む）。100MB 超は固定で追加しない
+	 */
+	addFiles: (id: string, sourcePaths: string[], destSubdir: string, onConflict: AddConflictPolicyData, decisions: AddConflictDecisionData[]) => typedError<AddFilesResult, AppError>(__TAURI_INVOKE("add_files", { id, sourcePaths, destSubdir, onConflict, decisions })),
+	/**
+	 *  選んだフォルダが広すぎるかを、登録の前に確かめる（フォルダ選択後の注意に使う）。
+	 *  広すぎるときは理由の種類、問題なければ null。読み取りのみ。
+	 */
+	checkProjectFolder: (path: string) => typedError<"home" | "drive-root" | "standard-folder" | "system-folder" | null, AppError>(__TAURI_INVOKE("check_project_folder", { path })),
 	/**
 	 *  フォルダが見つからないプロジェクトの登録パスを付け替える。
 	 *  付け替え先が同じプロジェクトと確認できた場合のみ更新し、ファイルは一切変更しない。
@@ -204,10 +236,37 @@ export const events = {
 };
 
 /* Types */
+/**  同名のファイル 1 件についての選択 */
+export type AddConflictActionData = "replace" | "keep-both" | 
+/**  このファイルは追加しない */
+"skip";
+
+/**  追加先のパスごとの選択（方針より優先する） */
+export type AddConflictDecisionData = {
+	/**  追加先のパス（プロジェクトからの相対パス） */
+	path: string,
+	action: AddConflictActionData,
+};
+
+/**  同名のファイルがあるときの方針 */
+export type AddConflictPolicyData = 
+/**  同名があれば、何も書かずに確認が必要な一覧を返す */
+"ask" | 
+/**  同名があれば、別名にして両方残す */
+"keep-both" | 
+/**  同名があれば置き換える（復元点に控えを残せないものは別名にする） */
+"replace";
+
 /**  ファイル追加の結果 */
 export type AddFilesResult = {
 	added: AddedFileItem[],
 	rejected: RejectedFileItem[],
+	/**  リンク・隠しファイル・一時ファイルとして飛ばしたもの */
+	skipped: SkippedFileItem[],
+	/**  空でないとき、同名のファイルがあって何も書かずに返した。選択を添えて呼び直す */
+	needs_decision: NameConflictItem[],
+	/**  置き換えたときの取り消し用の復元点（`undo_restore` に渡す）。置き換えが無ければ null */
+	undo_token: string | null,
 };
 
 /**  プロジェクト追加の結果 */
@@ -220,10 +279,12 @@ export type AddProjectResult = {
 export type AddRejectKind = 
 /**  100MB を超えるため追加できない */
 "too-large" | 
-/**  フォルダなど、ファイルではない */
+/**  通常のファイルではない */
 "not-a-file" | 
 /**  読み取れない、またはコピーに失敗した */
-"unreadable";
+"unreadable" | 
+/**  置き換え先のファイルが他のアプリで使用中 */
+"in-use";
 
 /**  追加できたファイル */
 export type AddedFileItem = {
@@ -231,9 +292,26 @@ export type AddedFileItem = {
 	path: string,
 	/**  同名があったため別名にした */
 	renamed: boolean,
-	/**  大きいファイル（50MB 以上）。アップロードに時間がかかることを知らせる */
+	/**  大きいファイル（警告閾値 `large_file_warn_mb` を超える）。アップロードに時間がかかることを知らせる */
 	large: boolean,
+	/**  同名の既存ファイルを置き換えた（置き換え前の内容は復元点に残っている） */
+	replaced: boolean,
+	/**  置き換えを選ばれたが、安全に置き換えられなかったため別名にした */
+	replace_refused: boolean,
 };
+
+/**  元に戻した後の保存の結果（設計書 4.2 手順 5） */
+export type AfterRestoreSaveKind = 
+/**  保存しなかった（設定がオフ、またはメモが渡されなかった） */
+"not-requested" | 
+/**  保存した */
+"saved" | 
+/**  保存する変更が無かった */
+"nothing-to-save" | 
+/**  大きいファイルの確認が必要なため保存しなかった（戻す操作は成功。画面の通常の保存の流れに任せる） */
+"needs-size-decision" | 
+/**  保存に失敗した（戻す操作は成功。未保存の変更として残っている） */
+"failed";
 
 /**  AI モデルの指定方法 */
 export type AiModelSource = "catalog" | "custom-gguf";
@@ -261,6 +339,8 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *    `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
  *    入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
  *    （ごみ箱へ移せない）。どれも params は `file`（ファイル名のみ）で、ファイルは削除していない
+ *  - ファイル・フォルダの追加: `add_too_many_files`（フォルダの中が 1,000 件を超える）、
+ *    `add_folder_too_deep`（階層が 20 を超える）。params は `limit`。何もコピーしていない
  *  - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
  *  - 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、
  *    `network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、
@@ -277,6 +357,7 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *    `destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、
  *    `clone_failed`、`clone_timeout`、`clone_register_failed`
  *  - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、
+ *    `project_folder_too_broad`（ホームフォルダ・ドライブのルート・標準フォルダ・システムフォルダ）、
  *    `project_list_failed`、`project_register_failed`、`project_remove_failed`、
  *    `relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、
  *    `relocate_failed`
@@ -381,6 +462,9 @@ export type AttentionReason =
  *  アップロードは、フォルダが戻るまで見送る
  */
 "folder-missing";
+
+/**  広すぎるフォルダの種類 */
+export type BroadFolderKind = "home" | "drive-root" | "standard-folder" | "system-folder";
 
 /**  変更ファイル */
 export type ChangeFile = {
@@ -550,6 +634,14 @@ export type MemoSuggestion =
 /**  AI を使う */
 "ai";
 
+/**  確認が必要な同名のファイル */
+export type NameConflictItem = {
+	/**  追加先のパス（プロジェクトからの相対パス） */
+	path: string,
+	/**  置き換えを選べるか。復元点に控えを残せない大きさのものは false（別名のみ） */
+	can_replace: boolean,
+};
+
 /**  ユーザーの対応が必要になった */
 export type NeedsAttention = {
 	project_id: string,
@@ -683,7 +775,7 @@ export type PushResult = {
 
 /**  追加しなかったファイル */
 export type RejectedFileItem = {
-	/**  元のファイル名 */
+	/**  元のファイル名。フォルダの中のものは、ドロップしたフォルダからの相対パス */
 	name: string,
 	reason: AddRejectKind,
 	/**  `too-large` のときの元のサイズ（バイト） */
@@ -759,6 +851,8 @@ export type RemoteRequest = {
 export type RestoreAllResult = {
 	/**  取り消しに使う復元点（`undo_restore` の `restore_point` に渡す） */
 	undo_token: string | null,
+	/**  戻した後の保存の結果 */
+	save: AfterRestoreSaveKind,
 };
 
 /**  1 ファイルを戻す影響の種類 */
@@ -786,6 +880,8 @@ export type RestoreFileResult = {
 	outcome: RestoreFileResultKind,
 	/**  取り消しに使う復元点（`undo_restore` の `restore_point` に渡す）。戻していなければ null */
 	undo_token: string | null,
+	/**  戻した後の保存の結果 */
+	save: AfterRestoreSaveKind,
 };
 
 /**  1 ファイルを戻した結果の種類 */
@@ -982,6 +1078,22 @@ export type SizeCheckResult = {
 	blocked: LargeFileItem[],
 	/**  警告閾値を超えるが保存できるファイル（E08: 「このまま保存」か「外す」） */
 	warned: LargeFileItem[],
+};
+
+/**  飛ばした理由 */
+export type SkipKind = 
+/**  リンク（シンボリックリンク・ジャンクション）。たどらない */
+"link" | 
+/**  隠しファイル */
+"hidden" | 
+/**  OS・Office の一時ファイル */
+"os-temp";
+
+/**  飛ばしたもの */
+export type SkippedFileItem = {
+	/**  ドロップしたものからの相対パス */
+	name: string,
+	reason: SkipKind,
 };
 
 /**  プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。 */

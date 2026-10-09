@@ -1,9 +1,14 @@
 import { t } from '#lib/i18n/index.js';
 import type {
+	AddConflictActionData,
+	AddConflictDecisionData,
+	AddConflictPolicyData,
 	AddFilesResult,
 	AddRejectKind,
+	AfterRestoreSaveKind,
 	AppError as BackendError,
 	AppSettings as BackendSettings,
+	BroadFolderKind as BackendBroadFolderKind,
 	ChangeFile,
 	ChangeKind,
 	ConflictChoice,
@@ -37,8 +42,13 @@ import type {
 import { fileKindOf } from '#lib/utils/file-kind.js';
 import { AppError } from './errors';
 import type {
+	AddConflictAction,
+	AddConflictDecision,
+	AddConflictPolicy,
 	AddFilesOutcome,
+	AfterRestoreSave,
 	AppSettings,
+	BroadFolderKind,
 	Change,
 	ChangeType,
 	Choice,
@@ -66,7 +76,8 @@ import type {
 	SettingsView,
 	Session,
 	SizeCheck,
-	SizeChoice
+	SizeChoice,
+	SkipReason
 } from './types';
 
 /** バックエンドのエラー（3 要素）を画面側の AppError に変換する */
@@ -365,22 +376,93 @@ export function restoreFileFailure(
 const REJECT_REASONS: Record<AddRejectKind, RejectReason> = {
 	'too-large': 'too_large',
 	'not-a-file': 'not_a_file',
-	unreadable: 'unreadable'
+	unreadable: 'unreadable',
+	'in-use': 'in_use'
 };
+
+const SKIP_REASONS: Record<'link' | 'hidden' | 'os-temp', SkipReason> = {
+	link: 'link',
+	hidden: 'hidden',
+	'os-temp': 'os_temp'
+};
+
+const CONFLICT_POLICIES: Record<AddConflictPolicy, AddConflictPolicyData> = {
+	ask: 'ask',
+	keep_both: 'keep-both',
+	replace: 'replace'
+};
+
+const CONFLICT_ACTIONS: Record<AddConflictAction, AddConflictActionData> = {
+	replace: 'replace',
+	keep_both: 'keep-both',
+	skip: 'skip'
+};
+
+/** 同名のときの方針をバックエンドの形にする */
+export function toBackendConflictPolicy(policy: AddConflictPolicy): AddConflictPolicyData {
+	return CONFLICT_POLICIES[policy];
+}
+
+/** 追加先のパスごとの選択をバックエンドの形にする。パスは確認の一覧で返ってきた形のまま送る */
+export function toBackendConflictDecisions(
+	decisions: AddConflictDecision[]
+): AddConflictDecisionData[] {
+	return decisions.map((decision) => ({
+		path: decision.path,
+		action: CONFLICT_ACTIONS[decision.action]
+	}));
+}
 
 export function mapAddFilesResult(result: AddFilesResult): AddFilesOutcome {
 	return {
 		added: result.added.map((item) => ({
 			path: item.path.replaceAll('\\', '/'),
 			renamed: item.renamed,
-			large: item.large
+			large: item.large,
+			replaced: item.replaced,
+			replaceRefused: item.replace_refused
 		})),
 		rejected: result.rejected.map((item) => ({
 			name: item.name,
 			reason: REJECT_REASONS[item.reason],
 			size: item.size
-		}))
+		})),
+		skipped: result.skipped.map((item) => ({
+			name: item.name,
+			reason: SKIP_REASONS[item.reason]
+		})),
+		// パスは選択として送り返すため、変換しない
+		needsDecision: result.needs_decision.map((item) => ({
+			path: item.path,
+			canReplace: item.can_replace
+		})),
+		undoToken: result.undo_token
 	};
+}
+
+const AFTER_RESTORE_SAVES: Record<AfterRestoreSaveKind, AfterRestoreSave> = {
+	'not-requested': 'not_requested',
+	saved: 'saved',
+	'nothing-to-save': 'nothing_to_save',
+	'needs-size-decision': 'needs_size_decision',
+	failed: 'failed'
+};
+
+/** 元に戻した後の保存の結果 */
+export function mapAfterRestoreSave(kind: AfterRestoreSaveKind): AfterRestoreSave {
+	return AFTER_RESTORE_SAVES[kind];
+}
+
+const BROAD_FOLDER_KINDS: Record<BackendBroadFolderKind, BroadFolderKind> = {
+	home: 'home',
+	'drive-root': 'drive_root',
+	'standard-folder': 'standard_folder',
+	'system-folder': 'system_folder'
+};
+
+/** 広すぎるフォルダの種類。問題なければ null */
+export function mapBroadFolder(kind: BackendBroadFolderKind | null): BroadFolderKind | null {
+	return kind === null ? null : BROAD_FOLDER_KINDS[kind];
 }
 
 /** 保存の結果。大きいファイルがあって保存しなかったときだけ、確認が必要な結果にする。パスは選択として送り返すため、変換しない */

@@ -43,6 +43,8 @@
 	let submitted = $state(false);
 	let search = $state('');
 	let picking = $state(false);
+	// 選んだ既存のフォルダが、プロジェクトにするには広すぎる（ホーム・ドライブのルートなど）
+	let folderTooBroad = $state(false);
 	let clonePhase = $state<ClonePhase | null>(null);
 
 	const remote = useRemoteProjects(
@@ -63,6 +65,7 @@
 		submitted = false;
 		clonePhase = null;
 		search = '';
+		folderTooBroad = false;
 		step = initialMode ? 'form' : 'choose';
 		form = emptyForm(initialMode ?? 'existing', defaultOwner);
 	});
@@ -112,6 +115,7 @@
 	function choose(mode: AddProjectMode) {
 		form = emptyForm(mode, defaultOwner);
 		submitted = false;
+		folderTooBroad = false;
 		step = 'form';
 	}
 
@@ -122,6 +126,10 @@
 			if (folder === null) return;
 			form.folder = folder;
 			if (form.mode === 'existing' && !form.name.trim()) form.name = nameFromFolder(form.folder);
+			// 既存のフォルダはそのものを見守るので、広すぎないかを登録の前に知らせる（バックエンドも拒否する）。
+			// 取得・新規作成は、選んだフォルダの中に新しいフォルダを作るので対象外
+			folderTooBroad =
+				form.mode === 'existing' ? (await api.checkProjectFolder(folder)) !== null : false;
 		} catch (error) {
 			reportError(error);
 		} finally {
@@ -131,7 +139,7 @@
 
 	function submit() {
 		submitted = true;
-		if (!canSubmit(form, ownerList, cloudAvailable)) return;
+		if (folderTooBroad || !canSubmit(form, ownerList, cloudAvailable)) return;
 		const picked = pickedRemote;
 		clonePhase = null;
 		add.mutate({
@@ -260,7 +268,11 @@
 							? t('add_project.folder_new')
 							: t('add_project.folder')}
 					placeholder={t('add_project.folder_placeholder')}
-					error={errors.folder ? t(errors.folder) : undefined}
+					error={errors.folder
+						? t(errors.folder)
+						: folderTooBroad
+							? t('add_project.error_folder_too_broad')
+							: undefined}
 					class="flex:1"
 				/>
 				<Button variant="secondary" loading={picking} onclick={pickFolder}>

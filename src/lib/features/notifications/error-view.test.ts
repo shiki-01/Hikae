@@ -152,9 +152,12 @@ describe('バックエンドのエラーコードによる文言', () => {
 			'discard_not_a_file',
 			'discard_file_too_large',
 			'discard_not_backed_up',
-			'trash_failed'
+			'trash_failed',
+			'add_too_many_files',
+			'add_folder_too_deep',
+			'project_folder_too_broad'
 		];
-		const params = { count: 1, file: 'a.txt', name: 'x/y', operation: 'pull' };
+		const params = { count: 1, file: 'a.txt', name: 'x/y', operation: 'pull', limit: 1000 };
 		for (const code of codes) {
 			const resolved = resolveBackendMessage({
 				code,

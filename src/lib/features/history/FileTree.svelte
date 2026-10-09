@@ -5,6 +5,7 @@
 	import Button from '#lib/components/Button.svelte';
 	import ChangeBadge from '#lib/components/ChangeBadge.svelte';
 	import Tooltip from '#lib/components/Tooltip.svelte';
+	import { DROP_FOLDER_ATTR } from '#lib/features/changes/drop-target.js';
 	import type { TreeFolder, TreeNode } from './file-tree';
 
 	interface Props {
@@ -23,6 +24,10 @@
 		label?: string;
 		/** 各ファイルの行に、サイズを添えるか */
 		showSize?: boolean;
+		/** フォルダの行を、ファイルのドロップ先にするか（行に追加先の印を付ける） */
+		dropTargets?: boolean;
+		/** ドラッグ中の位置にあるフォルダ（強調する） */
+		activeDropFolder?: string | null;
 	}
 
 	let {
@@ -34,7 +39,9 @@
 		selectedPath = null,
 		defaultOpen = (_folder, depth) => depth === 0,
 		label = t('history.tree_label'),
-		showSize = false
+		showSize = false,
+		dropTargets = false,
+		activeDropFolder = null
 	}: Props = $props();
 
 	const INDENT = 16;
@@ -60,8 +67,11 @@
 					{@const open = isOpen(node, depth)}
 					<details {open}>
 						<summary
-							class="flex align-items:center gap:1 py:1 cursor:pointer type-body"
+							class={`flex align-items:center gap:1 py:1 cursor:pointer type-body ${
+								dropTargets && activeDropFolder === node.path ? 'bg:accent-subtle' : ''
+							}`}
 							style:padding-left={`${depth * INDENT}px`}
+							{...dropTargets ? { [DROP_FOLDER_ATTR]: node.path } : {}}
 							onclick={(event) => {
 								event.preventDefault();
 								toggle(node, depth);

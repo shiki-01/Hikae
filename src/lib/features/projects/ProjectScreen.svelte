@@ -9,6 +9,7 @@
 	import { api, isTauri } from '#lib/api/index.js';
 	import type {
 		DroppedFile,
+		NameConflict,
 		OpenTarget,
 		RestoreScope,
 		SavePoint,
@@ -22,6 +23,7 @@
 	import { buildTimeline, latestManualPoint } from '#lib/components/timeline.js';
 	import ChangeDetail from '#lib/features/changes/ChangeDetail.svelte';
 	import ChangesPane from '#lib/features/changes/ChangesPane.svelte';
+	import AddConflictDialog from '#lib/features/changes/AddConflictDialog.svelte';
 	import AddFilesResultDialog from '#lib/features/changes/AddFilesResultDialog.svelte';
 	import {
 		summarizeAddFiles,
@@ -30,9 +32,19 @@
 	import { nextMemo } from '#lib/features/changes/memo.js';
 	import SizeCheckDialog from '#lib/features/changes/SizeCheckDialog.svelte';
 	import { choiceFor, type SizeAction } from '#lib/features/changes/size-check.js';
-	import { droppedFromPaths, listenNativeDrop } from '#lib/features/changes/native-drop.js';
+	import { folderAtPoint, folderLabel } from '#lib/features/changes/drop-target.js';
+	import {
+		droppedFromPaths,
+		listenNativeDrop,
+		type DropPoint
+	} from '#lib/features/changes/native-drop.js';
 	import DiscardNewFileDialog from '#lib/features/changes/DiscardNewFileDialog.svelte';
-	import { useAddFiles, useDiscardNewFile, useSave } from '#lib/features/changes/mutations.js';
+	import {
+		useAddFiles,
+		useDiscardNewFile,
+		useSave,
+		type AddRequest
+	} from '#lib/features/changes/mutations.js';
 	import { useChanges, useMemoSuggestion, useProjectTree } from '#lib/features/changes/queries.js';
 	import type { ChangesView } from '#lib/features/changes/view.js';
 	import CompareView from '#lib/features/compare/CompareView.svelte';
@@ -42,6 +54,7 @@
 	import HistoryPane from '#lib/features/history/HistoryPane.svelte';
 	import RestoreDialog from '#lib/features/history/RestoreDialog.svelte';
 	import { useRestore } from '#lib/features/history/mutations.js';
+	import { restoreSaveMemo } from '#lib/features/history/restore.js';
 	import { flattenHistoryPages } from '#lib/features/history/paging.js';
 	import { useHistory } from '#lib/features/history/queries.js';
 	import { useSettings } from '#lib/features/settings/queries.js';
@@ -108,6 +121,12 @@
 	let dragDepth = $state(0);
 	let tooLarge = $state(false);
 	let addSummary = $state<AddFilesSummary | null>(null);
+	// ファイルのドラッグ中に、追加先として強調するフォルダ（「すべてのファイル」のフォルダ行の上だけ）
+	let dropFolder = $state<string | null>(null);
+	// 同名のファイルの確認待ち。選択のあとに同じ要求をやり直すため、要求も持つ
+	let conflictRequest = $state<{ request: AddRequest; conflicts: NameConflict[] } | null>(null);
+	// 確認のあとに追加をやり直している間は true（最初の確認の問い合わせ中は含めない）
+	let conflictBusy = $state(false);
 	// 大きいファイルの確認待ち。保存のやり直しに同じメモを使うため、メモも持つ
 	let sizeRequest = $state<{ memo: string; check: SizeCheck } | null>(null);
 	let interruptedOpen = $state(false);
@@ -172,6 +191,16 @@
 				setTimeout(() => (tooLarge = false), 4000);
 			}
 			if (summary.needsDialog) addSummary = summary;
+			conflictRequest = null;
+			conflictBusy = false;
+		},
+		(request, conflicts) => {
+			conflictBusy = false;
+			conflictRequest = { request, conflicts };
+		},
+		() => {
+			conflictBusy = false;
+			conflictRequest = null;
 		}
 	);
 	const restore = useRestore(
@@ -264,10 +293,16 @@
 	}
 
 	// 追加できるかどうかの検査（大きさの上限など）は、ブラウザ表示ではモック、アプリ上ではバックエンドが行う
-	function submitFiles(files: DroppedFile[]) {
+	// 追加先は、プロジェクト直下（既定）か、ツリー表示でフォルダの行の上にドロップしたそのフォルダ
+	function submitFiles(files: DroppedFile[], destSubdir = '') {
 		if (files.length === 0) return;
 		tab = 'changes';
-		addFiles.mutate(files);
+		addFiles.mutate({ files, destSubdir });
+	}
+
+	// ドラッグ中の位置にあるフォルダ。「すべてのファイル」を表示しているときだけ、フォルダ行が追加先になる
+	function folderUnder(point: DropPoint): string | null {
+		return folderAtPoint(point, document, tab === 'changes' && changesView === 'tree');
 	}
 
 	function onFiles(files: File[]) {
@@ -289,11 +324,19 @@
 		let disposed = false;
 		let unlisten: (() => void) | undefined;
 		void listenNativeDrop((action) => {
-			if (action.kind === 'enter') dragDepth = 1;
-			else if (action.kind === 'leave') dragDepth = 0;
-			else {
+			if (action.kind === 'enter') {
+				dragDepth = 1;
+				dropFolder = folderUnder(action.point);
+			} else if (action.kind === 'over') {
+				dropFolder = folderUnder(action.point);
+			} else if (action.kind === 'leave') {
 				dragDepth = 0;
-				submitFiles(action.files);
+				dropFolder = null;
+			} else {
+				const folder = folderUnder(action.point);
+				dragDepth = 0;
+				dropFolder = null;
+				submitFiles(action.files, folder ?? '');
 			}
 		}).then((fn) => {
 			if (disposed) fn();
@@ -419,6 +462,7 @@
 					view={changesView}
 					tree={treeQuery.data ?? null}
 					treeLoading={treeQuery.isPending}
+					{dropFolder}
 					onviewchange={(view) => (changesView = view)}
 					onselect={(path) => (selectedPath = path)}
 					ondiscard={(path) => (discardPath = path)}
@@ -524,7 +568,11 @@
 			class="flex flex-direction:column align-items:center gap:2 p:8 r:lg bg:bg-raised shadow:overlay"
 		>
 			<Upload size={32} class="fg:accent" />
-			<p class="m:0 type-heading">{t('dropzone.dragging')}</p>
+			<p class="m:0 type-heading">
+				{dropFolder
+					? t('dropzone.dragging_to', { folder: folderLabel(dropFolder) })
+					: t('dropzone.dragging')}
+			</p>
 		</div>
 	</div>
 {/if}
@@ -538,7 +586,12 @@
 	oncancel={() => (restoreRequest = null)}
 	onconfirm={() =>
 		restoreRequest &&
-		restore.mutate({ targetId: restoreRequest.point.id, scope: restoreRequest.scope })}
+		restore.mutate({
+			targetId: restoreRequest.point.id,
+			scope: restoreRequest.scope,
+			// 設定「元に戻した後に自動で保存」がオンのとき、戻した内容をこのメモで保存する
+			saveMemo: restoreSaveMemo(restoreRequest.scope, restoreRequest.point.createdAt)
+		})}
 />
 
 <SizeCheckDialog
@@ -579,6 +632,17 @@
 	pending={discard.isPending}
 	oncancel={() => (discardPath = null)}
 	onconfirm={() => discardPath && discard.mutate(discardPath)}
+/>
+
+<AddConflictDialog
+	conflicts={conflictRequest?.conflicts ?? null}
+	pending={conflictBusy}
+	onconfirm={(decisions) => {
+		if (!conflictRequest) return;
+		conflictBusy = true;
+		addFiles.mutate({ ...conflictRequest.request, decisions });
+	}}
+	oncancel={() => (conflictRequest = null)}
 />
 
 <AddFilesResultDialog summary={addSummary} onclose={() => (addSummary = null)} />

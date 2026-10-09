@@ -3,6 +3,8 @@ import { commands, events } from '#lib/bindings.js';
 import { joinPath } from '#lib/utils/path.js';
 import {
 	mapAddFilesResult,
+	mapAfterRestoreSave,
+	mapBroadFolder,
 	mapChange,
 	mapConflict,
 	mapDeviceFlow,
@@ -25,14 +27,18 @@ import {
 	mapSession,
 	mapSettingsView,
 	restoreFileFailure,
+	toBackendConflictDecisions,
+	toBackendConflictPolicy,
 	toBackendPatch,
 	toBackendSizeChoice
 } from './mappers';
 import type {
+	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
 	AddProjectResult,
 	AppSettings,
+	BroadFolderKind,
 	Change,
 	ClonePhase,
 	ConflictFile,
@@ -281,17 +287,29 @@ export const tauriApi: ProjectApi = {
 		return mapImpact(await unwrap(commands.restorePreview(projectId, targetId)));
 	},
 
-	async restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult> {
+	async restore(
+		projectId: string,
+		targetId: string,
+		scope: RestoreScope,
+		saveMemo?: string
+	): Promise<RestoreResult> {
+		// 続けて保存するかどうかは、設定に従ってバックエンドが決める。ここでは文言だけを渡す
+		const memo = saveMemo ?? null;
 		if (scope.kind === 'file') {
-			const result = await unwrap(commands.restoreFile(projectId, targetId, scope.path));
+			const result = await unwrap(commands.restoreFile(projectId, targetId, scope.path, memo));
 			if (result.outcome !== 'restored') throw restoreFileFailure(result.outcome, scope.path);
-			return { undoToken: result.undo_token, changedCount: 1 };
+			return {
+				undoToken: result.undo_token,
+				changedCount: 1,
+				save: mapAfterRestoreSave(result.save)
+			};
 		}
 		const preview = await unwrap(commands.restorePreview(projectId, targetId));
-		const result = await unwrap(commands.restore(projectId, targetId));
+		const result = await unwrap(commands.restore(projectId, targetId, memo));
 		return {
 			undoToken: result.undo_token,
-			changedCount: preview.modified.length + preview.deleted.length + preview.created.length
+			changedCount: preview.modified.length + preview.deleted.length + preview.created.length,
+			save: mapAfterRestoreSave(result.save)
 		};
 	},
 
@@ -327,12 +345,28 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.abortMerge(projectId));
 	},
 
-	async addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome> {
+	async addFiles(
+		projectId: string,
+		files: DroppedFile[],
+		options: AddFilesOptions = {}
+	): Promise<AddFilesOutcome> {
 		const paths = files.map((file) => file.path);
 		if (paths.some((path) => path === undefined)) unsupported('adding files without a real path');
-		// プロジェクト直下へコピーする。サイズの検査と別名化はバックエンドが行う
-		const result = await unwrap(commands.addFiles(projectId, paths as string[], ''));
+		// コピー先の検証、サイズの検査、同名の扱い、置き換えの安全策はすべてバックエンドが行う
+		const result = await unwrap(
+			commands.addFiles(
+				projectId,
+				paths as string[],
+				options.destSubdir ?? '',
+				toBackendConflictPolicy(options.policy ?? 'ask'),
+				toBackendConflictDecisions(options.decisions ?? [])
+			)
+		);
 		return mapAddFilesResult(result);
+	},
+
+	async checkProjectFolder(path: string): Promise<BroadFolderKind | null> {
+		return mapBroadFolder(await unwrap(commands.checkProjectFolder(path)));
 	},
 
 	async openFile(projectId: string, path: string, target: OpenAction): Promise<void> {

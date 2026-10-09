@@ -160,11 +160,20 @@ export interface DiscardResult {
 	undoToken: string | null;
 }
 
+/** 元に戻した後の保存の結果（設定「元に戻した後に自動で保存」） */
+export type AfterRestoreSave =
+	'not_requested' | 'saved' | 'nothing_to_save' | 'needs_size_decision' | 'failed';
+
 export interface RestoreResult {
 	/** 取り消しに使う復元点。戻していない（取り消すものが無い）場合は null */
 	undoToken: string | null;
 	changedCount: number;
+	/** 戻した後の保存の結果。大きいファイルの確認が必要なときは保存せず、通常の保存の流れに任せる */
+	save: AfterRestoreSave;
 }
+
+/** プロジェクトにするには広すぎるフォルダの種類 */
+export type BroadFolderKind = 'home' | 'drive_root' | 'standard_folder' | 'system_folder';
 
 export interface FetchResult {
 	mergedCount: number;
@@ -276,14 +285,18 @@ export interface DroppedFile {
 	path?: string;
 }
 
-export type RejectReason = 'too_large' | 'not_a_file' | 'unreadable';
+export type RejectReason = 'too_large' | 'not_a_file' | 'unreadable' | 'in_use';
 
 export interface AddedFile {
 	path: string;
 	/** 同名があったため別名にした */
 	renamed: boolean;
-	/** 大きいファイル。アップロードに時間がかかる */
+	/** 大きいファイル（警告閾値を超える）。アップロードに時間がかかる */
 	large: boolean;
+	/** 同名の既存ファイルを置き換えた（置き換え前の内容は復元点に残っている） */
+	replaced: boolean;
+	/** 置き換えを選ばれたが、安全に置き換えられなかったため別名にした */
+	replaceRefused: boolean;
 }
 
 export interface RejectedFile {
@@ -293,9 +306,54 @@ export interface RejectedFile {
 	size: number | null;
 }
 
+/** コピーで飛ばしたものの理由。リンクはたどらない */
+export type SkipReason = 'link' | 'hidden' | 'os_temp';
+
+export interface SkippedFile {
+	/** ドロップしたものからの相対パス */
+	name: string;
+	reason: SkipReason;
+}
+
+/** 同名のファイルがあるときの方針 */
+export type AddConflictPolicy = 'ask' | 'keep_both' | 'replace';
+
+/** 同名のファイル 1 件についての選択 */
+export type AddConflictAction = 'replace' | 'keep_both' | 'skip';
+
+export interface AddConflictDecision {
+	/** 追加先のパス（プロジェクトからの相対パス） */
+	path: string;
+	action: AddConflictAction;
+}
+
+/** 確認が必要な同名のファイル */
+export interface NameConflict {
+	/** 追加先のパス（プロジェクトからの相対パス） */
+	path: string;
+	/** 置き換えを選べるか。復元点に控えを残せない大きさのものは false（別名のみ） */
+	canReplace: boolean;
+}
+
+/** ファイル追加の指定。追加先と、同名のときの扱い */
+export interface AddFilesOptions {
+	/** 追加先のフォルダ（プロジェクトからの相対パス）。空ならプロジェクト直下 */
+	destSubdir?: string;
+	/** 既定は `ask`（同名があれば、何も書かずに確認が必要な一覧を返す） */
+	policy?: AddConflictPolicy;
+	/** 追加先のパスごとの選択（方針より優先する） */
+	decisions?: AddConflictDecision[];
+}
+
 export interface AddFilesOutcome {
 	added: AddedFile[];
 	rejected: RejectedFile[];
+	/** リンク・隠しファイル・一時ファイルとして飛ばしたもの */
+	skipped: SkippedFile[];
+	/** 空でないときは、同名のファイルがあって何も書かずに返した。選択を添えてやり直す */
+	needsDecision: NameConflict[];
+	/** 置き換えたときの取り消し用の復元点。置き換えが無ければ null */
+	undoToken: string | null;
 }
 
 /** 「開く」メニューの選択肢。パスのコピーは画面側（クリップボード）で行い、バックエンドは呼ばない */
@@ -413,7 +471,16 @@ export interface ProjectApi {
 	save(projectId: string, memo: string): Promise<SaveOutcome>;
 	saveWithSizeChoice(projectId: string, memo: string, choice: SizeChoice): Promise<SaveOutcome>;
 	restoreImpact(projectId: string, targetId: string, scope: RestoreScope): Promise<ImpactItem[]>;
-	restore(projectId: string, targetId: string, scope: RestoreScope): Promise<RestoreResult>;
+	/**
+	 * 元に戻す。設定「元に戻した後に自動で保存」がオンで `saveMemo` があれば、続けて保存する
+	 * （メモの文言は呼び出し側が渡す）
+	 */
+	restore(
+		projectId: string,
+		targetId: string,
+		scope: RestoreScope,
+		saveMemo?: string
+	): Promise<RestoreResult>;
 	undoRestore(projectId: string, undoToken: string): Promise<void>;
 	/**
 	 * 新規（未追跡）ファイル 1 件を作る前の状態に戻す。ファイルは OS のごみ箱へ移り、履歴の控えからも戻せる。
@@ -426,7 +493,17 @@ export interface ProjectApi {
 	resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void>;
 	abortMerge(projectId: string): Promise<void>;
 
-	addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome>;
+	/**
+	 * ファイル・フォルダを追加する（コピー）。同名があるときは `options` に従う。既定の `ask` では、
+	 * 同名があれば何も書かずに `needsDecision` を返す
+	 */
+	addFiles(
+		projectId: string,
+		files: DroppedFile[],
+		options?: AddFilesOptions
+	): Promise<AddFilesOutcome>;
+	/** 選んだフォルダが、プロジェクトにするには広すぎるか（ホーム・ドライブのルート・標準フォルダ・システムフォルダ）。問題なければ null */
+	checkProjectFolder(path: string): Promise<BroadFolderKind | null>;
 	openFile(projectId: string, path: string, target: OpenAction): Promise<void>;
 	/** 過去の保存時点の版を、読み取り専用で既定のアプリで開く。現在のファイルは変更しない */
 	openFileAt(projectId: string, savePointId: string, path: string): Promise<void>;

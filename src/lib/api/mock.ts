@@ -1,14 +1,16 @@
 import { t } from '#lib/i18n/index.js';
-import { formatDateTime } from '#lib/i18n/format.js';
 import { AppError } from './errors';
 import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
 import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
+	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
 	AddProjectResult,
+	AfterRestoreSave,
 	AppSettings,
+	BroadFolderKind,
 	Change,
 	ClonePhase,
 	ConflictFile,
@@ -931,7 +933,7 @@ export const mockApi: ProjectApi = {
 		return impactFor(stateOf(projectId), targetId, scope);
 	},
 
-	async restore(projectId, targetId, scope): Promise<RestoreResult> {
+	async restore(projectId, targetId, scope, saveMemo): Promise<RestoreResult> {
 		await sleep(WAIT_LONG);
 		const state = stateOf(projectId);
 		if (scope.kind === 'file' && state.restoreFailuresLeft > 0) {
@@ -941,21 +943,38 @@ export const mockApi: ProjectApi = {
 		const impact = impactFor(state, targetId, scope);
 		const undoToken = nextId('undo');
 		undoSnapshots.set(undoToken, snapshotOf(state));
+		// 設定「元に戻した後に自動で保存」がオンで、保存のメモが渡されたときだけ、続けて保存する
+		const settings = (await mockApi.getSettings(projectId)).settings;
+		const wantsSave = settings.autoSaveAfterRestore && !!saveMemo?.trim();
+		let save: AfterRestoreSave = 'not_requested';
 		if (scope.kind === 'file') {
 			state.changes = state.changes.filter((c) => c.path !== scope.path);
 			state.project.unsavedCount = state.changes.length;
+			if (wantsSave) {
+				save = state.changes.length === 0 ? 'nothing_to_save' : 'saved';
+				if (save === 'saved') addSavePoint(state, saveMemo ?? '', state.currentTier);
+			}
 		} else {
-			const target = state.savePoints.find((s) => s.id === targetId);
-			addSavePoint(
-				state,
-				t('mock.memo.restored', {
-					time: formatDateTime(target?.createdAt ?? new Date()),
-					count: impact.length
-				}),
-				tierOf(state, targetId)
-			);
+			const tier = tierOf(state, targetId);
+			if (wantsSave) {
+				addSavePoint(state, saveMemo ?? '', tier);
+				save = 'saved';
+			} else {
+				// 保存しないときは、戻した内容が未保存の変更として残る
+				state.currentTier = tier;
+				state.changes = impact
+					.filter((item) => item.type !== 'removed')
+					.map((item) => ({
+						id: nextId('c'),
+						path: item.path,
+						type: 'modified' as const,
+						isConflict: false,
+						untracked: false
+					}));
+				state.project.unsavedCount = state.changes.length;
+			}
 		}
-		return { undoToken, changedCount: impact.length };
+		return { undoToken, changedCount: impact.length, save };
 	},
 
 	async undoRestore(projectId: string, undoToken: string): Promise<void> {
@@ -1088,48 +1107,103 @@ export const mockApi: ProjectApi = {
 		state.conflictsOnNextFetch = true;
 	},
 
-	async addFiles(projectId: string, files: DroppedFile[]): Promise<AddFilesOutcome> {
+	async addFiles(
+		projectId: string,
+		files: DroppedFile[],
+		options: AddFilesOptions = {}
+	): Promise<AddFilesOutcome> {
 		await sleep(WAIT_SHORT);
 		const state = stateOf(projectId);
 		const { accepted, rejected } = classifyDropped(files);
+		const folder = options.destSubdir ? `${options.destSubdir}/` : '';
+		const policy = options.policy ?? 'ask';
+		const decisions = new Map((options.decisions ?? []).map((d) => [d.path, d.action]));
 		const taken = new Set([
 			...state.changes.map((c) => c.path),
 			...[t('mock.file.chapter3'), t('mock.file.memo')]
 		]);
-		const added = accepted.map((file) => {
-			let path = file.name;
-			let counter = 1;
-			while (taken.has(path)) {
-				counter += 1;
-				const dot = file.name.lastIndexOf('.');
-				path =
-					dot > 0
-						? `${file.name.slice(0, dot)} (${counter})${file.name.slice(dot)}`
-						: `${file.name} (${counter})`;
+		const noResult = {
+			added: [],
+			rejected: [],
+			skipped: [],
+			needsDecision: [],
+			undoToken: null
+		};
+		// 同名があれば、方針が「確認する」のとき何も書かずに一覧を返す
+		const conflicts = accepted
+			.filter((file) => taken.has(folder + file.name))
+			.map((file) => ({
+				path: folder + file.name,
+				canReplace: (file.size ?? 0) < LARGE_WARN_BYTES
+			}));
+		const unanswered = conflicts.filter((c) => !decisions.has(c.path));
+		if (policy === 'ask' && unanswered.length > 0) {
+			return { ...noResult, needsDecision: unanswered };
+		}
+		let undoToken: string | null = null;
+		const added: AddFilesOutcome['added'] = [];
+		for (const file of accepted) {
+			const wanted = folder + file.name;
+			const large = (file.size ?? 0) >= LARGE_WARN_BYTES;
+			let path = wanted;
+			let replaced = false;
+			let replaceRefused = false;
+			if (taken.has(wanted)) {
+				const choice = decisions.get(wanted) ?? (policy === 'replace' ? 'replace' : 'keep_both');
+				if (choice === 'skip') continue;
+				const canReplace = conflicts.find((c) => c.path === wanted)?.canReplace ?? false;
+				if (choice === 'replace' && canReplace) {
+					// 置き換え前の状態を取り消し用に控える
+					if (undoToken === null) {
+						undoToken = nextId('undo');
+						undoSnapshots.set(undoToken, snapshotOf(state));
+					}
+					replaced = true;
+				} else {
+					replaceRefused = choice === 'replace';
+					let counter = 1;
+					while (taken.has(path)) {
+						counter += 1;
+						const dot = wanted.lastIndexOf('.');
+						path =
+							dot > folder.length
+								? `${wanted.slice(0, dot)} (${counter})${wanted.slice(dot)}`
+								: `${wanted} (${counter})`;
+					}
+				}
 			}
 			taken.add(path);
-			state.changes.push({
-				id: nextId('c'),
-				path,
-				type: 'added',
-				isConflict: false,
-				untracked: true
-			});
-			return {
-				path,
-				renamed: path !== file.name,
-				large: (file.size ?? 0) >= LARGE_WARN_BYTES
-			};
-		});
+			if (!replaced && !state.changes.some((c) => c.path === path)) {
+				state.changes.push({
+					id: nextId('c'),
+					path,
+					type: 'added',
+					isConflict: false,
+					untracked: true
+				});
+			}
+			added.push({ path, renamed: path !== wanted, large, replaced, replaceRefused });
+		}
 		state.project.unsavedCount = state.changes.length;
 		return {
+			...noResult,
 			added,
+			undoToken,
 			rejected: rejected.map((file) => ({
 				name: file.name,
 				reason: 'too_large' as const,
 				size: file.size
 			}))
 		};
+	},
+
+	async checkProjectFolder(path: string): Promise<BroadFolderKind | null> {
+		await sleep(40);
+		// 画面確認用の簡易判定（実際の判定はバックエンド）。ドライブのルートとホームフォルダだけ
+		const normalized = path.replaceAll('\\', '/').replace(/\/+$/, '');
+		if (normalized === '' || /^[A-Za-z]:$/.test(normalized)) return 'drive_root';
+		if (/^(C:)?\/(Users|home)\/[^/]+$/i.test(normalized)) return 'home';
+		return null;
 	},
 
 	async openFile(): Promise<void> {

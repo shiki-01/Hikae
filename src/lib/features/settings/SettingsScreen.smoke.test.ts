@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, screen } from '@testing-library/svelte';
+import { fireEvent, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setupSmoke, renderWithClient } from '../../../test/smoke';
 import { goto } from '../../../test/app-navigation';
@@ -78,6 +78,27 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(await screen.findByText(t('account.reauth'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.relogin') }));
 		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`);
+	});
+
+	it('一般のタブに「元に戻した後に自動で保存」があり、切り替えると保存される', async () => {
+		renderWithClient(SettingsScreen);
+		await screen.findByRole('heading', { name: t('settings.general') });
+		expect(screen.getByText(t('settings.auto_save_after_restore_text'))).toBeTruthy();
+		const toggle = await screen.findByRole('switch', {
+			name: t('settings.auto_save_after_restore')
+		});
+		expect(toggle.getAttribute('aria-checked')).toBe('true');
+		await fireEvent.click(toggle);
+		await waitFor(() =>
+			expect(
+				screen
+					.getByRole('switch', { name: t('settings.auto_save_after_restore') })
+					.getAttribute('aria-checked')
+			).toBe('false')
+		);
+		// 次に開いたときにも反映されている（モックの設定は端末に保存される）
+		expect(localStorage.getItem('hikae.settings')).toContain('"autoSaveAfterRestore":false');
+		localStorage.removeItem('hikae.settings');
 	});
 
 	it('ログインしていないときは、ログインのボタンが出る', async () => {

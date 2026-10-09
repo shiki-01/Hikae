@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, screen } from '@testing-library/svelte';
+import { fireEvent, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setupSmoke, renderWithClient } from '../../../test/smoke';
 import { goto } from '../../../test/app-navigation';
@@ -34,5 +34,36 @@ describe('ProjectsScreen のスモークテスト', () => {
 		renderWithClient(ProjectsScreen);
 		await fireEvent.click(await screen.findByText(t('mock.project.thesis')));
 		expect(goto).toHaveBeenCalledWith(expect.stringContaining('/project?id='));
+	});
+});
+
+describe('ProjectsScreen: 一覧から外す', () => {
+	async function openRemoveDialog(name: string) {
+		await screen.findByText(name);
+		await fireEvent.click(screen.getByRole('button', { name: t('project_card.menu', { name }) }));
+		await fireEvent.click(await screen.findByRole('menuitem', { name: t('project_card.remove') }));
+		await screen.findByText(t('remove_project.title', { name }));
+	}
+
+	it('カードのメニューから確認を経て、一覧から外せる', async () => {
+		renderWithClient(ProjectsScreen);
+		const name = t('mock.project.materials');
+		await openRemoveDialog(name);
+
+		// 確認: フォルダの中身と履歴は削除されないこと、自動保存とアップロードが止まることを伝える
+		expect(screen.getByText(t('remove_project.safe'))).toBeTruthy();
+		expect(screen.getByText(t('remove_project.effect'))).toBeTruthy();
+		expect(screen.getByText(t('remove_project.again'))).toBeTruthy();
+
+		await fireEvent.click(screen.getByRole('button', { name: t('remove_project.confirm') }));
+		await waitFor(() => expect(screen.queryByText(name)).toBeNull());
+	});
+
+	it('確認でキャンセルすると、一覧に残る', async () => {
+		renderWithClient(ProjectsScreen);
+		const name = t('mock.project.thesis');
+		await openRemoveDialog(name);
+		await fireEvent.click(screen.getByRole('button', { name: t('remove_project.cancel') }));
+		expect(screen.getByText(name)).toBeTruthy();
 	});
 });

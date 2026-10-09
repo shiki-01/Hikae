@@ -98,6 +98,7 @@ const messages = {
 	'changes.view_tree': 'すべてのファイル',
 	'changes.tree_label': 'プロジェクトのファイル',
 	'changes.tree_empty': 'このプロジェクトには、まだファイルがありません',
+	'changes.tree_drop_hint': 'フォルダの上にドロップすると、そのフォルダに追加します',
 	'changes.tree_truncated': 'ファイルが多いため、一部のみ表示しています（上限 {count} 件）',
 	'changes.tree_unchanged': 'このファイルに変更はありません',
 
@@ -114,13 +115,20 @@ const messages = {
 	'file_action.open_at_hint':
 		'読み取り専用で開きます。編集しても、保存済みの内容や現在のファイルには反映されません。',
 
-	'dropzone.text': 'ここにファイルを\nドロップして追加',
+	'dropzone.text': 'ここにファイルやフォルダを\nドロップして追加',
 	'dropzone.pick': 'ファイルを選ぶ',
 	'dropzone.dragging': 'ファイルを追加します',
+	'dropzone.dragging_to': '「{folder}」にファイルを追加します',
 	'dropzone.too_large': '100MB を超えるファイルは追加できません',
 
 	'add_files.title': 'ファイルの追加結果',
 	'add_files.description': '一部のファイルについて、確認してください。',
+	'add_files.replaced_heading': '同じ名前のファイルを置き換えました',
+	'add_files.replaced_detail':
+		'置き換える前の内容は自動保存として残っています。「取り消す」で元に戻せます。',
+	'add_files.replace_refused_heading': '置き換えられなかったため、別の名前で追加しました',
+	'add_files.replace_refused_detail':
+		'大きいファイルや、控えを残せないファイルは、置き換えずに両方残します。',
 	'add_files.renamed_heading': '同じ名前のファイルがあったため、別の名前で追加しました',
 	'add_files.large_heading': '大きめのファイルです',
 	'add_files.large_detail':
@@ -131,7 +139,30 @@ const messages = {
 	'add_files.reason_too_large_unknown': '100MB を超えるため追加できません',
 	'add_files.reason_not_a_file': 'ファイルではないため追加できません（フォルダなど）',
 	'add_files.reason_unreadable': '読み取れなかったため追加できません',
+	'add_files.reason_in_use': '他のアプリで使われているため、置き換えられませんでした',
+	'add_files.skipped_links_heading': 'リンクは追加しませんでした',
+	'add_files.skipped_links_detail':
+		'ショートカットのようなリンクは、中身をたどらずに飛ばします。元のファイルは変更されていません。',
+	'add_files.skipped_more': 'ほか {count} 件',
+	'add_files.skipped_hidden': '隠しファイルと一時ファイルを {count} 件、追加しませんでした',
 	'add_files.close': '閉じる',
+
+	'add_conflict.title': '同じ名前のファイルがあります',
+	'add_conflict.description':
+		'追加先に、同じ名前のファイルがあります。ファイルごとに、どうするかを選んでください。',
+	'add_conflict.list_label': '同じ名前のファイル',
+	'add_conflict.file_choice': '「{path}」の扱い',
+	'add_conflict.replace': '置き換える',
+	'add_conflict.keep_both': '両方残す',
+	'add_conflict.keep_both_hint': '「名前 (2)」のように、別の名前で追加します',
+	'add_conflict.skip': '追加しない',
+	'add_conflict.replace_unavailable': '大きいファイルのため、置き換えはできません',
+	'add_conflict.apply_all': 'すべてに同じ選択を使う',
+	'add_conflict.apply_all_label': 'すべてのファイルの選択',
+	'add_conflict.safe':
+		'置き換える場合も、置き換える前の内容は自動保存として残り、あとから取り消せます。',
+	'add_conflict.cancel': 'キャンセル',
+	'add_conflict.confirm': '追加する',
 
 	'size_check.title': '大きいファイルがあります',
 	'size_check.description_blocked': '100MB を超えるファイルは、クラウドに保存できません。',
@@ -262,6 +293,8 @@ const messages = {
 	'restore.error_ignored.title':
 		'「{name}」と同じ名前の「保存しないファイル」があるため、元に戻せませんでした',
 	'restore.error_ignored.next': 'そのファイルの名前を変えるか移動してから、もう一度お試しください',
+	'restore.save_memo': '{time} の状態に戻しました',
+	'restore.save_memo_file': '「{name}」を {time} の状態に戻しました',
 	'restore.cancel': 'キャンセル',
 	'restore.button': '元に戻す',
 
@@ -339,6 +372,8 @@ const messages = {
 	'add_project.clone_done': '取得しました',
 	'add_project.clone_failed': '取得できませんでした',
 	'add_project.error_folder': 'フォルダを選んでください',
+	'add_project.error_folder_too_broad':
+		'このフォルダは範囲が広すぎます。作業用のフォルダを選んでください',
 	'add_project.error_remote': '取得するプロジェクトを選んでください',
 	'add_project.error_name': 'プロジェクト名を入力してください',
 	'add_project.error_name_chars': '名前に使えない文字が含まれています',
@@ -375,6 +410,15 @@ const messages = {
 	'project_card.last_saved': '最終保存 {when}',
 	'project_card.never_saved': 'まだ保存していません',
 	'project_card.not_connected': 'GitHub に接続していません',
+	'project_card.menu': '「{name}」のその他の操作',
+	'project_card.remove': '一覧から外す',
+
+	'remove_project.title': '『{name}』を一覧から外します',
+	'remove_project.safe': 'フォルダの中身と履歴は削除されません。',
+	'remove_project.effect': '自動保存とアップロードは止まります。',
+	'remove_project.again': '同じフォルダを追加し直せます。',
+	'remove_project.cancel': 'キャンセル',
+	'remove_project.confirm': '一覧から外す',
 
 	'badge.saved': 'すべて保存済み',
 	'badge.unsaved': '未保存 {count} 件',
@@ -424,6 +468,9 @@ const messages = {
 	'settings.confirm_auto_snapshot_off_text':
 		'ファイルを間違って消したり上書きしたときに、自動保存から戻せなくなります。「保存」した内容は、これまでどおり戻せます。',
 
+	'settings.auto_save_after_restore': '元に戻した後に自動で保存',
+	'settings.auto_save_after_restore_text':
+		'ファイルを元に戻したあと、戻した内容をそのまま保存します。オフのときは、戻した内容が未保存の変更として残ります。',
 	'settings.large_file_warn': '大きいファイルを知らせるサイズ',
 	'settings.large_file_warn_text':
 		'このサイズを超えるファイルは、アップロードに時間がかかることをお知らせします。自動保存にも含めません。',
@@ -622,6 +669,15 @@ const messages = {
 	'errcode.outside_project.what': 'このプロジェクトの外にあるファイルは開けません',
 	'errcode.outside_project.safe': 'ファイルは変更されていません。',
 	'errcode.outside_project.next': 'プロジェクトの中のファイルを選んでください。',
+	'errcode.add_too_many_files.what': 'ファイル数が多すぎます（上限 {limit} 件）',
+	'errcode.add_too_many_files.safe': '何もコピーしていません。元のファイルも変更されていません。',
+	'errcode.add_too_many_files.next': 'フォルダを小さく分けてから、もう一度追加してください。',
+	'errcode.add_folder_too_deep.what': 'フォルダの階層が深すぎます（上限 {limit} 階層）',
+	'errcode.add_folder_too_deep.safe': '何もコピーしていません。元のファイルも変更されていません。',
+	'errcode.add_folder_too_deep.next': 'フォルダを小さく分けてから、もう一度追加してください。',
+	'errcode.project_folder_too_broad.what': 'このフォルダは範囲が広すぎます',
+	'errcode.project_folder_too_broad.safe': 'ファイルは変更されていません。',
+	'errcode.project_folder_too_broad.next': '作業用のフォルダを選んでください。',
 	'errcode.discard_not_untracked.what':
 		'「{file}」はすでに保存の対象になっているため、作成する前の状態には戻せません',
 	'errcode.discard_not_untracked.safe': 'ファイルは削除されていません。',
@@ -837,7 +893,16 @@ const messages = {
 	'toast.fetched': '別の PC の変更を {count} 件取り込みました',
 	'toast.fetch_none': '取り込む変更はありませんでした',
 	'toast.files_added': 'ファイルを {count} 件追加しました',
+	'toast.files_added_replaced':
+		'ファイルを {count} 件追加しました（{replaced} 件を置き換えました）',
+	'toast.files_replaced': '{count} 件のファイルを置き換えました',
 	'toast.restored': '{count} 件のファイルを元に戻しました',
+	'toast.restored_saved': '{count} 件のファイルを元に戻して、保存しました',
+	'toast.restored_save_large':
+		'{count} 件のファイルを元に戻しました。大きいファイルがあるため、保存はしていません。保存するときに確認します',
+	'toast.restored_save_failed':
+		'{count} 件のファイルを元に戻しました。保存はできなかったため、未保存の変更として残っています',
+	'toast.project_removed': '『{name}』を一覧から外しました',
 	'toast.undone': '元に戻す前の状態に戻しました',
 	'toast.discarded': '「{name}」をごみ箱に移しました',
 	'toast.resolved': '2台の変更をまとめて保存しました',

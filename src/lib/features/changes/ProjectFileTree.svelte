@@ -8,9 +8,11 @@
 		tree: ProjectTree;
 		selectedPath: string | null;
 		onselect: (path: string) => void;
+		/** ドラッグ中の位置にあるフォルダ。フォルダの行はファイルのドロップ先になり、これを強調する */
+		dropFolder?: string | null;
 	}
 
-	let { tree, selectedPath, onselect }: Props = $props();
+	let { tree, selectedPath, onselect, dropFolder = null }: Props = $props();
 
 	const nodes = $derived(
 		buildFileTree(
@@ -35,6 +37,8 @@
 		defaultOpen={(folder) => folder.hasChange}
 		label={t('changes.tree_label')}
 		showSize
+		dropTargets
+		activeDropFolder={dropFolder}
 	/>
 {/if}
 {#if tree.truncated}

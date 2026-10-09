@@ -22,6 +22,8 @@
 		/** 「すべてのファイル」の一覧。取得中は null */
 		tree: ProjectTree | null;
 		treeLoading: boolean;
+		/** ファイルをドラッグ中の位置にあるフォルダ（「すべてのファイル」のときだけ）。追加先として強調する */
+		dropFolder?: string | null;
 		onviewchange: (view: ChangesView) => void;
 		onselect: (path: string) => void;
 		/** 新規ファイルの行の「元に戻す（作成しない）」 */
@@ -40,6 +42,7 @@
 		view,
 		tree,
 		treeLoading,
+		dropFolder = null,
 		onviewchange,
 		onselect,
 		ondiscard,
@@ -69,7 +72,8 @@
 					{/each}
 				</div>
 			{:else}
-				<ProjectFileTree {tree} {selectedPath} {onselect} />
+				<p class="m:0 px:3 py:2 type-small fg:fg-muted">{t('changes.tree_drop_hint')}</p>
+				<ProjectFileTree {tree} {selectedPath} {onselect} {dropFolder} />
 			{/if}
 		{:else if loading}
 			<div class="flex flex-direction:column gap:3 p:3" aria-busy="true">
