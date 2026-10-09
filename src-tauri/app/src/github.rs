@@ -377,6 +377,8 @@ pub async fn wait_login(state: tauri::State<'_, AppState>) -> Result<LoginOutcom
                 Ok(user) => set_cached_user(&state, Some(user)),
                 Err(_) => set_cached_user(&state, None),
             }
+            // 再認証が必要で止まっていた取り込み・アップロードを、すぐに再開させる
+            state.scheduler.retry_all_now();
             Ok(LoginOutcome::Succeeded)
         }
         LoginEnd::Denied => Ok(LoginOutcome::Denied),

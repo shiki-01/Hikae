@@ -371,6 +371,7 @@ fn record_initial_commit(store: &Arc<Mutex<Store>>, id: &str, path: &std::path::
 ///   git を実行しない（フォルダが無いと git がエラーになるため）
 /// - 最終アップロード日時は、クラウドに上がっている最新の保存（`@{u}`）の日時。保存先が無い、
 ///   まだ何も上げていない、取得できないときは None
+/// - 最終保存日時は、最新の手動の保存（`HEAD`）の日時。一覧のカードが履歴全体を読まずに済むようにする
 pub(crate) fn project_info(p: &Project) -> ProjectInfo {
     let folder_missing = core_ops::project_folder_state(&p.path).is_missing();
     let connected = p.remote_url.as_deref().is_some_and(|u| !u.is_empty());
@@ -382,6 +383,11 @@ pub(crate) fn project_info(p: &Project) -> ProjectInfo {
     } else {
         None
     };
+    let last_saved_at = if folder_missing {
+        None
+    } else {
+        Ops::new(git_runner()).last_saved_at(&p.path).ok().flatten()
+    };
     ProjectInfo {
         id: p.id.clone(),
         display_name: p.display_name.clone(),
@@ -391,6 +397,7 @@ pub(crate) fn project_info(p: &Project) -> ProjectInfo {
         last_viewed_at: p.last_viewed_at.clone(),
         folder_missing,
         last_uploaded_at,
+        last_saved_at,
     }
 }
 
@@ -1115,13 +1122,15 @@ async fn push(
     })
 }
 
-/// 履歴を取得。
+/// 履歴を取得。新しい順で `offset` 件目から最大 `limit` 件（ページ送り）。
+/// 重複の判定は全体で行うため、ページを跨いでも重複・欠落しない。
 #[tauri::command]
 #[specta::specta]
 async fn list_history(
     state: tauri::State<'_, AppState>,
     id: String,
-    max_count: u32,
+    offset: u32,
+    limit: u32,
 ) -> Result<Vec<HistoryItem>, AppError> {
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1154,7 +1163,7 @@ async fn list_history(
         }
 
         let entries = ops
-            .history(&project.path, max_count as usize)
+            .history_page(&project.path, offset as usize, limit as usize)
             .map_err(AppError::from_ops_error)?;
 
         Ok(entries
@@ -1976,6 +1985,8 @@ pub struct ProjectInfo {
     /// クラウドに上がっている最新の保存の日時（ISO 8601）。保存先が無い、まだ何も上げていない、
     /// フォルダが見つからないときは null
     pub last_uploaded_at: Option<String>,
+    /// 最新の手動の保存の日時（ISO 8601）。自動保存は含めない。まだ保存が無い、フォルダが見つからないときは null
+    pub last_saved_at: Option<String>,
 }
 
 /// 変更ファイル

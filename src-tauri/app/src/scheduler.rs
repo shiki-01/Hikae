@@ -101,6 +101,18 @@ impl SchedulerHandle {
         self.wake();
     }
 
+    /// ログインし直したので、失敗の再試行待ち（特に再認証が必要な状態）をすべて解除し、
+    /// 直ちに再試行させる。git の操作はここでは行わない（計画を書き換えて起こすだけ）。
+    pub fn retry_all_now(&self) {
+        let now = self.now();
+        if let Ok(mut map) = self.inner.planners.lock() {
+            for planner in map.values_mut() {
+                planner.retry_now(now);
+            }
+        }
+        self.wake();
+    }
+
     /// 保存が完了した。「保存時に自動アップロード」がオンならアップロードが予定される。
     pub fn request_push(&self, id: &str) {
         self.with_planner(id, |p, now| p.request_push(now));

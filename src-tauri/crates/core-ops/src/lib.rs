@@ -288,7 +288,23 @@ impl Ops {
 
     /// 履歴一覧を取得。最新順。refs/hikae/ の自動保存は区別される。
     pub fn history(&self, repo: &Path, max_count: usize) -> Result<Vec<HistoryEntry>, OpsError> {
-        history::history(self.runner(), repo, max_count)
+        history::history(self.runner(), repo, 0, max_count)
+    }
+
+    /// 履歴一覧のうち、新しい順で `offset` 件目から最大 `limit` 件を取得する（ページ送り用）。
+    /// 重複判定は全体で行うため、ページを跨いでも重複・欠落しない。
+    pub fn history_page(
+        &self,
+        repo: &Path,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>, OpsError> {
+        history::history(self.runner(), repo, offset, limit)
+    }
+
+    /// 最新の手動の保存の日時（ISO 8601）。まだ保存が無ければ None（読み取りのみ）。
+    pub fn last_saved_at(&self, repo: &Path) -> Result<Option<String>, OpsError> {
+        history::last_saved_at(self.runner(), repo)
     }
 
     /// 特定時点のファイル一覧を取得。

@@ -85,6 +85,12 @@ pub(crate) fn count_numstat_files(stdout: &[u8]) -> u32 {
     count
 }
 
+/// 履歴の 1 回の取得で `git log` の引数に並べる自動保存の ref の上限。
+/// 引数が長すぎると OS のコマンドライン長の上限（Windows は約 32,000 文字）を超えるため、
+/// 新しい順にこの件数までに限る。ページ（offset / limit）によらず同じ集合を使うので、
+/// ページを跨いでも並びは変わらない。
+const SNAPSHOT_TIP_LIMIT: usize = 400;
+
 /// 現在のブランチの自動保存（snapshot ref）を新しい順に `(commit, ref名)` で返す。
 /// 取得できなければ（detached HEAD など）空にする。
 fn snapshot_refs(
@@ -119,29 +125,68 @@ fn snapshot_refs(
     Ok(refs)
 }
 
-/// 履歴一覧を取得する。新しい順。
+/// `HEAD` から辿れる手動の保存すべてのツリー ID。自動保存の重複判定に使う（読み取りのみ）。
+fn manual_tree_ids(
+    runner: &GitRunner,
+    repo: &Path,
+    snapshot_commits: &HashMap<&str, &str>,
+) -> Result<HashSet<String>, OpsError> {
+    let out = runner.run_ok(repo, &["log", "--format=%H %T", "HEAD", "--"])?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.trim().split_once(' '))
+        .filter(|(oid, tree)| {
+            !oid.is_empty() && !tree.is_empty() && !snapshot_commits.contains_key(oid)
+        })
+        .map(|(_, tree)| tree.to_string())
+        .collect())
+}
+
+/// 最新の手動の保存（`HEAD`）の日時（ISO 8601）。まだ保存が無ければ None（読み取りのみ）。
+/// 自動保存は含めない。一覧のカードの「最終保存」に使う。
+pub(crate) fn last_saved_at(runner: &GitRunner, repo: &Path) -> Result<Option<String>, OpsError> {
+    let out = runner.run(
+        repo,
+        &["log", "--max-count=1", "--format=%aI", "HEAD", "--"],
+    )?;
+    if out.code != 0 {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((!text.is_empty()).then_some(text))
+}
+
+/// 履歴一覧のうち、新しい順で `offset` 件目から最大 `limit` 件を取得する。
 ///
 /// 手動の保存（`HEAD` から辿れる commit）と自動保存（snapshot ref の commit）を併せて返す。
 /// 保存の直前に作られる復元点のように、同じ内容の手動の保存がある自動保存は重複するため出さない。
+///
+/// ページを跨いで重複・欠落が起きないよう、毎回「先頭から `offset + limit` 件」を同じ規則で
+/// 数え直し、その末尾の `limit` 件を返す（`--skip` で読み飛ばすと、重複判定の対象が窓の位置で
+/// 変わってしまう）。重複判定は窓の外の手動の保存も含めた全体で行うため、同じ自動保存が
+/// ページによって出たり消えたりしない。変更ファイル数の集計（commit ごとの `git diff`）は、
+/// 返す `limit` 件だけに行う。
 pub(crate) fn history(
     runner: &GitRunner,
     repo: &Path,
-    max_count: usize,
+    offset: usize,
+    limit: usize,
 ) -> Result<Vec<HistoryEntry>, OpsError> {
     // まだ 1 度も保存していないプロジェクトは空の履歴
     let head = runner.run(repo, &["rev-parse", "--verify", "--quiet", "HEAD"])?;
-    if head.code != 0 || max_count == 0 {
+    if head.code != 0 || limit == 0 {
         return Ok(Vec::new());
     }
+    let wanted = offset.saturating_add(limit);
 
-    let snapshots = snapshot_refs(runner, repo, max_count)?;
+    let snapshots = snapshot_refs(runner, repo, SNAPSHOT_TIP_LIMIT)?;
     let ref_by_commit: HashMap<&str, &str> = snapshots
         .iter()
         .map(|(oid, name)| (oid.as_str(), name.as_str()))
         .collect();
 
     // 重複する自動保存を後で取り除くので、その分だけ多めに取得する
-    let fetch = max_count.saturating_add(snapshots.len());
+    let fetch = wanted.saturating_add(snapshots.len());
     let max_arg = format!("--max-count={fetch}");
     let mut args: Vec<&str> = vec![
         "log",
@@ -159,25 +204,28 @@ pub(crate) fn history(
     // upstream から辿れるものを「クラウドにある」とする
     let unuploaded = unuploaded_commits(runner, repo)?;
 
-    // 手動の保存と同じ内容（ツリー）の自動保存は出さない
-    let manual_trees: HashSet<&str> = records
+    // 手動の保存と同じ内容（ツリー）の自動保存は出さない。自動保存が無ければ判定は要らない
+    let manual_trees = if snapshots.is_empty() {
+        HashSet::new()
+    } else {
+        manual_tree_ids(runner, repo, &ref_by_commit)?
+    };
+
+    // 重複を除いた並びの、先頭から `wanted` 件
+    let visible: Vec<(&LogRecord, Option<&str>)> = records
         .iter()
-        .filter(|r| !ref_by_commit.contains_key(r.oid.as_str()))
-        .map(|r| r.tree.as_str())
+        .filter_map(|record| {
+            let snapshot_ref = ref_by_commit.get(record.oid.as_str()).copied();
+            if snapshot_ref.is_some() && manual_trees.contains(record.tree.as_str()) {
+                return None;
+            }
+            Some((record, snapshot_ref))
+        })
+        .take(wanted)
         .collect();
 
     let mut entries = Vec::new();
-    for record in &records {
-        let snapshot_ref = ref_by_commit
-            .get(record.oid.as_str())
-            .map(|r| r.to_string());
-        if snapshot_ref.is_some() && manual_trees.contains(record.tree.as_str()) {
-            continue;
-        }
-        if entries.len() >= max_count {
-            break;
-        }
-
+    for (record, snapshot_ref) in visible.into_iter().skip(offset) {
         let changed_files_count = match record.parents.first() {
             Some(parent) => {
                 let stat = runner.run_ok(
@@ -212,7 +260,7 @@ pub(crate) fn history(
             commit: record.oid.chars().take(7).collect(),
             timestamp: record.timestamp.clone(),
             message,
-            snapshot_ref,
+            snapshot_ref: snapshot_ref.map(str::to_string),
             changed_files_count,
             kind,
             pc_name,
