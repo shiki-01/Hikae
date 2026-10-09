@@ -34,6 +34,8 @@ import type {
 	RestoreFilePreviewData,
 	RestoreFileResult,
 	RestorePreviewData,
+	IgnoreKindArg,
+	IgnoreRuleItem,
 	SaveResult,
 	SaveSizeChoice,
 	SessionInfo,
@@ -76,6 +78,8 @@ import type {
 	RemoteOutcome,
 	RejectReason,
 	RemoteProjectList,
+	IgnoreKind,
+	IgnoreRule,
 	SaveOutcome,
 	SavePoint,
 	SettingKey,
@@ -516,6 +520,16 @@ export function mapSizeCheck(check: SizeCheckResult | null): SizeCheck | null {
 /** 大きいファイルについての選択をバックエンドの形にする。パスは検査で返ってきた形のまま渡す */
 export function toBackendSizeChoice(choice: SizeChoice): SaveSizeChoice {
 	return { accept_warned: choice.acceptWarned, exclude: choice.exclude };
+}
+
+/** 保存しないファイルの 1 行をバックエンドから受け取った形にする */
+export function mapIgnoreRule(item: IgnoreRuleItem): IgnoreRule {
+	return { pattern: item.pattern, trackedCount: item.tracked_count };
+}
+
+/** 保存しないファイルの種類をバックエンドの形にする（文字列は同じ） */
+export function toBackendIgnoreKind(kind: IgnoreKind): IgnoreKindArg {
+	return kind;
 }
 
 /** 画面側の設定名とバックエンドの項目名の対応 */

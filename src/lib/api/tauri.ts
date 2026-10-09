@@ -25,11 +25,13 @@ import {
 	mapResolutions,
 	mapSaveResult,
 	mapSavePoint,
+	mapIgnoreRule,
 	mapSession,
 	mapSettingsView,
 	restoreFileFailure,
 	toBackendConflictDecisions,
 	toBackendConflictPolicy,
+	toBackendIgnoreKind,
 	toBackendPatch,
 	toBackendSizeChoice
 } from './mappers';
@@ -46,6 +48,8 @@ import type {
 	ConflictFile,
 	ConnectRemoteInput,
 	DiscardResult,
+	IgnoreKind,
+	IgnoreRule,
 	DroppedFile,
 	FetchOptions,
 	FileDiff,
@@ -323,6 +327,28 @@ export const tauriApi: ProjectApi = {
 		// 復元点の作成・内容の確認・ごみ箱への移動・パスの検証は、すべてバックエンド側で行う
 		const result = await unwrap(commands.discardNewFile(projectId, path));
 		return { undoToken: result.undo_token };
+	},
+
+	async listIgnoreRules(projectId: string): Promise<IgnoreRule[]> {
+		const items = await unwrap(commands.listIgnorePatterns(projectId));
+		return items.map(mapIgnoreRule);
+	},
+
+	async listTrackedIgnoredFiles(projectId: string): Promise<string[]> {
+		return unwrap(commands.listTrackedIgnoredFiles(projectId));
+	},
+
+	async addIgnorePattern(projectId: string, kind: IgnoreKind, value: string): Promise<string> {
+		// 書き方の組み立てと検査はバックエンドで行う（同じ規則を画面に二重に持たない）
+		return unwrap(commands.addIgnorePattern(projectId, toBackendIgnoreKind(kind), value));
+	},
+
+	async removeIgnorePattern(projectId: string, pattern: string): Promise<void> {
+		await unwrap(commands.removeIgnorePattern(projectId, pattern));
+	},
+
+	async untrackFiles(projectId: string, memo: string, paths: string[]): Promise<void> {
+		await unwrap(commands.untrackFiles(projectId, memo, paths));
 	},
 
 	async fetch(projectId: string, options?: FetchOptions) {

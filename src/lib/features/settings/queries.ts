@@ -31,3 +31,19 @@ export function useUpdateSettings(getProjectId: () => string | null) {
 		onSettled: () => client.invalidateQueries({ queryKey: keys.settingsAll })
 	}));
 }
+
+/** 保存しないファイルのパターン一覧（件数つき）。プロジェクトを開いているときだけ使う */
+export function useIgnoreRules(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.ignoreRules(getProjectId()),
+		queryFn: () => api.listIgnoreRules(getProjectId())
+	}));
+}
+
+/** 追跡中（保存対象になっている）で、保存しないファイルに当たるファイル */
+export function useTrackedIgnoredFiles(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.trackedIgnored(getProjectId()),
+		queryFn: () => api.listTrackedIgnoredFiles(getProjectId())
+	}));
+}

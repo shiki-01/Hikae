@@ -185,10 +185,13 @@ pub(crate) fn unresolved(
 }
 
 /// .gitignore に書くパターン（ルート直下からの完全一致）にする。
-/// git が特別扱いする文字と、末尾の空白をエスケープする。
 pub(crate) fn ignore_pattern(path: &str) -> String {
+    format!("/{}", escape_path(path))
+}
+
+/// パスの文字を .gitignore 用にエスケープする。git が特別扱いする文字と、末尾の空白を対象にする。
+pub(crate) fn escape_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len() + 1);
-    out.push('/');
     let trailing_spaces = path.len() - path.trim_end_matches(' ').len();
     let body_len = path.len() - trailing_spaces;
     for (i, ch) in path.char_indices() {
@@ -200,8 +203,40 @@ pub(crate) fn ignore_pattern(path: &str) -> String {
     out
 }
 
-/// .gitignore へパターンを追記する（既にある行は重複して書かない）。
+/// 「外す」を選んだファイルを追跡から外す（`rm --cached -r`）。作業フォルダのファイルは消さない
+/// （不変条件 6）。追跡されていないパスは何もしない。
+pub(crate) fn untrack_paths(
+    runner: &core_git::GitRunner,
+    repo: &Path,
+    paths: &[String],
+) -> Result<(), OpsError> {
+    for path in paths {
+        let spec = format!(":(literal){path}");
+        runner.run_ok(
+            repo,
+            &[
+                "rm",
+                "--cached",
+                "-r",
+                "--ignore-unmatch",
+                "-q",
+                "--",
+                &spec,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// .gitignore へ、パスを指す既定の書き方（`/<パス>`）で追記する。
 pub(crate) fn append_ignore_patterns(repo: &Path, paths: &[String]) -> Result<(), OpsError> {
+    let patterns: Vec<String> = paths.iter().map(|p| ignore_pattern(p)).collect();
+    append_lines(repo, &patterns)
+}
+
+/// .gitignore へパターン（1 行に 1 つの書き方）を追記する。既にある行は重複して書かない。
+/// 改行コードは既存のファイルに合わせ、末尾に改行が無ければ補う。
+pub(crate) fn append_lines(repo: &Path, patterns: &[String]) -> Result<(), OpsError> {
     use std::io::Write;
 
     let file = repo.join(".gitignore");
@@ -219,12 +254,11 @@ pub(crate) fn append_ignore_patterns(repo: &Path, paths: &[String]) -> Result<()
         add.push_str(eol);
     }
     let mut wrote_any = false;
-    for path in paths {
-        let pattern = ignore_pattern(path);
+    for pattern in patterns {
         if known.contains(&pattern.as_str()) {
             continue;
         }
-        add.push_str(&pattern);
+        add.push_str(pattern);
         add.push_str(eol);
         wrote_any = true;
     }

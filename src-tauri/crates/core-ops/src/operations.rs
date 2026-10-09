@@ -140,38 +140,14 @@ pub(crate) fn save(
     // 「外す」と選ばれたファイルを保存対象から外す。作業フォルダのファイルは消さない
     // （追跡解除は `rm --cached` のみ。未追跡ファイルには何もしない）
     if !exclude.is_empty() {
-        for path in &exclude {
-            let spec = format!(":(literal){path}");
-            runner.run_ok(
-                repo,
-                &["rm", "--cached", "--ignore-unmatch", "-q", "--", &spec],
-            )?;
-        }
+        size_check::untrack_paths(runner, repo, &exclude)?;
         size_check::append_ignore_patterns(repo, &exclude)?;
     }
 
-    // add -A
-    runner.run_ok(repo, &["add", "-A"])?;
-
-    // 外したことで保存する内容が無くなった場合は、空の保存を作らない
-    let staged = runner.run(repo, &["diff", "--cached", "--quiet", "--exit-code"])?;
-    if staged.code == 0 {
+    // add -A → commit。外したことで保存する内容が無くなった場合は、空の保存を作らない
+    let Some(commit) = stage_and_commit(runner, repo, memo, meta)? else {
         return Ok(SaveOutcome::NothingToSave);
-    }
-
-    // commit
-    // メモの末尾に、どの PC で保存したかを残す（履歴の表示時に取り除く）
-    let full_message = meta.message(memo);
-    let _commit_output = runner.run_ok(
-        repo,
-        &["-c", "core.hooksPath=", "commit", "-m", &full_message],
-    )?;
-
-    // commit ハッシュを抽出（出力から取得）
-    let commit_hash = runner.run(repo, &["rev-parse", "HEAD"])?;
-    let commit = String::from_utf8_lossy(&commit_hash.stdout)
-        .trim()
-        .to_string();
+    };
 
     let restore_point = RestorePointInfo {
         snapshot_ref: restore_point_internal
@@ -185,6 +161,36 @@ pub(crate) fn save(
         commit,
         restore_point,
     })
+}
+
+/// `add -A` のあと、ステージに内容があれば commit し、その commit ハッシュを返す。
+/// 内容が無ければ何もせず `None`（空の保存を作らない）。
+pub(crate) fn stage_and_commit(
+    runner: &GitRunner,
+    repo: &Path,
+    memo: &str,
+    meta: Meta,
+) -> Result<Option<String>, OpsError> {
+    runner.run_ok(repo, &["add", "-A"])?;
+
+    let staged = runner.run(repo, &["diff", "--cached", "--quiet", "--exit-code"])?;
+    if staged.code == 0 {
+        return Ok(None);
+    }
+
+    // メモの末尾に、どの PC で保存したかを残す（履歴の表示時に取り除く）
+    let full_message = meta.message(memo);
+    runner.run_ok(
+        repo,
+        &["-c", "core.hooksPath=", "commit", "-m", &full_message],
+    )?;
+
+    let commit_hash = runner.run(repo, &["rev-parse", "HEAD"])?;
+    Ok(Some(
+        String::from_utf8_lossy(&commit_hash.stdout)
+            .trim()
+            .to_string(),
+    ))
 }
 
 /// HEAD と upstream の (アップロード待ち, 取り込み待ち) の件数を返す。

@@ -11,6 +11,10 @@ export const keys = {
 	/** 「すべてのファイル」の一覧 */
 	projectTree: (id: string) => ['project-tree', id] as const,
 	memoSuggestion: (id: string) => ['memo-suggestion', id] as const,
+	/** 保存しないファイル（`.gitignore`）のパターン一覧 */
+	ignoreRules: (id: string) => ['ignore-rules', id] as const,
+	/** 追跡中で、保存しないファイルに当たるファイル */
+	trackedIgnored: (id: string) => ['tracked-ignored', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,
 	impact: (id: string, target: string, scope: string) => ['impact', id, target, scope] as const,

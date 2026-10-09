@@ -9,6 +9,7 @@
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select from '#lib/components/Select.svelte';
 	import AccountSection from './AccountSection.svelte';
+	import IgnoreSection from './IgnoreSection.svelte';
 	import NumberSetting from './NumberSetting.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import Tabs from '#lib/components/Tabs.svelte';
@@ -150,6 +151,8 @@
 						<summary class="type-body cursor:pointer">{t('settings.advanced_toggle')}</summary>
 						<p class="m:0 mt:3 type-body fg:fg-muted">{t('settings.advanced_empty')}</p>
 					</details>
+				{:else if id === 'ignore' && contextProjectId}
+					<IgnoreSection projectId={contextProjectId} />
 				{:else if notes[id]}
 					<p class="m:0 type-body fg:fg-muted">{t(notes[id])}</p>
 				{/if}

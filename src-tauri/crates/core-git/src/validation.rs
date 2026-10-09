@@ -902,6 +902,8 @@ fn validate_ls_files_args(args: &[&str]) -> Result<(), Rejection> {
         "--deleted",
         "-i",
         "--ignored",
+        // `-c -i` をまとめた形（保存しないファイルの「追跡中の該当ファイル」の検出に使う）
+        "-ci",
         "--exclude-standard",
         "--error-unmatch",
     ];
@@ -1665,6 +1667,29 @@ mod tests {
     #[test]
     fn test_allow_status() {
         assert!(validate(&["status", "--porcelain=v2", "-z", "--branch"]).is_ok());
+    }
+
+    #[test]
+    fn test_allow_ls_files_tracked_ignored() {
+        assert!(validate(&["ls-files", "-ci", "--exclude-standard", "-z"]).is_ok());
+        // 書き込み系のフラグは通さない
+        assert!(validate(&["ls-files", "--delete"]).is_err());
+    }
+
+    #[test]
+    fn test_allow_rm_cached_recursive_only() {
+        assert!(validate(&[
+            "rm",
+            "--cached",
+            "-r",
+            "--ignore-unmatch",
+            "-q",
+            "--",
+            ":(literal)a"
+        ])
+        .is_ok());
+        assert!(validate(&["rm", "-r", "--", "a"]).is_err());
+        assert!(validate(&["rm", "--cached", "-f", "--", "a"]).is_err());
     }
 
     #[test]

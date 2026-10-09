@@ -37,6 +37,8 @@ import type {
 	RemoteProject,
 	RemoteOutcome,
 	RemoteProjectList,
+	IgnoreKind,
+	IgnoreRule,
 	RestoreResult,
 	RestoreScope,
 	SaveOutcome,
@@ -549,6 +551,21 @@ function impactFor(state: ProjectState, targetId: string, scope: RestoreScope): 
 	return items;
 }
 
+/** 保存しないファイルのパターン（プロジェクトごと。ブラウザ単体の確認用に保持する） */
+const ignorePatterns = new Map<string, string[]>();
+
+function ignorePatternsOf(projectId: string): string[] {
+	return ignorePatterns.get(projectId) ?? [];
+}
+
+/** バックエンドと同じ形の書き方を作る（エスケープは省く。確認用のため） */
+function mockIgnorePattern(kind: IgnoreKind, value: string): string {
+	const input = value.trim();
+	if (kind === 'extension') return `*.${input.replace(/^\.+/, '')}`;
+	if (kind === 'folder') return `${input.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')}/`;
+	return `/${input.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+}
+
 export const mockApi: ProjectApi = {
 	capabilities: { restoreFile: true },
 
@@ -1040,6 +1057,57 @@ export const mockApi: ProjectApi = {
 		state.changes = state.changes.filter((c) => c.path !== path);
 		state.project.unsavedCount = state.changes.length;
 		return { undoToken };
+	},
+
+	async listIgnoreRules(projectId: string): Promise<IgnoreRule[]> {
+		await sleep(WAIT_SHORT);
+		// 件数は実際のファイルを調べないため 0 にする（ブラウザ単体の確認用）
+		return ignorePatternsOf(projectId).map((pattern) => ({ pattern, trackedCount: 0 }));
+	},
+
+	async listTrackedIgnoredFiles(projectId: string): Promise<string[]> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		return [];
+	},
+
+	async addIgnorePattern(projectId: string, kind: IgnoreKind, value: string): Promise<string> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const pattern = mockIgnorePattern(kind, value);
+		const patterns = ignorePatternsOf(projectId);
+		if (!patterns.includes(pattern)) ignorePatterns.set(projectId, [...patterns, pattern]);
+		return pattern;
+	},
+
+	async removeIgnorePattern(projectId: string, pattern: string): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const patterns = ignorePatternsOf(projectId);
+		const index = patterns.indexOf(pattern);
+		if (index < 0) {
+			throw new AppError(
+				'backend',
+				'pattern not found',
+				{},
+				{
+					code: 'invalid_input',
+					params: {},
+					whatHappened: t('errcode.invalid_input.what'),
+					dataIsSafe: t('errcode.invalid_input.safe'),
+					nextAction: t('errcode.invalid_input.next')
+				}
+			);
+		}
+		ignorePatterns.set(
+			projectId,
+			patterns.filter((_, i) => i !== index)
+		);
+	},
+
+	async untrackFiles(projectId: string): Promise<void> {
+		await sleep(WAIT_LONG);
+		stateOf(projectId);
 	},
 
 	async fetch(projectId: string, options?: FetchOptions): Promise<FetchResult> {

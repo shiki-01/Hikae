@@ -42,6 +42,17 @@ export interface SizeCheck {
 	warned: LargeFile[];
 }
 
+/** 保存しないファイルのパターンの種類（追加するとき） */
+export type IgnoreKind = 'extension' | 'folder' | 'file';
+
+/** 保存しないファイル（`.gitignore`）の 1 行 */
+export interface IgnoreRule {
+	/** 行の内容（手書きの行も含む） */
+	pattern: string;
+	/** 追跡中（保存対象になっている）該当ファイルの件数。この画面で解釈できない書き方の行は null */
+	trackedCount: number | null;
+}
+
 /** 大きいファイルについての選択 */
 export interface SizeChoice {
 	/** 警告だけのファイルをそのまま保存する */
@@ -513,6 +524,16 @@ export interface ProjectApi {
 	 * 大きいファイル・保存済みのファイル・フォルダなどは、何も変更せずエラーで断る
 	 */
 	discardNewFile(projectId: string, path: string): Promise<DiscardResult>;
+	/** 保存しないファイル（`.gitignore`）のパターン一覧と、追跡中の該当ファイル数 */
+	listIgnoreRules(projectId: string): Promise<IgnoreRule[]>;
+	/** 追跡中（保存対象になっている）で、保存しないファイルに当たるファイルのパス（`/` 区切り） */
+	listTrackedIgnoredFiles(projectId: string): Promise<string[]>;
+	/** パターンを `.gitignore` に追加する（保存はしない）。種類と入力から書き方を作り、書いたパターンを返す */
+	addIgnorePattern(projectId: string, kind: IgnoreKind, value: string): Promise<string>;
+	/** パターンを `.gitignore` から 1 行だけ削除する（保存はしない） */
+	removeIgnorePattern(projectId: string, pattern: string): Promise<void>;
+	/** 追跡中のファイルを保存対象から外して保存する。作業フォルダのファイルは削除しない */
+	untrackFiles(projectId: string, memo: string, paths: string[]): Promise<void>;
 	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;

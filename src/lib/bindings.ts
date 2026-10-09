@@ -125,6 +125,19 @@ export const commands = {
 	 *  戻り値の `undo_token` は `undo_restore` に渡すと、この操作の前の状態に戻せる。
 	 */
 	discardNewFile: (id: string, path: string) => typedError<DiscardNewFileResult, AppError>(__TAURI_INVOKE("discard_new_file", { id, path })),
+	/**  保存しないファイルのパターン一覧（読み取りのみのため直列キューは通さない）。 */
+	listIgnorePatterns: (id: string) => typedError<IgnoreRuleItem[], AppError>(__TAURI_INVOKE("list_ignore_patterns", { id })),
+	/**  追跡中（保存対象になっている）で、保存しないファイルに当たるファイルのパス（読み取りのみ）。 */
+	listTrackedIgnoredFiles: (id: string) => typedError<string[], AppError>(__TAURI_INVOKE("list_tracked_ignored_files", { id })),
+	/**  保存しないファイルのパターンを追加する（保存はしない）。書いたパターンを返す。 */
+	addIgnorePattern: (id: string, kind: IgnoreKindArg, value: string) => typedError<string, AppError>(__TAURI_INVOKE("add_ignore_pattern", { id, kind, value })),
+	/**  保存しないファイルのパターンを、完全一致する 1 行だけ削除する（保存はしない）。 */
+	removeIgnorePattern: (id: string, pattern: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_ignore_pattern", { id, pattern })),
+	/**
+	 *  追跡中の該当ファイルを保存対象から外して保存する（設計書 4.8 の 2）。作業フォルダのファイルは残る。
+	 *  `paths` は `list_tracked_ignored_files` に出たファイルだけを受け付ける。
+	 */
+	untrackFiles: (id: string, message: string, paths: string[]) => typedError<SaveResult, AppError>(__TAURI_INVOKE("untrack_files", { id, message, paths })),
 	/**
 	 *  プロジェクトフォルダ全体のファイル一覧（保存対象のみ。読み取りのみのため直列キューは通さない）。
 	 *  上限（1 万件）を超えたら打ち切り、`truncated` を立てる。
@@ -647,6 +660,23 @@ export type HistoryItem = {
 	pc_name: string | null,
 	/**  クラウドに上がっている保存か。自動保存と、クラウドの保管場所が無い・まだ何も上げていないときは false */
 	cloud_synced: boolean,
+};
+
+/**  保存しないファイルのパターンの種類（追加するとき） */
+export type IgnoreKindArg = 
+/**  拡張子（`*.ext`） */
+"extension" | 
+/**  フォルダ（`name/`） */
+"folder" | 
+/**  個別のファイル（`/path`） */
+"file";
+
+/**  `.gitignore` の 1 行と、追跡中の該当ファイルの件数 */
+export type IgnoreRuleItem = {
+	/**  行の内容（手書きの行も含む） */
+	pattern: string,
+	/**  追跡中（保存対象になっている）該当ファイルの件数。この画面で解釈できない書き方の行は null */
+	tracked_count: number | null,
 };
 
 /**  大きいファイル */

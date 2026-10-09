@@ -2012,6 +2012,205 @@ async fn discard_new_file(
     })
 }
 
+// ========== 保存しないファイル（設計書 4.8、S6） ==========
+
+/// 保存しないファイルのパターンの種類（追加するとき）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+pub enum IgnoreKindArg {
+    /// 拡張子（`*.ext`）
+    #[serde(rename = "extension")]
+    Extension,
+    /// フォルダ（`name/`）
+    #[serde(rename = "folder")]
+    Folder,
+    /// 個別のファイル（`/path`）
+    #[serde(rename = "file")]
+    File,
+}
+
+impl From<IgnoreKindArg> for core_ops::IgnoreKind {
+    fn from(kind: IgnoreKindArg) -> Self {
+        match kind {
+            IgnoreKindArg::Extension => core_ops::IgnoreKind::Extension,
+            IgnoreKindArg::Folder => core_ops::IgnoreKind::Folder,
+            IgnoreKindArg::File => core_ops::IgnoreKind::File,
+        }
+    }
+}
+
+/// `.gitignore` の 1 行と、追跡中の該当ファイルの件数
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct IgnoreRuleItem {
+    /// 行の内容（手書きの行も含む）
+    pub pattern: String,
+    /// 追跡中（保存対象になっている）該当ファイルの件数。この画面で解釈できない書き方の行は null
+    pub tracked_count: Option<u32>,
+}
+
+/// 保存しないファイルのパターン一覧（読み取りのみのため直列キューは通さない）。
+#[tauri::command]
+#[specta::specta]
+async fn list_ignore_patterns(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Vec<IgnoreRuleItem>, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(crate::git_runner());
+        let rules = ops
+            .list_ignore_rules(&project.path)
+            .map_err(AppError::from_ops_error)?;
+        Ok(rules
+            .into_iter()
+            .map(|r| IgnoreRuleItem {
+                pattern: r.pattern,
+                tracked_count: r.tracked_count,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// 追跡中（保存対象になっている）で、保存しないファイルに当たるファイルのパス（読み取りのみ）。
+#[tauri::command]
+#[specta::specta]
+async fn list_tracked_ignored_files(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Vec<String>, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let ops = Ops::new(crate::git_runner());
+        ops.list_tracked_ignored_files(&project.path)
+            .map_err(AppError::from_ops_error)
+    })
+    .await
+}
+
+/// 保存しないファイルのパターンを追加する（保存はしない）。書いたパターンを返す。
+#[tauri::command]
+#[specta::specta]
+async fn add_ignore_pattern(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    kind: IgnoreKindArg,
+    value: String,
+) -> Result<String, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let kind = core_ops::IgnoreKind::from(kind);
+    let pattern = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "ignore-add",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "保存しないファイルの設定は変わっていません",
+        },
+        move |ops, project_path| ops.add_ignore_pattern(project_path, kind, &value),
+        |_: &String| OpSummary {
+            detail: "added".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(pattern)
+}
+
+/// 保存しないファイルのパターンを、完全一致する 1 行だけ削除する（保存はしない）。
+#[tauri::command]
+#[specta::specta]
+async fn remove_ignore_pattern(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    pattern: String,
+) -> Result<(), AppError> {
+    let ctx = OpContext::new(app, &state);
+    run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "ignore-remove",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "保存しないファイルの設定は変わっていません",
+        },
+        move |ops, project_path| ops.remove_ignore_pattern(project_path, &pattern),
+        |_: &()| OpSummary {
+            detail: "removed".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// 追跡中の該当ファイルを保存対象から外して保存する（設計書 4.8 の 2）。作業フォルダのファイルは残る。
+/// `paths` は `list_tracked_ignored_files` に出たファイルだけを受け付ける。
+#[tauri::command]
+#[specta::specta]
+async fn untrack_files(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    message: String,
+    paths: Vec<String>,
+) -> Result<SaveResult, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let store = state.store_clone();
+    let touch_id = id.clone();
+    let memo = message.clone();
+    // 保存と同じく、分かっていれば保存の直前にリポジトリ単位の署名を最新にする
+    let signing = github::cached_signing_user(&state);
+    let outcome = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "untrack",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは消えていません（保存の対象から外すだけです）",
+        },
+        move |ops, path| {
+            if let Some((uid, login)) = &signing {
+                let identity = core_ops::resolve_identity(Some((*uid, login.as_str())));
+                ops.apply_identity(path, &identity)?;
+            }
+            let outcome = ops.untrack_and_save(path, &paths, &memo)?;
+            if let Ok(guard) = store.lock() {
+                let _ = guard.touch_project(&touch_id);
+            }
+            Ok(outcome)
+        },
+        |o: &core_ops::SaveOutcome| OpSummary {
+            detail: match o {
+                core_ops::SaveOutcome::Saved { .. } => "saved",
+                _ => "nothing-to-save",
+            }
+            .to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+
+    let commit = match outcome {
+        core_ops::SaveOutcome::Saved { commit, .. } => Some(commit),
+        _ => None,
+    };
+    if commit.is_some() {
+        state.scheduler.request_push(&id);
+    }
+    Ok(SaveResult {
+        commit,
+        message: Some(message),
+        size_check: None,
+    })
+}
+
 /// プロジェクトフォルダ全体のファイル一覧（保存対象のみ。読み取りのみのため直列キューは通さない）。
 /// 上限（1 万件）を超えたら打ち切り、`truncated` を立てる。
 #[tauri::command]
@@ -3125,6 +3324,11 @@ fn specta_builder() -> Builder<tauri::Wry> {
             restore_file,
             undo_restore,
             discard_new_file,
+            list_ignore_patterns,
+            list_tracked_ignored_files,
+            add_ignore_pattern,
+            remove_ignore_pattern,
+            untrack_files,
             list_project_tree,
             abort_merge,
             add_files,

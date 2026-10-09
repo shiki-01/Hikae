@@ -13,6 +13,7 @@ mod file_in_use;
 mod git_probe;
 mod history;
 mod identity;
+mod ignore_rules;
 mod index_lock;
 mod memo;
 mod models;
@@ -49,6 +50,7 @@ pub use default_excludes::{
 pub use discard_new_file::{DiscardedNewFile, Trasher};
 pub use git_probe::{probe_git, GitProbe};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
+pub use ignore_rules::{IgnoreKind, IgnoreRule};
 pub use index_lock::{
     assess_index_lock, ensure_index_free, index_lock_modified, index_lock_path, IndexLockState,
     WaitPlan, DEFAULT_WAIT, STALE_LOCK_AGE,
@@ -555,6 +557,43 @@ impl Ops {
             self.now(),
             self.meta(),
         )
+    }
+
+    /// 保存しないファイル（`.gitignore`）のパターン一覧と、追跡中の該当ファイルの件数（読み取りのみ。設計書 4.8）。
+    pub fn list_ignore_rules(&self, repo: &Path) -> Result<Vec<IgnoreRule>, OpsError> {
+        ignore_rules::list_ignore_rules(self.runner(), repo)
+    }
+
+    /// 追跡中（保存対象になっている）で、除外設定に当たるファイルのパス（読み取りのみ）。
+    pub fn list_tracked_ignored_files(&self, repo: &Path) -> Result<Vec<String>, OpsError> {
+        ignore_rules::tracked_ignored_files(self.runner(), repo)
+    }
+
+    /// `.gitignore` にパターンを追加する（保存はしない）。種類と入力から書き方を作り、戻り値はそのパターン。
+    /// 同じ行がすでにあれば何も書かない。変更の前に復元点を作る。
+    pub fn add_ignore_pattern(
+        &self,
+        repo: &Path,
+        kind: IgnoreKind,
+        value: &str,
+    ) -> Result<String, OpsError> {
+        ignore_rules::add_ignore_pattern(self.runner(), repo, kind, value, self.now(), self.meta())
+    }
+
+    /// `.gitignore` から、完全一致する 1 行を消す（保存はしない）。変更の前に復元点を作る。
+    pub fn remove_ignore_pattern(&self, repo: &Path, pattern: &str) -> Result<(), OpsError> {
+        ignore_rules::remove_ignore_pattern(self.runner(), repo, pattern, self.now(), self.meta())
+    }
+
+    /// 追跡中の該当ファイルを保存対象から外して保存する（設計書 4.8 の 2）。`paths` は
+    /// `list_tracked_ignored_files` に出るファイルだけ。作業フォルダのファイルは残す。
+    pub fn untrack_and_save(
+        &self,
+        repo: &Path,
+        paths: &[String],
+        memo: &str,
+    ) -> Result<SaveOutcome, OpsError> {
+        ignore_rules::untrack_and_save(self.runner(), repo, paths, memo, self.now(), self.meta())
     }
 
     /// 指定時点の 1 ファイルを `preview_root/<短縮コミット>/<相対パス>` へ書き出し、読み取り専用にして
