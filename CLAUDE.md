@@ -14,20 +14,20 @@
 
 ## 技術スタック（確定）
 
-| 領域             | 採用                                                                                                                                                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 基盤             | Tauri 2                                                                                                                                                                                                                              |
-| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript                                                                                                                                                               |
-| スタイル         | Master CSS（rc 版、`2.0.0-rc.88` に完全固定。正式版への追従はしない）。設定は CSS の `@theme`                                                                                                                                        |
-| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ）                                                                                                                                                     |
-| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                                                                                                                                                                                  |
-| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）。Windows は MinGit を `scripts/fetch-git-windows.mjs` で取得、macOS は `scripts/build-git-macos.sh`（未検証）。探索は `HIKAE_GIT_PATH` → 同梱 → PATH |
-| ファイル監視     | notify + notify-debouncer-full                                                                                                                                                                                                       |
-| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）                                                                                                                                                               |
-| アプリ内データ   | SQLite（rusqlite）                                                                                                                                                                                                                   |
-| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替                                                                                                                                                               |
-| docx / xlsx 抽出 | zip + quick-xml、calamine                                                                                                                                                                                                            |
-| ごみ箱への移動   | `trash` crate（`=5.2.9` に固定。`app` のみ。`core-ops` は `Trasher` trait だけを持つ）                                                                                                                                               |
+| 領域             | 採用                                                                                                                                                                                                                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 基盤             | Tauri 2                                                                                                                                                                                                                                                                                       |
+| UI               | SvelteKit（Svelte 5、adapter-static による SPA、SSR 無効）+ TypeScript                                                                                                                                                                                                                        |
+| スタイル         | Master CSS（rc 版、`2.0.0-rc.88` に完全固定。正式版への追従はしない）。設定は CSS の `@theme`                                                                                                                                                                                                 |
+| 状態管理         | Svelte 5 runes（UI 状態）+ TanStack Query の Svelte 版（バックエンド由来データ）                                                                                                                                                                                                              |
+| 型共有           | tauri-specta（Rust のコマンド定義から TS 型を生成）                                                                                                                                                                                                                                           |
+| Git              | 同梱の git CLI を `GitRunner` 経由で呼ぶ（libgit2 / isomorphic-git は使わない）。Windows は MinGit を `scripts/fetch-git-windows.mjs` で取得、macOS は `scripts/build-git-macos.sh`（CI でのビルドと universal 化は確認済み。実 Mac での起動は未確認）。探索は `HIKAE_GIT_PATH` → 同梱 → PATH |
+| ファイル監視     | notify + notify-debouncer-full                                                                                                                                                                                                                                                                |
+| 認証             | GitHub OAuth App の Device Flow、トークンは keyring（OS キーチェーン）                                                                                                                                                                                                                        |
+| アプリ内データ   | SQLite（rusqlite）                                                                                                                                                                                                                                                                            |
+| ローカル LLM     | `llama-server` サイドカー（OpenAI 互換 API）、詳細設定で Ollama に切替                                                                                                                                                                                                                        |
+| docx / xlsx 抽出 | zip + quick-xml、calamine                                                                                                                                                                                                                                                                     |
+| ごみ箱への移動   | `trash` crate（`=5.2.9` に固定。`app` のみ。`core-ops` は `Trasher` trait だけを持つ）                                                                                                                                                                                                        |
 
 ## リポジトリ構成
 
@@ -91,7 +91,7 @@
 
 ## 進め方
 
-- 開発は `docs/design.md` 12章のフェーズ順に進める。現在のフェーズは Phase 1（MVP）の実装中。Phase 0 の結果は `docs/notes/phase0-report.md`。macOS での CI 実行は確認済み。Device Flow の実認証（ブラウザでの手動承認）は未確認
+- 開発は `docs/design.md` 12章のフェーズ順に進める。Phase 1（MVP）は**機能実装が完了**している。終了条件（Git 未経験者 5 人の試験）、署名・公証・自動更新、ライセンスの決定は、配布の直前にまとめて確認する（2026-10-09 に決定。署名・自動更新・ライセンスは、それまで着手しない）。Phase 0 の結果は `docs/notes/phase0-report.md`、Phase 1 の性能・サイズの計測は `docs/notes/phase1-measurements.md`。macOS での CI 実行と、macOS の同梱 git の CI でのビルドは確認済み。Device Flow の実認証は確認済み。Phase 2 の機能（画像比較、docx と xlsx の差分、行単位の競合解消、保存しないファイルの画面、ローカル LLM など）へ進んでよい（2026-10-09 にユーザーが承認）。着手の際は、設計書の該当章を読んでから進める
 - 1つの作業単位ごとに commit する。commit メッセージは英語、Conventional Commits 形式
 - 設計にない機能を追加しない。必要だと判断した場合は提案として報告する
 - 判断に迷う点は推測で埋めず、選択肢と推奨を添えて質問する
