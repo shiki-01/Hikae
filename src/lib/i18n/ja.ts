@@ -502,9 +502,9 @@ const messages = {
 	'settings.auto_fetch_on_launch_text': 'アプリを開いたときに、別の PC の変更を確認します。',
 	'settings.pull_interval': '定期的に取り込む',
 	'settings.pull_interval_text': '設定した間隔で、別の PC の変更を確認します。',
-	'settings.auto_save_before_fetch': '取り込む前に自動で保存する',
+	'settings.auto_save_before_fetch': '取り込む前に、未保存の変更を確認なしで保存する',
 	'settings.auto_save_before_fetch_text':
-		'未保存の変更があるときは、保存してから取り込みます。オフのときは取り込む前に確認します。',
+		'オンのとき: 未保存の変更があれば、確認せずに保存してから取り込みます。オフのとき: 未保存の変更があれば、取り込む前に保存するかどうかを確認します。',
 	'settings.auto_upload_on_save': '保存したら自動でアップロードする',
 	'settings.auto_upload_on_save_text': '保存と同時に、クラウドへ控えを置きます。',
 	'settings.auto_snapshot': 'ファイルの変更を自動で残す',

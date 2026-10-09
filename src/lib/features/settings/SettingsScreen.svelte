@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { ArrowLeft } from '@lucide/svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
@@ -16,6 +14,7 @@
 	import Tabs from '#lib/components/Tabs.svelte';
 	import Toggle from '#lib/components/Toggle.svelte';
 	import { useProject } from '#lib/features/projects/queries.js';
+	import { goBackFromSettings } from '#lib/features/projects/relogin.js';
 	import { useSettings, useUpdateSettings } from './queries';
 	import {
 		SETTING_ROWS,
@@ -90,8 +89,7 @@
 	}
 
 	function back() {
-		if (history.length > 1) history.back();
-		else void goto(resolve('/'));
+		void goBackFromSettings(page.url.search);
 	}
 </script>
 

@@ -1,13 +1,11 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import { useSession } from '#lib/features/projects/queries.js';
-	import { reloginSearch } from '#lib/features/projects/relogin.js';
+	import { gotoLogin, reloginSearch } from '#lib/features/projects/relogin.js';
 	import { useLogout } from './account';
 
 	const session = useSession();
@@ -17,12 +15,12 @@
 	// ログアウトしたら、ログインの手順へ移り、終わったら一覧に戻る
 	const logout = useLogout(() => {
 		confirmOpen = false;
-		void goto(`${resolve('/welcome')}${reloginSearch({ pathname: '/', search: '' })}`);
+		void gotoLogin(reloginSearch({ pathname: '/', search: '' }));
 	});
 
-	// ログインし直す・ログインするときは、終わったらこの設定画面へ戻る
+	// ログインし直す・ログインするときは、終わったらこの設定画面ではなく一覧へ戻る
 	function login() {
-		void goto(`${resolve('/welcome')}${reloginSearch(page.url)}`);
+		void gotoLogin(reloginSearch(page.url));
 	}
 
 	const user = $derived(session.data?.userLogin ?? null);

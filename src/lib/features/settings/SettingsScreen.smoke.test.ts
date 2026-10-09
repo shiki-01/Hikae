@@ -55,7 +55,9 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(await screen.findByText(t('account.logout_title'))).toBeTruthy();
 		expect(screen.getByText(t('account.logout_text'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.logout_confirm') }));
-		await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/welcome?return=%2F'));
+		await vi.waitFor(() =>
+			expect(goto).toHaveBeenCalledWith('/welcome?return=%2F', { replaceState: true })
+		);
 		expect(JSON.parse(localStorage.getItem('hikae.session') ?? '{}')).toMatchObject({
 			loggedIn: false,
 			onboarded: true
@@ -77,7 +79,9 @@ describe('SettingsScreen のスモークテスト', () => {
 		renderWithClient(SettingsScreen);
 		expect(await screen.findByText(t('account.reauth'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.relogin') }));
-		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`);
+		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`, {
+			replaceState: true
+		});
 	});
 
 	it('一般のタブに「元に戻した後に自動で保存」があり、切り替えると保存される', async () => {
@@ -107,7 +111,27 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(await screen.findByText(t('account.not_logged_in'))).toBeTruthy();
 		expect(screen.queryByRole('button', { name: t('account.logout') })).toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.login') }));
-		expect(goto).toHaveBeenCalled();
+		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`, {
+			replaceState: true
+		});
+	});
+
+	it('ログアウト直後でも設定画面は開け、戻るは一覧へ向かう（履歴は使わない）', async () => {
+		localStorage.setItem('hikae.session', JSON.stringify({ loggedIn: false, onboarded: true }));
+		const back = vi.spyOn(history, 'back');
+		renderWithClient(SettingsScreen);
+		await screen.findByText(t('account.not_logged_in'));
+		await fireEvent.click(screen.getByRole('button', { name: t('settings.back') }));
+		expect(goto).toHaveBeenCalledWith('/', { replaceState: true });
+		expect(back).not.toHaveBeenCalled();
+		back.mockRestore();
+	});
+
+	it('プロジェクトから開いた設定の戻るは、そのプロジェクトの画面へ向かう', async () => {
+		setPageUrl('/settings?project=proj1&tab=auto_save');
+		renderWithClient(SettingsScreen);
+		await fireEvent.click(screen.getByRole('button', { name: t('settings.back') }));
+		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replaceState: true });
 	});
 
 	it('プロジェクトごとの設定に切り替えると、アカウントは出さない', async () => {

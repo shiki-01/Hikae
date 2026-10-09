@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { reloginSearch, safeReturnPath } from './relogin';
+import {
+	reloginSearch,
+	resolveReloginTarget,
+	resolveSettingsBackTarget,
+	safeReturnPath
+} from './relogin';
 
 describe('再ログインの行き先', () => {
 	it('いまの画面を戻り先にして、ログインの画面へ向かう', () => {
@@ -34,5 +39,27 @@ describe('再ログインの行き先', () => {
 		const search = reloginSearch({ pathname: '/settings', search: '?tab=push&project=p1' });
 		const param = new URL(`/welcome${search}`, 'http://localhost').searchParams.get('return');
 		expect(safeReturnPath(param)).toBe('/settings?tab=push&project=p1');
+	});
+
+	it('ログインの画面そのものは戻り先にしない（往復を防ぐ）', () => {
+		expect(safeReturnPath('/welcome')).toBeNull();
+		expect(safeReturnPath('/welcome?return=%2F')).toBeNull();
+		expect(safeReturnPath('/welcomeback')).toBe('/welcomeback');
+	});
+
+	it('ログイン後の行き先: 設定画面はプロジェクトか一覧、ログインの画面は一覧', () => {
+		expect(resolveReloginTarget('/project?id=p1')).toBe('/project?id=p1');
+		expect(resolveReloginTarget('/')).toBe('/');
+		expect(resolveReloginTarget('/welcome')).toBe('/');
+		expect(resolveReloginTarget('/settings')).toBe('/');
+		expect(resolveReloginTarget('/settings?tab=push')).toBe('/');
+		expect(resolveReloginTarget('/settings?project=p1&tab=push')).toBe('/project?id=p1');
+	});
+
+	it('設定の戻り先: プロジェクトを開いていればその画面、なければ一覧', () => {
+		expect(resolveSettingsBackTarget('')).toBe('/');
+		expect(resolveSettingsBackTarget('?tab=push')).toBe('/');
+		expect(resolveSettingsBackTarget('?project=')).toBe('/');
+		expect(resolveSettingsBackTarget('?project=p%201&tab=push')).toBe('/project?id=p%201');
 	});
 });
