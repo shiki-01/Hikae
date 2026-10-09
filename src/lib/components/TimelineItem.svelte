@@ -71,13 +71,13 @@
 					onclick={() => onselect?.(entry.id)}
 					class={`flex flex-direction:column w:100% px:3 py:2 r:md b:0 text-align:left cursor:pointer fg:fg ${rowLook(entry.id)}`}
 				>
-					<span class="type-small fg:fg-muted">
+					<span class="type-small fg:fg-muted overflow-wrap:anywhere">
 						{formatDateTime(entry.point.createdAt)}
 						{#if entry.point.pcName}
 							・{entry.point.pcName}
 						{/if}
 					</span>
-					<span class="type-body">{entry.point.message}</span>
+					<span class="type-body overflow-wrap:anywhere">{entry.point.message}</span>
 				</button>
 			{:else}
 				<button
@@ -101,7 +101,7 @@
 									type="button"
 									aria-current={selected(point.id) ? 'true' : undefined}
 									onclick={() => onselect?.(point.id)}
-									class={`w:100% pl:6 pr:3 py:1 r:md b:0 text-align:left cursor:pointer fg:fg-muted type-small ${rowLook(point.id)}`}
+									class={`w:100% pl:6 pr:3 py:1 overflow-wrap:anywhere r:md b:0 text-align:left cursor:pointer fg:fg-muted type-small ${rowLook(point.id)}`}
 								>
 									{formatDateTime(point.createdAt)}
 									{t('timeline.auto_save')}

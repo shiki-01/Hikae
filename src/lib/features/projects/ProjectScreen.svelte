@@ -408,7 +408,7 @@
 	}}
 />
 
-<div class="h:100vh flex flex-direction:column bg:bg fg:fg min-w:960px">
+<div class="h:100vh overflow:hidden flex flex-direction:column bg:bg fg:fg min-w:960px">
 	<StatusHeader
 		projectName={project.data?.name ?? ''}
 		hasConflict={(project.data?.hasConflict ?? false) ||
@@ -448,7 +448,7 @@
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
 		<div
-			class="flex flex-direction:column flex-shrink:0 bg:bg-subtle"
+			class="flex flex-direction:column flex-shrink:0 min-w:0 min-h:0 overflow:hidden bg:bg-subtle"
 			style:width={`${leftWidth}px`}
 			inert={compare !== null}
 		>
@@ -526,7 +526,10 @@
 			}`}
 		></div>
 
-		<div class="flex flex-direction:column flex:1 min-w:0 min-h:0" inert={compare !== null}>
+		<div
+			class="flex flex-direction:column flex:1 min-w:0 min-h:0 overflow:hidden"
+			inert={compare !== null}
+		>
 			{#if tab === 'changes'}
 				<ChangeDetail
 					{projectId}

@@ -42,7 +42,7 @@
 	const tree = $derived(buildFileTree(allFiles.data ?? []));
 </script>
 
-<div class="flex flex-direction:column flex:1 min-w:0 min-h:0 overflow-y:auto">
+<div class="flex flex-direction:column flex:1 min-w:0 min-h:0 overflow-y:auto overflow-x:hidden">
 	{#if isNow}
 		<div class="flex align-items:center justify-content:center flex:1 p:6">
 			<p class="m:0 type-body fg:fg-muted">{t('history.now_hint')}</p>
@@ -52,7 +52,7 @@
 			<p class="m:0 type-body fg:fg-muted">{t('history.select_hint')}</p>
 		</div>
 	{:else}
-		<div class="px:6 pt:6 pb:4 bb:1px|solid|border">
+		<div class="px:6 pt:6 pb:4 bb:1px|solid|border min-w:0 overflow-wrap:anywhere">
 			<p class="m:0 type-small fg:fg-muted">
 				{formatDateTime(point.createdAt)}
 				{#if point.pcName}
@@ -100,7 +100,7 @@
 			{/if}
 		</section>
 
-		<div class="flex gap:3 px:6 py:6">
+		<div class="flex flex-flow:row|wrap gap:3 px:6 py:6">
 			<Button variant="secondary" onclick={() => (showAll = !showAll)}>
 				<FolderTree size={16} aria-hidden="true" />
 				{showAll ? t('history.show_changed') : t('timeline.view_all_files')}

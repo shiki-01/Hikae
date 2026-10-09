@@ -92,9 +92,14 @@
 @layer base {
 	html {
 		color-scheme: light dark;
+		height: 100%;
+		/* ページ自体はスクロールしない。各画面の内部の領域だけがスクロールする */
+		overflow: hidden;
 	}
 	body {
 		margin: 0;
+		height: 100%;
+		overflow: hidden;
 		background: var(--color-bg);
 		color: var(--color-fg);
 		font-family: var(--font-family-sans);

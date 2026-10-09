@@ -56,7 +56,7 @@
 	}
 </script>
 
-<div class="h:100vh flex flex-direction:column bg:bg fg:fg">
+<div class="h:100vh overflow:hidden flex flex-direction:column bg:bg fg:fg">
 	<header
 		class="flex align-items:center justify-content:space-between h:56px px:4 flex-shrink:0 bg:bg-subtle bb:1px|solid|border"
 	>
@@ -72,7 +72,7 @@
 		</div>
 	</header>
 
-	<main class="flex:1 min-h:0 overflow-y:auto p:6">
+	<main class="flex:1 min-h:0 min-w:0 overflow-y:auto overflow-x:hidden p:6">
 		{#if projects.isPending}
 			<div
 				class="grid grid-template-columns:repeat(auto-fill,minmax(280px,1fr)) gap:4"
@@ -98,7 +98,7 @@
 				aria-label={t('projects.list_label')}
 			>
 				{#each sorted as project (project.id)}
-					<li>
+					<li class="min-w:0">
 						<ProjectCard
 							{project}
 							onclick={() => openProject(project)}

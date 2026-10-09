@@ -51,7 +51,7 @@
 	}: Props = $props();
 </script>
 
-<div class="flex flex-direction:column flex:1 min-h:0">
+<div class="flex flex-direction:column flex:1 min-w:0 min-h:0">
 	<div class="px:3 py:2 bb:1px|solid|border flex-shrink:0">
 		<SegmentedControl
 			value={view}
@@ -63,7 +63,7 @@
 			onchange={(value) => onviewchange(value === 'tree' ? 'tree' : 'changes')}
 		/>
 	</div>
-	<div class="flex:1 min-h:0 overflow-y:auto">
+	<div class="flex:1 min-h:0 min-w:0 overflow-y:auto overflow-x:hidden">
 		{#if view === 'tree'}
 			{#if treeLoading || tree === null}
 				<div class="flex flex-direction:column gap:3 p:3" aria-busy="true">

@@ -61,7 +61,7 @@
 	});
 </script>
 
-<div bind:this={scroller} class="flex:1 min-h:0 overflow-y:auto p:3">
+<div bind:this={scroller} class="flex:1 min-h:0 min-w:0 overflow-y:auto overflow-x:hidden p:3">
 	{#if loading}
 		<div class="flex flex-direction:column gap:3" aria-busy="true">
 			{#each [0, 1, 2, 3] as row (row)}

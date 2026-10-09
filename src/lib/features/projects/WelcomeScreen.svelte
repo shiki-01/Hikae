@@ -168,7 +168,9 @@
 	}
 </script>
 
-<div class="min-h:100vh flex flex-direction:column align-items:center bg:bg fg:fg px:4 py:8">
+<div
+	class="h:100vh overflow-y:auto overflow-x:hidden flex flex-direction:column align-items:center bg:bg fg:fg px:4 py:8"
+>
 	<header class="flex flex-direction:column align-items:center gap:4 mb:6">
 		<h1 class="m:0 type-title">{returnTo ? t('relogin.title') : t('wizard.title')}</h1>
 		{#if !returnTo}

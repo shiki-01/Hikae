@@ -93,7 +93,7 @@
 	}
 </script>
 
-<div class="h:100vh flex flex-direction:column bg:bg fg:fg">
+<div class="h:100vh overflow:hidden flex flex-direction:column bg:bg fg:fg">
 	<header
 		class="flex align-items:center gap:2 h:56px px:4 flex-shrink:0 bg:bg-subtle bb:1px|solid|border"
 	>

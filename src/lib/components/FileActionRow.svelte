@@ -49,7 +49,7 @@
 <div
 	class={`flex align-items:center justify-content:space-between gap:3 h:48px px:4 flex-shrink:0 bb:1px|solid|border ${className}`}
 >
-	<h2 class="m:0 type-heading overflow:hidden text-overflow:ellipsis white-space:nowrap">
+	<h2 class="m:0 min-w:0 type-heading overflow:hidden text-overflow:ellipsis white-space:nowrap">
 		{filename}
 	</h2>
 	<div class="flex align-items:center gap:2 flex-shrink:0">
