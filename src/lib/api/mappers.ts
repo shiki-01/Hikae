@@ -19,6 +19,9 @@ import type {
 	ConflictKind as BackendConflictKind,
 	DiffLine,
 	DiffResult,
+	OfficeDiff as BackendOfficeDiff,
+	OfficeUnavailableReason as BackendOfficeUnavailableReason,
+	ParagraphRow as BackendParagraphRow,
 	FileEntry as BackendFileEntry,
 	HistoryItem,
 	LoginStart,
@@ -70,6 +73,9 @@ import type {
 	FileDiff,
 	FileEntry,
 	ImpactItem,
+	OfficeDiff,
+	OfficeUnavailableReason,
+	ParagraphRow,
 	Owner,
 	PointFile,
 	Project,
@@ -234,6 +240,57 @@ export function mapDiff(lines: DiffLine[]): FileDiff {
  * 差分の取得結果。新規（未追跡）ファイルは、全行が追加の差分行になる。空のファイル・バイナリ・
  * 大きすぎるファイルは、本文を持たない結果（空 / ファイル情報 / 大きすぎて省略）にする。
  */
+/** Office 文書の比較結果を画面の形にする（キーは camelCase、種類の値は画面の表記に合わせる） */
+export function mapOfficeDiff(result: BackendOfficeDiff): OfficeDiff {
+	switch (result.kind) {
+		case 'docx':
+			return {
+				kind: 'docx',
+				rows: result.rows.map(mapParagraphRow),
+				truncated: result.truncated
+			};
+		case 'xlsx':
+			return {
+				kind: 'xlsx',
+				addedSheets: result.added_sheets,
+				removedSheets: result.removed_sheets,
+				cells: result.cells.map((cell) => ({
+					sheet: cell.sheet,
+					cell: cell.cell,
+					before: cell.before,
+					after: cell.after
+				})),
+				truncated: result.truncated
+			};
+		case 'unavailable':
+			return { kind: 'unavailable', reason: mapOfficeReason(result.reason) };
+	}
+}
+
+function mapParagraphRow(row: BackendParagraphRow): ParagraphRow {
+	switch (row.kind) {
+		case 'context':
+			return { kind: 'context', oldNo: row.old_no, newNo: row.new_no, text: row.text };
+		case 'added':
+			return { kind: 'add', newNo: row.new_no, text: row.text };
+		case 'removed':
+			return { kind: 'del', oldNo: row.old_no, text: row.text };
+		case 'omitted':
+			return { kind: 'omitted', count: row.count };
+	}
+}
+
+function mapOfficeReason(reason: BackendOfficeUnavailableReason): OfficeUnavailableReason {
+	switch (reason) {
+		case 'too-large':
+			return 'too_large';
+		case 'unsupported-format':
+			return 'unsupported_format';
+		case 'corrupt':
+			return 'corrupt';
+	}
+}
+
 export function mapDiffResult(result: DiffResult, path: string): FileDiff {
 	switch (result.kind) {
 		case 'lines':

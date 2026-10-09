@@ -2,8 +2,10 @@ import { t } from '#lib/i18n/index.js';
 import { AppError } from './errors';
 import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
+import { officeKindOf } from '#lib/features/compare/office-diff.js';
 import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
+	OfficeDiff,
 	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
@@ -921,6 +923,42 @@ export const mockApi: ProjectApi = {
 		const after = lines(path, tierOf(state, toId)) ?? [];
 		if (before.join('\n') === after.join('\n')) return { kind: 'identical' };
 		return { kind: 'text', rows: diffLines(before, after) };
+	},
+
+	async compareOffice(projectId, path, fromId, toId): Promise<OfficeDiff> {
+		await sleep(WAIT_SHORT);
+		const kind = officeKindOf(path);
+		if (kind === null) return { kind: 'unavailable', reason: 'unsupported_format' };
+		if (fromId === toId) {
+			return kind === 'docx'
+				? { kind: 'docx', rows: [{ kind: 'omitted', count: 4 }], truncated: 0 }
+				: { kind: 'xlsx', addedSheets: [], removedSheets: [], cells: [], truncated: 0 };
+		}
+		if (kind === 'docx') {
+			return {
+				kind: 'docx',
+				rows: [
+					{ kind: 'context', oldNo: 1, newNo: 1, text: t('mock.office.title') },
+					{ kind: 'omitted', count: 3 },
+					{ kind: 'del', oldNo: 5, text: t('mock.office.before') },
+					{ kind: 'add', newNo: 5, text: t('mock.office.after') },
+					{ kind: 'context', oldNo: 6, newNo: 6, text: t('mock.office.next') },
+					{ kind: 'omitted', count: 8 }
+				],
+				truncated: 0
+			};
+		}
+		return {
+			kind: 'xlsx',
+			addedSheets: [],
+			removedSheets: [],
+			cells: [
+				{ sheet: 'Sheet1', cell: 'B3', before: '120', after: '150' },
+				{ sheet: 'Sheet1', cell: 'C5', before: null, after: t('mock.office.value') },
+				{ sheet: 'Sheet2', cell: 'A1', before: t('mock.office.value'), after: null }
+			],
+			truncated: 0
+		};
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

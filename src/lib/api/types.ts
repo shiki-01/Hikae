@@ -139,6 +139,37 @@ export type FileDiff =
 	/** 更新日時が分からないときは null（画面では非表示） */
 	| { kind: 'info'; fileKind: FileKind; sizeBytes: number; modifiedAt: Date | null };
 
+/** 段落の差分の 1 行（docx）。`omitted` は省略された変更のない段落の件数 */
+export type ParagraphRow =
+	| { kind: 'context'; oldNo: number; newNo: number; text: string }
+	| { kind: 'add'; newNo: number; text: string }
+	| { kind: 'del'; oldNo: number; text: string }
+	| { kind: 'omitted'; count: number };
+
+/** セルの差分 1 件（xlsx）。`before` が null なら追加、`after` が null なら削除 */
+export interface CellChange {
+	sheet: string;
+	/** セル参照（A1 形式） */
+	cell: string;
+	before: string | null;
+	after: string | null;
+}
+
+/** 抽出できなかった理由。画面はファイル情報の表示に切り替え、理由を短く出す */
+export type OfficeUnavailableReason = 'too_large' | 'unsupported_format' | 'corrupt';
+
+/** Office 文書（docx・xlsx）の比較結果。`truncated` は画面に入らず打ち切った件数 */
+export type OfficeDiff =
+	| { kind: 'docx'; rows: ParagraphRow[]; truncated: number }
+	| {
+			kind: 'xlsx';
+			addedSheets: string[];
+			removedSheets: string[];
+			cells: CellChange[];
+			truncated: number;
+	  }
+	| { kind: 'unavailable'; reason: OfficeUnavailableReason };
+
 export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 
 export interface ConflictFile {
@@ -508,6 +539,8 @@ export interface ProjectApi {
 	/** 未保存の変更から作る保存メモの案（ルールベース） */
 	suggestMemo(projectId: string): Promise<string>;
 	compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff>;
+	/** docx・xlsx の内容の比較。抽出できないものは `unavailable` で返す（エラーにはしない） */
+	compareOffice(projectId: string, path: string, fromId: string, toId: string): Promise<OfficeDiff>;
 	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */
 	listProjectTree(projectId: string): Promise<ProjectTree>;
 

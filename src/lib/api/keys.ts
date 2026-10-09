@@ -17,6 +17,9 @@ export const keys = {
 	trackedIgnored: (id: string) => ['tracked-ignored', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,
+	/** Office 文書の比較。`['compare', id]` の接頭辞で、変更後に一緒に無効化される */
+	compareOffice: (id: string, path: string, from: string, to: string) =>
+		['compare', id, 'office', path, from, to] as const,
 	impact: (id: string, target: string, scope: string) => ['impact', id, target, scope] as const,
 	conflicts: (id: string) => ['conflicts', id] as const,
 	/** 行ごとの解消で開く、競合中のファイルの全文 */

@@ -9,7 +9,9 @@
 	import Select, { type SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
 	import ImageCompare from './ImageCompare.svelte';
+	import OfficeCompare from './OfficeCompare.svelte';
 	import { isImagePath } from './image-diff';
+	import { officeKindOf } from './office-diff';
 	import { canStep, stepBlock, swapPoints, type StepDirection } from './navigation';
 	import { useCompare } from './queries';
 
@@ -32,13 +34,17 @@
 
 	// 画像（対応する拡張子）は本文の差分を使わず、ImageCompare で比べる
 	const imageMode = $derived(isImagePath(path));
+	// docx・xlsx は抽出した内容を OfficeCompare で比べる（抽出できないときは中で従来の表示にする）
+	const officeMode = $derived(officeKindOf(path) !== null);
+	// ページ送りと表示方法は、行差分（テキスト）のときだけ使う
+	const plainMode = $derived(!imageMode && !officeMode);
 
 	const diff = useCompare(
 		() => projectId,
 		() => path,
 		() => from,
 		() => to,
-		() => !imageMode
+		() => plainMode
 	);
 
 	const total = $derived(diff.data?.kind === 'text' ? countBlocks(diff.data.rows) : 0);
@@ -84,7 +90,7 @@
 				{path}
 			</h2>
 			<div class="flex align-items:center gap:2 flex-shrink:0">
-				{#if !imageMode}
+				{#if plainMode}
 					<span class="type-small fg:fg-muted" aria-live="polite">
 						{#if total > 0 && active !== null}
 							{t('compare.position', { current: active + 1, total })}
@@ -135,7 +141,7 @@
 				class="w:240px"
 			/>
 			<span class="flex:1"></span>
-			{#if !imageMode}
+			{#if plainMode}
 				<SegmentedControl
 					bind:value={mode}
 					ariaLabel={t('compare.mode')}
@@ -160,6 +166,8 @@
 				rightLabel={labelOf(to)}
 			/>
 		{/key}
+	{:else if officeMode}
+		<OfficeCompare {projectId} {path} {from} {to} {onopen} />
 	{:else}
 		<DiffView
 			diff={diff.data ?? null}

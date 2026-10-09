@@ -116,7 +116,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | SaveBar | メモ欄、AI 提案チップ、保存ボタン | 変更なし（無効）、入力可、AI 生成中、AI 提案あり、保存中 | MVP（AI は Phase 2） |
 | TimelineItem | 点、日時、メモ、クラウド境界線 | 保存ポイント / 自動保存（折りたたみ・展開）/ いま / 選択中 / 「ここまでクラウド」線 | MVP |
 | FileActionRow | ファイル名＋「見比べる」「元に戻す」「開く▾」 | 時点表示用 / 現在用 / 現在用・新規ファイル（「元に戻す」が「元に戻す（作成しない）」になる）/ 変更なし（「すべてのファイル」で選んだ変更の無いファイル。「開く▾」のみ） | MVP |
-| DiffView | 左右2カラム、行番号、追加・削除行 | テキスト / docx 段落 / xlsx セル（「Sheet1!B3: 120 → 150」）/ 差分なし / 大きすぎて省略 / 新規ファイル（全行が追加。行番号は 1 から）/ 空の新規ファイル（「空の新しいファイルです」）/ ファイル情報（バイナリ・リンク・変更の無いファイル。種類・サイズ・更新日時。更新日時が不明なら行ごと省く）。新規ファイルの本文は 1MB まで、超えたら「大きすぎて省略」 | MVP（docx・xlsx は Phase 2） |
+| DiffView | 左右2カラム、行番号、追加・削除行 | テキスト / docx 段落 / xlsx セル（「Sheet1!B3: 120 → 150」）/ 差分なし / 大きすぎて省略 / 新規ファイル（全行が追加。行番号は 1 から）/ 空の新規ファイル（「空の新しいファイルです」）/ ファイル情報（バイナリ・リンク・変更の無いファイル。種類・サイズ・更新日時。更新日時が不明なら行ごと省く）。新規ファイルの本文は 1MB まで、超えたら「大きすぎて省略」 | MVP（docx・xlsx は Phase 2 で実装済み。`OfficeCompare.svelte`） |
 | ImageCompare | 並べる / 重ねる（スライダー）/ 差分強調 | 読込中、サイズ違いの画像 | Phase 2 |
 | ConflictItem | ファイル名、2版の情報（日時・PC 名）、2択ラジオ、「別名で残す」チェック、見比べる | 未選択、選択済み、片方削除型（残す / 削除を受け入れる） | MVP |
 | ImpactList | 影響ファイル一覧（いまの内容 → 戻した後） | 変更 / 取り除かれる / 復活する | MVP |
@@ -322,7 +322,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | S1 プロジェクト一覧 | `features/projects/ProjectsScreen.svelte`（`/`） | 実装済み。要対応のカードを先頭に寄せる |
 | S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
 | S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、履歴の各項目の `cloudSynced`（バックエンドの `cloud_synced`）から出す。保存先に接続していない、まだ何も上げていないときは出ない（design.md 4.6、12章） |
-| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）と画像比較。docx・xlsx は Phase 2 |
+| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）、画像比較、docx・xlsx の抽出差分（`OfficeCompare.svelte`） |
 | S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」の 4 タブ。詳細設定は空。S6〜S8 は未実装（`features/ai` と `features/extensions` は空） |
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |

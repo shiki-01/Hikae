@@ -7,6 +7,16 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# docx / xlsx は zip の中身の読み取りだけを使う。展開先のファイルは作らない。
+# 版は calamine が使う 8.6 に揃える（二重に入らないように）。圧縮器は要らないため、
+# deflate の復号（flate2）だけを選ぶ。calamine が deflate を要求するため、実際の依存は同じになる
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+# XML の走査（名前空間つき）。版は calamine が使う 0.41 に揃える。DTD は展開しない（既定）
+quick-xml = "0.41.0"
+# xlsx の値の読み取り（数式ではなく、保存されている結果の値）
+calamine = "0.36.1"
+# 段落・セルの差分（行単位の Myers 法）
+similar = "3.2.0"
 
 [lints]
 workspace = true

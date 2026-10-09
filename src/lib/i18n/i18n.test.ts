@@ -48,7 +48,11 @@ describe('i18n', () => {
 			'lock',
 			'left',
 			'right',
-			'rate'
+			'rate',
+			'ref',
+			'before',
+			'after',
+			'value'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

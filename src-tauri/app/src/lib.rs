@@ -22,6 +22,7 @@ mod events;
 mod github;
 mod health;
 mod maintenance;
+mod office;
 mod ops_runner;
 mod os_trash;
 mod remote;
@@ -3388,6 +3389,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             relocate_project,
             list_point_changes,
             open_file_at,
+            office::compare_office,
             recover_interrupted,
             github::get_session,
             github::start_login,

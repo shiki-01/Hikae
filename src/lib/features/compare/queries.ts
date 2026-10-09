@@ -16,3 +16,18 @@ export function useCompare(
 		enabled: getProjectId() !== '' && getPath() !== null && getEnabled()
 	}));
 }
+
+/** docx・xlsx の内容の比較。抽出できないものは `unavailable` の結果になる（エラーにはしない） */
+export function useCompareOffice(
+	getProjectId: () => string,
+	getPath: () => string | null,
+	getFrom: () => string,
+	getTo: () => string,
+	getEnabled: () => boolean = () => true
+) {
+	return createQuery(() => ({
+		queryKey: keys.compareOffice(getProjectId(), getPath() ?? '', getFrom(), getTo()),
+		queryFn: () => api.compareOffice(getProjectId(), getPath() ?? '', getFrom(), getTo()),
+		enabled: getProjectId() !== '' && getPath() !== null && getEnabled()
+	}));
+}

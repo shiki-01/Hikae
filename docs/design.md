@@ -808,7 +808,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `tauri-specta` / `specta` 2.0.0-rc.25、`specta-typescript` 0.0.12 | `app`、`core-store` | `src/lib/bindings.ts` の生成 |
 | 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2` | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
 
-設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`zip` / `quick-xml` / `calamine`、`wasmtime`、`llama-server` サイドカー（`core-preview` と `core-llm` は雛形のみ）。
+設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`wasmtime`、`llama-server` サイドカー（`core-llm` は雛形のみ）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
 
 **同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
 
@@ -946,7 +946,7 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 - 状態を変える操作は `run_op`（直列キューの内側）で実行し、読み取りは `run_blocking` でキューを通さずに実行する
 - TanStack Query のキーは、実装では `['changes', projectId]`、`['history', projectId]`、`['compare', projectId, ...]` のように**種別を先頭**にしている（`src/lib/api/keys.ts`）。操作の完了後は `status-changed` を受けて、プロジェクトに関わるキーをまとめて無効化する
 - ブラウザ単体で動かすときは Tauri が無いため、画面は mock の API（`src/lib/api/mock.ts`）に切り替わる
-- 大きいファイルの内容を Tauri のカスタムプロトコルで UI に直接読ませる仕組み（`app-blob://localhost/<プロジェクト ID>/<rev>/<URL エンコードしたパス>`。Windows では `http://app-blob.localhost/...`）は**画像で実装済み**。`rev` は `work`（作業フォルダ）か、画面が持つ短縮 ID（app 層が完全な OID に解決する）。`core-ops` の `read_blob` が検証（OID と `work` のみ、`export_file_at` と同じパス規則と制御文字の拒否、拡張子は png / jpg / jpeg / gif / webp / bmp のみで svg は不可、リンクは拒否、上限 50 MiB）を担い、読み取りのみで何も書かない。応答には `nosniff`・`no-store`・CORS（canvas で画素を読むため）を付け、失敗は空ボディの 400 / 404 / 500。CSP は `img-src` のみ（`'self'`、app-blob、GitHub のアバター）。抽出テキスト（docx / xlsx）への利用は未実装
+- 大きいファイルの内容を Tauri のカスタムプロトコルで UI に直接読ませる仕組み（`app-blob://localhost/<プロジェクト ID>/<rev>/<URL エンコードしたパス>`。Windows では `http://app-blob.localhost/...`）は**画像で実装済み**。`rev` は `work`（作業フォルダ）か、画面が持つ短縮 ID（app 層が完全な OID に解決する）。`core-ops` の `read_blob` が検証（OID と `work` のみ、`export_file_at` と同じパス規則と制御文字の拒否、拡張子は png / jpg / jpeg / gif / webp / bmp のみで svg は不可、リンクは拒否、上限 50 MiB）を担い、読み取りのみで何も書かない。応答には `nosniff`・`no-store`・CORS（canvas で画素を読むため）を付け、失敗は空ボディの 400 / 404 / 500。CSP は `img-src` のみ（`'self'`、app-blob、GitHub のアバター）。docx / xlsx は app-blob を使わず、`compare_office` コマンド（`core-ops` の `read_office` が同じ検証で最大 50 MiB を読み、`core-preview` が段落・セルを抽出して差分にする。抽出できない場合は `unavailable` を返し、画面は通常のファイル情報に戻る）で比較する。`core-preview` の上限は、展開後 100 MiB・zip エントリ 10,000・セル 200,000（シートの矩形は 100 万セル）・段落 100,000。差分の打ち切りは 1,000 件、段落差分の計算は 3 秒。xlsx の日付はシリアル値の数値のまま表示する
 
 ## 10. ローカル LLM 設計
 
@@ -1074,7 +1074,7 @@ Phase 1 で特に工数を見込むべき箇所は、Windows でのファイル�
 | --- | --- |
 | S0 初回ウィザード | 実装済み（ログイン → 最初のプロジェクト → 完了の 3 ステップ） |
 | S1 プロジェクト一覧、S2 変更タブ、S3 履歴タブ | 実装済み。S3 の「この時点の全ファイルを見る」（ファイルツリー）と自動保存の折りたたみを含む。「ここまでクラウド」の線は、履歴の各項目の `cloud_synced`（`@{u}` から辿れる手動の保存。自動保存は常に偽）から出す。ヘッダーの最終アップロード日時は `ProjectInfo.last_uploaded_at`（`@{u}` が指す保存の日時）。保存先に接続していないプロジェクトには「GitHub に接続していません」と「接続する」を出す。S2 は、新規（未追跡）ファイルの差分表示（全行が追加。4.1）、新規ファイルの「元に戻す（作成しない）」（ごみ箱へ移す。4.2）、左ペインの「変更のみ」「すべてのファイル」の切り替え（4.1）、未保存の変更があっても出る控えめな「取り込む」ボタン（3.3）を含む |
-| S4 比較ビュー | テキストの行差分（左右／統合）と画像比較（並べる／重ねる／差分強調）を実装済み。docx・xlsx は Phase 2 |
+| S4 比較ビュー | テキストの行差分（左右／統合）、画像比較（並べる／重ねる／差分強調）、docx の段落差分、xlsx のセル差分を実装済み |
 | S5 設定 | 4 タブ（一般・取り込み・アップロード・自動保存）の項目が実装済み。ほかの 4 タブ（保存しないファイル・AI・拡張機能・詳細設定）は案内の文だけ。数値の項目は選択肢とカスタム入力（7.2）。設定画面の「一般」にアカウント（ユーザー名・ログアウト）を置く。保存のみの設定は画面に出さない（7.2） |
 | ファイル監視と自動保存 | 実装済み（Phase 2 から前倒し。6.2、9.2）。フォルダを監視して変更一覧に即座に反映し、変更後に静止したら自動保存（隠し ref）を作る。**実際の OS のファイル監視と自動保存のタイミングは、実機での確認が済んでいない**（自動テストは一時ディレクトリでの通知の到達と、時刻を引数にした判断ロジックまで） |
 | D1 プロジェクト追加 | 既存フォルダの登録・GitHub から取得・新規作成を実装済み。新規作成と既存フォルダの登録は、ログイン済みなら GitHub 上にリポジトリを作って接続し、初回のアップロードまで行う（4.6）。公開範囲は初期が非公開で、公開は警告と確認のチェックが必要 |

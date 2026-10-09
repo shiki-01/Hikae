@@ -191,6 +191,8 @@ export const commands = {
 	 *  パスは `..`・絶対パス・`.git` 配下を拒否する。
 	 */
 	openFileAt: (id: string, commit: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_file_at", { id, commit, relativePath })),
+	/**  2 つの時点の同じパスの Office 文書を比べる。`from`・`to` は画面の時点 ID */
+	compareOffice: (id: string, from: string, to: string, path: string) => typedError<OfficeDiff, AppError>(__TAURI_INVOKE("compare_office", { id, from, to, path })),
 	/**
 	 *  中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
 	 * 
@@ -508,6 +510,15 @@ export type AttentionReason =
 /**  広すぎるフォルダの種類 */
 export type BroadFolderKind = "home" | "drive-root" | "standard-folder" | "system-folder";
 
+/**  セルの差分 1 件。`before` が無ければ追加、`after` が無ければ削除 */
+export type CellRow = {
+	sheet: string,
+	/**  セル参照（A1 形式） */
+	cell: string,
+	before: string | null,
+	after: string | null,
+};
+
 /**  変更ファイル */
 export type ChangeFile = {
 	path: string,
@@ -736,6 +747,28 @@ export type NeedsAttention = {
 	reason: AttentionReason,
 };
 
+/**  Office 文書の比較結果 */
+export type OfficeDiff = 
+/**  Word 文書の段落差分 */
+{ kind: "docx"; rows: ParagraphRow[]; 
+/**  `rows` に入らず打ち切った行の数 */
+truncated: number } | 
+/**  Excel ブックの差分（シートの追加・削除と、同名シートのセルの差分） */
+{ kind: "xlsx"; added_sheets: string[]; removed_sheets: string[]; cells: CellRow[]; 
+/**  `cells` に入らず打ち切ったセルの数 */
+truncated: number } | 
+/**  抽出できなかった（画面はファイル情報の表示に切り替える） */
+{ kind: "unavailable"; reason: OfficeUnavailableReason };
+
+/**  抽出できなかった理由（設計書 5.1。画面は短い文言を出す） */
+export type OfficeUnavailableReason = 
+/**  上限（ファイルの大きさ・段落数・セル数など）を超えた */
+"too-large" | 
+/**  対応していない形式（拡張子と中身が合わない、旧形式、暗号化を含む） */
+"unsupported-format" | 
+/**  壊れている */
+"corrupt";
+
 /**  状態変更操作が終わった */
 export type OpFinished = {
 	project_id: string,
@@ -787,6 +820,17 @@ export type OwnerInfo = {
 
 /**  保存先の種類 */
 export type OwnerKindData = "personal" | "org";
+
+/**  段落の差分の 1 行 */
+export type ParagraphRow = 
+/**  変更のない段落（前後の文脈として残したもの） */
+{ kind: "context"; old_no: number; new_no: number; text: string } | 
+/**  追加された段落 */
+{ kind: "added"; new_no: number; text: string } | 
+/**  削除された段落 */
+{ kind: "removed"; old_no: number; text: string } | 
+/**  省略された変更のない段落の件数 */
+{ kind: "omitted"; count: number };
 
 /**  保存時点で変更されたファイル */
 export type PointChangeItem = {

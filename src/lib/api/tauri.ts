@@ -10,6 +10,7 @@ import {
 	mapConflict,
 	mapDeviceFlow,
 	mapDiffResult,
+	mapOfficeDiff,
 	mapFileEntries,
 	mapFileImpact,
 	mapError,
@@ -56,6 +57,7 @@ import type {
 	FetchOptions,
 	FileDiff,
 	FileEntry,
+	OfficeDiff,
 	ImpactItem,
 	OpenAction,
 	PointFile,
@@ -263,6 +265,16 @@ export const tauriApi: ProjectApi = {
 	async compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff> {
 		const result = await unwrap(commands.diff(projectId, fromId, toId, path));
 		return mapDiffResult(result, path);
+	},
+
+	async compareOffice(
+		projectId: string,
+		path: string,
+		fromId: string,
+		toId: string
+	): Promise<OfficeDiff> {
+		const result = await unwrap(commands.compareOffice(projectId, fromId, toId, path));
+		return mapOfficeDiff(result);
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

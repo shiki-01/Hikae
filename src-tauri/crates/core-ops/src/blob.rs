@@ -40,6 +40,47 @@ pub(crate) fn is_full_oid(rev: &str) -> bool {
     (rev.len() == 40 || rev.len() == 64) && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// 読み取りの結果。上限を超えたものは、エラーではなく `TooLarge` として返す
+/// （画像は `InvalidInput` に、Office 文書は抽出できない理由に写す）
+enum Fetched {
+    Bytes(Vec<u8>),
+    TooLarge,
+}
+
+/// Office 文書（設計書 3.3 S4）を読んだ結果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OfficeFile {
+    /// 読んだ内容（バイト列そのまま）
+    Bytes(Vec<u8>),
+    /// 上限（`max_bytes`）を超えたため、読まなかった
+    TooLarge,
+}
+
+/// 作業フォルダの `work`、または完全な OID だけを受け付けるかを確かめ、パスを正規化する。
+/// 制御文字を含むパス、プロジェクトの外へ出るパス、`.git` 配下のパスは拒否する
+fn validate_request(rev: &str, path: &str) -> Result<String, OpsError> {
+    if rev != WORK_REV && !is_full_oid(rev) {
+        return Err(OpsError::InvalidInput(
+            "rev must be a full object id or work".to_string(),
+        ));
+    }
+    if path.chars().any(char::is_control) {
+        return Err(OpsError::InvalidInput(
+            "path must not contain control characters".to_string(),
+        ));
+    }
+    normalize_project_path(path)
+}
+
+/// パスの拡張子（小文字）。拡張子が無ければ空
+fn extension_of(rel: &str) -> String {
+    std::path::Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
 /// 指定時点（完全な OID）または作業フォルダ（`work`）の画像ファイルを読む。
 ///
 /// - 存在しない（その時点に通常のファイルとして無い、作業フォルダに無い）場合は `Io(NotFound)`
@@ -52,31 +93,55 @@ pub(crate) fn read_blob(
     path: &str,
     max_bytes: u64,
 ) -> Result<Blob, OpsError> {
-    if rev != WORK_REV && !is_full_oid(rev) {
-        return Err(OpsError::InvalidInput(
-            "rev must be a full object id or work".to_string(),
-        ));
-    }
-    if path.chars().any(char::is_control) {
-        return Err(OpsError::InvalidInput(
-            "path must not contain control characters".to_string(),
-        ));
-    }
-    let rel = normalize_project_path(path)?;
-    let ext = std::path::Path::new(&rel)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+    let rel = validate_request(rev, path)?;
+    let ext = extension_of(&rel);
     let mime = mime_for_extension(&ext)
         .ok_or_else(|| OpsError::InvalidInput("file type is not an allowed image".to_string()))?;
 
-    let bytes = if rev == WORK_REV {
-        read_work_file(repo, &rel, max_bytes)?
+    match fetch(runner, repo, rev, &rel, max_bytes)? {
+        Fetched::Bytes(bytes) => Ok(Blob { bytes, mime }),
+        Fetched::TooLarge => Err(OpsError::InvalidInput("file is too large".to_string())),
+    }
+}
+
+/// 指定時点（完全な OID）または作業フォルダ（`work`）の Office 文書（docx・xlsx）を読む（設計書 3.3 S4）。
+///
+/// - 存在しない場合は `Io(NotFound)`。パスの検査・リンクの扱いは `read_blob` と同じ
+/// - 拡張子が docx・xlsx でない場合は `InvalidInput`（`.doc`・`.docm`・`.xls` を含む）
+/// - `max_bytes` を超えるものは読まずに `OfficeFile::TooLarge` を返す
+pub(crate) fn read_office(
+    runner: &GitRunner,
+    repo: &Path,
+    rev: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<OfficeFile, OpsError> {
+    let rel = validate_request(rev, path)?;
+    let ext = extension_of(&rel);
+    if ext != "docx" && ext != "xlsx" {
+        return Err(OpsError::InvalidInput(
+            "file type is not an allowed office document".to_string(),
+        ));
+    }
+    match fetch(runner, repo, rev, &rel, max_bytes)? {
+        Fetched::Bytes(bytes) => Ok(OfficeFile::Bytes(bytes)),
+        Fetched::TooLarge => Ok(OfficeFile::TooLarge),
+    }
+}
+
+/// 時点または作業フォルダの通常のファイルを、上限つきで読む（拡張子の検査は呼び出し側）
+fn fetch(
+    runner: &GitRunner,
+    repo: &Path,
+    rev: &str,
+    rel: &str,
+    max_bytes: u64,
+) -> Result<Fetched, OpsError> {
+    if rev == WORK_REV {
+        read_work_file(repo, rel, max_bytes)
     } else {
-        read_at_commit(runner, repo, rev, &rel, max_bytes)?
-    };
-    Ok(Blob { bytes, mime })
+        read_at_commit(runner, repo, rev, rel, max_bytes)
+    }
 }
 
 /// 指定時点の通常のファイルを読む（`ls-tree` で確認してから `cat-file -p` で読む。`export_file_at` と同じ手順）
@@ -86,7 +151,7 @@ fn read_at_commit(
     rev: &str,
     rel: &str,
     max_bytes: u64,
-) -> Result<Vec<u8>, OpsError> {
+) -> Result<Fetched, OpsError> {
     let oid = resolve_commit(runner, repo, rev)?;
     let entry = crate::operations::parse_ls_tree_long(
         &runner
@@ -103,21 +168,21 @@ fn read_at_commit(
             "path is not a regular file".to_string(),
         ));
     }
-    // 読み取る前に大きさで拒否する
+    // 読み取る前に大きさで止める
     if entry.size > max_bytes {
-        return Err(OpsError::InvalidInput("file is too large".to_string()));
+        return Ok(Fetched::TooLarge);
     }
     // ls-tree の大きさと実際の内容が違っても上限を超えないよう、読み取り後にも確認する
     let spec = format!("{oid}:{rel}");
     let bytes = runner.run_ok(repo, &["cat-file", "-p", &spec])?.stdout;
     if bytes.len() as u64 > max_bytes {
-        return Err(OpsError::InvalidInput("file is too large".to_string()));
+        return Ok(Fetched::TooLarge);
     }
-    Ok(bytes)
+    Ok(Fetched::Bytes(bytes))
 }
 
 /// 作業フォルダの現在のファイルを読む。リンクで外へ出るもの、通常のファイルでないものは拒否する。
-fn read_work_file(repo: &Path, rel: &str, max_bytes: u64) -> Result<Vec<u8>, OpsError> {
+fn read_work_file(repo: &Path, rel: &str, max_bytes: u64) -> Result<Fetched, OpsError> {
     let abs = resolve_in_project(repo, rel).map_err(open_path_to_ops)?;
     let meta = std::fs::metadata(&abs)?;
     if !meta.is_file() {
@@ -126,7 +191,7 @@ fn read_work_file(repo: &Path, rel: &str, max_bytes: u64) -> Result<Vec<u8>, Ops
         )));
     }
     if meta.len() > max_bytes {
-        return Err(OpsError::InvalidInput("file is too large".to_string()));
+        return Ok(Fetched::TooLarge);
     }
     // 読んでいる間に大きくなっても上限を超えないよう、上限 + 1 バイトまでで止める
     let mut bytes = Vec::new();
@@ -134,9 +199,9 @@ fn read_work_file(repo: &Path, rel: &str, max_bytes: u64) -> Result<Vec<u8>, Ops
         .take(max_bytes + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max_bytes {
-        return Err(OpsError::InvalidInput("file is too large".to_string()));
+        return Ok(Fetched::TooLarge);
     }
-    Ok(bytes)
+    Ok(Fetched::Bytes(bytes))
 }
 
 /// `resolve_in_project` の失敗を `OpsError` へ写す。見つからない・通常でないものは NotFound、
