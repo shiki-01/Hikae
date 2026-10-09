@@ -2,12 +2,19 @@
 
 use crate::memo::{self, MemoChange, MemoChangeKind, MemoLabels};
 use crate::models::*;
+use crate::open_path::{resolve_entry_in_project, OpenPathError};
 use crate::pc_name::{split_trailer, Meta};
+use crate::restore_file::normalize_project_path;
 use crate::size_check::{self, SaveOptions, SizeLimits};
 use core_git::GitRunner;
 use core_safety::create_backup_ref;
+use std::collections::HashSet;
+use std::io::Read;
 use std::path::Path;
 use time::OffsetDateTime;
+
+/// 行ごとの解消（`conflict_text`）で返す競合ファイルの上限（バイト）。超えるものは全文を返さない
+pub(crate) const CONFLICT_TEXT_MAX_BYTES: u64 = 1024 * 1024;
 
 /// リポジトリを初期化。remote_url があれば remote add。
 pub(crate) fn init_project(
@@ -435,6 +442,72 @@ pub(crate) fn conflicts(runner: &GitRunner, repo: &Path) -> Result<Vec<ConflictF
     Ok(conflicts)
 }
 
+/// 競合中のファイルの作業フォルダの全文（git が書いた競合マーカー付き）を返す（読み取りのみ。設計書 4.4 手順 5）。
+/// 対象は両方変更・両方追加の競合だけ。UTF-8 として有効で、NUL を含まず、
+/// `CONFLICT_TEXT_MAX_BYTES` 以下のときだけ全文を返す。それ以外は None（画面は2択だけにする）。
+/// 競合一覧に無いパスは InvalidInput。
+pub(crate) fn conflict_text(
+    runner: &GitRunner,
+    repo: &Path,
+    path: &str,
+) -> Result<Option<String>, OpsError> {
+    let rel = normalize_project_path(path)?;
+    let current = conflicts(runner, repo)?;
+    let Some(found) = current.iter().find(|f| f.path == rel) else {
+        return Err(OpsError::InvalidInput(format!(
+            "file is not in conflict: {rel}"
+        )));
+    };
+    if !matches!(
+        found.kind,
+        ConflictKind::BothModified | ConflictKind::BothAdded
+    ) {
+        return Ok(None);
+    }
+
+    // リンクはたどらない（リンク先の内容は扱わない）。通常のファイルだけを読む
+    let abs = match resolve_entry_in_project(repo, &rel) {
+        Ok(abs) => abs,
+        Err(OpenPathError::NotFound) => return Ok(None),
+        Err(e) => return Err(entry_error(e)),
+    };
+    let meta = match std::fs::symlink_metadata(&abs) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if !meta.is_file() || meta.len() > CONFLICT_TEXT_MAX_BYTES {
+        return Ok(None);
+    }
+
+    // 判定から読み込みまでに大きくなった場合に備え、上限 + 1 バイトまでしか読まない
+    let mut bytes = Vec::new();
+    std::fs::File::open(&abs)?
+        .take(CONFLICT_TEXT_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > CONFLICT_TEXT_MAX_BYTES || bytes.contains(&0) {
+        return Ok(None);
+    }
+    Ok(String::from_utf8(bytes).ok())
+}
+
+/// `resolve_entry_in_project` の失敗を `OpsError` に変える（プロジェクト外・不正なパスは InvalidInput）
+fn entry_error(e: OpenPathError) -> OpsError {
+    match e {
+        OpenPathError::Io(io) | OpenPathError::RootUnavailable(io) => OpsError::from(io),
+        other => OpsError::InvalidInput(format!("path is not allowed: {other}")),
+    }
+}
+
+/// 行ごとの解消で書く全文に、未解決の競合マーカー行が残っていないか。
+/// 行頭が `<<<<<<< `、`=======` の単独行、行頭が `>>>>>>> ` のいずれかなら残っている（行末の CR は無視する）。
+pub(crate) fn has_conflict_marker(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_end_matches('\r');
+        line.starts_with("<<<<<<< ") || line == "=======" || line.starts_with(">>>>>>> ")
+    })
+}
+
 /// 指定の参照でそのパスを最後に変更したコミットの時刻（Unix 秒）と、その保存を作った PC の名前
 /// （メモ末尾のトレーラー）を返す。
 /// 参照が無い・履歴が空・解析できない場合は None（表示側で日時・PC 名を隠す）。
@@ -805,10 +878,14 @@ pub(crate) fn restore(
 /// 競合を解消
 // 引数は呼び出し口（Ops::resolve）の引数に付帯情報（時刻・文言・署名）を足したもの
 #[allow(clippy::too_many_arguments)]
+/// `choices`: 全競合について 1 件ずつ（重複・欠けは拒否）。`edits` に含まれるパスも、choices に
+/// 要素が必要。呼び出し側は edits のパスに `Choice::Mine` を入れておけばよい（その choice は無視される）。
+/// `edits`: 行ごとに編集した解消後の全文（パス → 全文）。`BothModified` / `BothAdded` の競合だけ許可する。
 pub(crate) fn resolve(
     runner: &GitRunner,
     repo: &Path,
     choices: &[(String, Choice)],
+    edits: &[(String, String)],
     keep_other_copy: bool,
     message: &str,
     now: OffsetDateTime,
@@ -821,12 +898,8 @@ pub(crate) fn resolve(
         return Err(OpsError::Unexpected("no conflicts to resolve".to_string()));
     }
 
-    // choices が全競合をカバーしているか確認
-    if current_conflicts.len() != choices.len() {
-        return Err(OpsError::Unexpected(
-            "choices must cover all conflicts".to_string(),
-        ));
-    }
+    // 入力の検査。復元点を作る前に行い、ここで拒否したときは何も変更しない
+    check_resolve_input(&current_conflicts, choices, edits)?;
 
     // ブランチ名を取得
     let branch_output = runner.run(repo, &["symbolic-ref", "--short", "HEAD"])?;
@@ -852,6 +925,15 @@ pub(crate) fn resolve(
             .iter()
             .find(|f| &f.path == path)
             .ok_or_else(|| OpsError::Unexpected(format!("file {} not in conflict", path)))?;
+
+        // 行ごとに編集した全文がある（検査済みで BothModified / BothAdded のみ）。
+        // 利用者が両方の版を見て組み立てたため、choice は使わず、別名の版も作らない
+        if let Some((_, text)) = edits.iter().find(|(p, _)| p == path) {
+            let abs = resolve_entry_in_project(repo, path).map_err(entry_error)?;
+            std::fs::write(&abs, text)?;
+            runner.run_ok(repo, &["add", "--", path])?;
+            continue;
+        }
 
         match file_conflict.kind {
             ConflictKind::BothModified | ConflictKind::BothAdded => {
@@ -945,6 +1027,59 @@ pub(crate) fn resolve(
         .to_string();
 
     Ok(ResolveOutcome { commit, copies })
+}
+
+/// 解消の入力を検査する（何も変更しない。復元点を作る前に呼ぶ）。
+/// - choices は全競合を 1 件ずつ覆うこと（欠け・重複・競合一覧に無いパスは unexpected）
+/// - edits のパスは競合一覧にあり、BothModified / BothAdded であること（それ以外は InvalidInput）
+/// - edits のパスは 1 件ずつ。内容に未解決の競合マーカー行が残っていないこと（InvalidInput）
+fn check_resolve_input(
+    current: &[ConflictFile],
+    choices: &[(String, Choice)],
+    edits: &[(String, String)],
+) -> Result<(), OpsError> {
+    if current.len() != choices.len() {
+        return Err(OpsError::Unexpected(
+            "choices must cover all conflicts".to_string(),
+        ));
+    }
+    let mut chosen = HashSet::new();
+    for (path, _) in choices {
+        let in_conflict = current.iter().any(|f| &f.path == path);
+        if !in_conflict || !chosen.insert(path.as_str()) {
+            return Err(OpsError::Unexpected(format!(
+                "choices must cover all conflicts: {path}"
+            )));
+        }
+    }
+
+    let mut edited = HashSet::new();
+    for (path, text) in edits {
+        let Some(found) = current.iter().find(|f| &f.path == path) else {
+            return Err(OpsError::InvalidInput(format!(
+                "file is not in conflict: {path}"
+            )));
+        };
+        if !matches!(
+            found.kind,
+            ConflictKind::BothModified | ConflictKind::BothAdded
+        ) {
+            return Err(OpsError::InvalidInput(format!(
+                "file cannot be edited line by line: {path}"
+            )));
+        }
+        if !edited.insert(path.as_str()) {
+            return Err(OpsError::InvalidInput(format!(
+                "file is edited more than once: {path}"
+            )));
+        }
+        if has_conflict_marker(text) {
+            return Err(OpsError::InvalidInput(format!(
+                "conflict markers remain in the edited text: {path}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// merge をキャンセル

@@ -88,8 +88,13 @@ export const commands = {
 	restore: (id: string, commit: string, saveMemo: string | null) => typedError<RestoreAllResult, AppError>(__TAURI_INVOKE("restore", { id, commit, saveMemo })),
 	/**  現在の競合ファイルを取得。 */
 	listConflicts: (id: string) => typedError<ConflictItem[], AppError>(__TAURI_INVOKE("list_conflicts", { id })),
-	/**  競合を解消。 */
-	resolveConflicts: (id: string, choices: ([string, ConflictChoice])[], keepOtherCopy: boolean) => typedError<null, AppError>(__TAURI_INVOKE("resolve_conflicts", { id, choices, keepOtherCopy })),
+	/**
+	 *  競合中のファイルの全文（競合マーカー付き）を取得する（行ごとの解消用。読み取りのみ）。
+	 *  両方変更・両方追加で、UTF-8・NUL なし・1 MiB 以下のときだけ返す。それ以外は None。
+	 */
+	conflictText: (id: string, path: string) => typedError<string | null, AppError>(__TAURI_INVOKE("conflict_text", { id, path })),
+	/**  競合を解消。`edits` は行ごとに編集した解消後の全文（パス → 全文）。edits のパスの choice は無視される。 */
+	resolveConflicts: (id: string, choices: ([string, ConflictChoice])[], edits: ([string, string])[], keepOtherCopy: boolean) => typedError<null, AppError>(__TAURI_INVOKE("resolve_conflicts", { id, choices, edits, keepOtherCopy })),
 	/**
 	 *  未保存の変更から保存メモの案を作る（ルールベース、設計書 10.3）。
 	 *  読み取りのみのため直列キューは通さない。

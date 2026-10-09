@@ -222,6 +222,7 @@ fn test_3_conflict_mine() -> Result<(), Box<dyn std::error::Error>> {
     ops_b.resolve(
         &setup.pc_b,
         &[("conflict.txt".to_string(), Choice::Mine)],
+        &[],
         false,
         "resolved: keeping B's version",
     )?;
@@ -276,6 +277,7 @@ fn test_4_conflict_theirs_keep_copy() -> Result<(), Box<dyn std::error::Error>> 
     let outcome = ops_b.resolve(
         &setup.pc_b,
         &[("conflict.txt".to_string(), Choice::Theirs)],
+        &[],
         true,
         "resolved: taking A's version with backup",
     )?;
@@ -332,6 +334,7 @@ fn test_5_multiple_files_different_choices() -> Result<(), Box<dyn std::error::E
             ("x.txt".to_string(), Choice::Mine),
             ("y.txt".to_string(), Choice::Theirs),
         ],
+        &[],
         false,
         "resolved with different choices",
     )?;
@@ -384,6 +387,7 @@ fn test_6_deleted_by_them_keep_and_delete() -> Result<(), Box<dyn std::error::Er
     ops_b.resolve(
         &setup.pc_b,
         &[("del.txt".to_string(), Choice::Mine)],
+        &[],
         false,
         "keep the file",
     )?;
@@ -425,6 +429,7 @@ fn test_6b_deleted_by_them_accept_deletion() -> Result<(), Box<dyn std::error::E
     ops_b.resolve(
         &setup.pc_b,
         &[("del.txt".to_string(), Choice::Theirs)],
+        &[],
         false,
         "accept deletion",
     )?;
@@ -619,6 +624,7 @@ fn test_12_history_is_preserved_and_pre_merge_backup_points_to_old_head(
     ops_b.resolve(
         &setup.pc_b,
         &[("doc.txt".to_string(), Choice::Mine)],
+        &[],
         false,
         "merged",
     )?;
@@ -703,6 +709,7 @@ fn test_13_labels_are_injected_and_pull_creates_a_single_restore_point(
     let outcome = ops_b.resolve(
         &setup.pc_b,
         &[("dir/doc.txt".to_string(), Choice::Mine)],
+        &[],
         true,
         "merged",
     )?;

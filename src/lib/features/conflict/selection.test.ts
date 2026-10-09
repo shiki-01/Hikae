@@ -4,8 +4,10 @@ import {
 	canResolve,
 	initSelection,
 	setChoice,
+	setEdit,
 	setKeepBoth,
 	syncSelection,
+	toEdits,
 	toResolutions,
 	unresolvedCount
 } from './selection';
@@ -79,5 +81,40 @@ describe('ぶつかり解消の選択状態', () => {
 		expect(grown['c.txt'].choice).toBeNull();
 		const shrunk = syncSelection([conflicts[0]], chosen);
 		expect(Object.keys(shrunk)).toEqual(['a.docx']);
+	});
+});
+
+describe('行ごとの編集の確定', () => {
+	const conflicts = [conflict('a.docx'), conflict('b.txt', 'deleted_in_cloud')];
+
+	it('行ごとの編集で確定したファイルは、2 択と同じく解消の対象になる', () => {
+		let selection = initSelection(conflicts);
+		selection = setEdit(selection, 'a.docx', 'merged\n');
+		selection = setChoice(selection, 'b.txt', 'this');
+		expect(canResolve(conflicts, selection)).toBe(true);
+	});
+
+	it('編集の全文は edits に入り、choices には全件が入る（編集分の choice は this の placeholder）', () => {
+		let selection = initSelection(conflicts);
+		selection = setEdit(selection, 'a.docx', 'merged\n');
+		selection = setChoice(selection, 'b.txt', 'cloud');
+		expect(toEdits(conflicts, selection)).toEqual([{ path: 'a.docx', text: 'merged\n' }]);
+		expect(toResolutions(conflicts, selection)).toEqual([
+			{ path: 'a.docx', choice: 'this', keepBoth: false },
+			{ path: 'b.txt', choice: 'cloud', keepBoth: false }
+		]);
+	});
+
+	it('2 択で選び直すと、行ごとの編集は取り消される', () => {
+		let selection = setEdit(initSelection(conflicts), 'a.docx', 'merged\n');
+		selection = setChoice(selection, 'a.docx', 'cloud');
+		expect(toEdits(conflicts, selection)).toEqual([]);
+		expect(selection['a.docx'].choice).toBe('cloud');
+	});
+
+	it('編集を取り消すと、そのファイルは未選択に戻る', () => {
+		let selection = setEdit(initSelection(conflicts), 'a.docx', 'merged\n');
+		selection = setEdit(selection, 'a.docx', null);
+		expect(unresolvedCount(conflicts, selection)).toBe(2);
 	});
 });

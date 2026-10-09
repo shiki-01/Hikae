@@ -158,8 +158,15 @@ export type Choice = 'this' | 'cloud';
 
 export interface ConflictResolution {
 	path: string;
+	/** 全件を覆うために必要。行ごとに編集したファイル（edits）のパスは backend で無視される */
 	choice: Choice;
 	keepBoth: boolean;
+}
+
+/** 行ごとに編集して確定した解消後の全文（BothModified / BothAdded のみ） */
+export interface ConflictEdit {
+	path: string;
+	text: string;
 }
 
 export type RestoreScope = { kind: 'all' } | { kind: 'file'; path: string };
@@ -537,7 +544,14 @@ export interface ProjectApi {
 	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;
-	resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void>;
+	/** 競合中のファイルの全文（競合マーカー付き）。行ごとの解消ができない（対象外・大きい・バイナリ）ときは null */
+	conflictText(projectId: string, path: string): Promise<string | null>;
+	/** 競合を解消する。edits は行ごとに編集した全文（choices と併せて全件を指定する） */
+	resolveConflicts(
+		projectId: string,
+		resolutions: ConflictResolution[],
+		edits?: ConflictEdit[]
+	): Promise<void>;
 	abortMerge(projectId: string): Promise<void>;
 
 	/**

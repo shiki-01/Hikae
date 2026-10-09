@@ -286,11 +286,20 @@ impl Ops {
         operations::conflicts(self.runner(), repo)
     }
 
-    /// 競合を解消。全競合ファイルについて choices を指定。
+    /// 競合中のファイルの全文（競合マーカー付き）を返す（読み取りのみ）。
+    /// 両方変更・両方追加で、UTF-8・NUL なし・1 MiB 以下のときだけ Some。それ以外は None。
+    pub fn conflict_text(&self, repo: &Path, path: &str) -> Result<Option<String>, OpsError> {
+        operations::conflict_text(self.runner(), repo, path)
+    }
+
+    /// 競合を解消。全競合ファイルについて choices を指定（全競合を 1 件ずつ覆うこと）。
+    /// `edits` は行ごとに編集した解消後の全文（パス → 全文）。edits のパスの choice は無視される
+    /// （呼び出し側は Mine を入れておく）。edits のファイルには別名の版を作らない。
     pub fn resolve(
         &self,
         repo: &Path,
         choices: &[(String, Choice)],
+        edits: &[(String, String)],
         keep_other_copy: bool,
         message: &str,
     ) -> Result<ResolveOutcome, OpsError> {
@@ -298,6 +307,7 @@ impl Ops {
             self.runner(),
             repo,
             choices,
+            edits,
             keep_other_copy,
             message,
             self.now(),

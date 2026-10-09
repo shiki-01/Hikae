@@ -1168,6 +1168,22 @@ export const mockApi: ProjectApi = {
 		return stateOf(projectId).conflicts.map((c) => ({ ...c }));
 	},
 
+	async conflictText(projectId: string, path: string): Promise<string | null> {
+		await sleep(WAIT_SHORT);
+		const conflict = stateOf(projectId).conflicts.find((c) => c.path === path);
+		// 両方変更・両方追加だけ全文を返す（モックでは行ごとの解消の画面を確かめられるように短い全文を返す）
+		if (!conflict || conflict.kind !== 'both') return null;
+		return [
+			'<<<<<<< HEAD',
+			'line from this PC',
+			'=======',
+			'line from cloud',
+			'>>>>>>> cloud',
+			'common line',
+			''
+		].join('\n');
+	},
+
 	async resolveConflicts(projectId: string, resolutions: ConflictResolution[]): Promise<void> {
 		await sleep(WAIT_LONG);
 		const state = stateOf(projectId);

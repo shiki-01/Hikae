@@ -162,6 +162,7 @@ fn conflicts_report_the_pc_name_of_each_side() -> TestResult {
     ops_b.resolve(
         b,
         &[("conflict.txt".to_string(), Choice::Mine)],
+        &[],
         false,
         "まとめた",
     )?;
@@ -529,6 +530,7 @@ fn resolving_a_conflicted_pull_also_restores_files_the_other_pc_stopped_tracking
     ops_b.resolve(
         b,
         &[("conflict.txt".to_string(), Choice::Mine)],
+        &[],
         false,
         "まとめた",
     )?;

@@ -1,24 +1,30 @@
 import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { api } from '#lib/api/index.js';
 import { t } from '#lib/i18n/index.js';
-import type { ConflictResolution } from '#lib/api/types.js';
+import type { ConflictEdit, ConflictResolution } from '#lib/api/types.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import { invalidateProject } from '#lib/features/projects/sync.js';
 
+/** 解消の指示。choices（全件）と、行ごとに編集した全文（ある場合） */
+export interface ResolvePayload {
+	resolutions: ConflictResolution[];
+	edits: ConflictEdit[];
+}
+
 export function useResolve(getProjectId: () => string, onResolved?: () => void) {
 	const client = useQueryClient();
-	const retry: { run?: (resolutions: ConflictResolution[]) => void } = {};
+	const retry: { run?: (payload: ResolvePayload) => void } = {};
 	const mutation = createMutation(() => ({
-		mutationFn: (resolutions: ConflictResolution[]) =>
-			api.resolveConflicts(getProjectId(), resolutions),
+		mutationFn: (payload: ResolvePayload) =>
+			api.resolveConflicts(getProjectId(), payload.resolutions, payload.edits),
 		onSuccess: async () => {
 			await invalidateProject(client, getProjectId());
 			pushToast({ type: 'success', message: t('toast.resolved') });
 			onResolved?.();
 		},
-		onError: (error, resolutions) => reportError(error, { retry: () => retry.run?.(resolutions) })
+		onError: (error, payload) => reportError(error, { retry: () => retry.run?.(payload) })
 	}));
-	retry.run = (resolutions) => mutation.mutate(resolutions);
+	retry.run = (payload) => mutation.mutate(payload);
 	return mutation;
 }
 

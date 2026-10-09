@@ -1800,7 +1800,55 @@ async fn list_conflicts(
     })?
 }
 
-/// 競合を解消。
+/// 競合中のファイルの全文（競合マーカー付き）を取得する（行ごとの解消用。読み取りのみ）。
+/// 両方変更・両方追加で、UTF-8・NUL なし・1 MiB 以下のときだけ返す。それ以外は None。
+#[tauri::command]
+#[specta::specta]
+async fn conflict_text(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<Option<String>, AppError> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let store_guard = store.lock().map_err(|e| AppError {
+            code: "conflict_list_failed".to_string(),
+            params: Vec::new(),
+            what_happened: "競合一覧取得に失敗しました".to_string(),
+            data_is_safe: "ファイルは安全です".to_string(),
+            next_action: "もう一度試してください".to_string(),
+            technical_info: Some(e.to_string()),
+        })?;
+
+        let project = store_guard.get_project(&id).map_err(|e| AppError {
+            code: "project_not_found".to_string(),
+            params: Vec::new(),
+            what_happened: "プロジェクトが見つかりません".to_string(),
+            data_is_safe: "何も変更されていません".to_string(),
+            next_action: "プロジェクト一覧から確認してください".to_string(),
+            technical_info: Some(format!("{:?}", e)),
+        })?;
+
+        drop(store_guard);
+
+        let runner = crate::git_runner();
+        let ops = Ops::new(runner);
+
+        ops.conflict_text(&project.path, &path)
+            .map_err(AppError::from_ops_error)
+    })
+    .await
+    .map_err(|e| AppError {
+        code: "task_failed".to_string(),
+        params: Vec::new(),
+        what_happened: "タスク実行に失敗しました".to_string(),
+        data_is_safe: "ファイルは安全です".to_string(),
+        next_action: "もう一度試してください".to_string(),
+        technical_info: Some(e.to_string()),
+    })?
+}
+
+/// 競合を解消。`edits` は行ごとに編集した解消後の全文（パス → 全文）。edits のパスの choice は無視される。
 #[tauri::command]
 #[specta::specta]
 async fn resolve_conflicts(
@@ -1808,6 +1856,7 @@ async fn resolve_conflicts(
     state: tauri::State<'_, AppState>,
     id: String,
     choices: Vec<(String, ConflictChoice)>,
+    edits: Vec<(String, String)>,
     keep_other_copy: bool,
 ) -> Result<(), AppError> {
     let ctx = OpContext::new(app, &state);
@@ -1832,7 +1881,7 @@ async fn resolve_conflicts(
             target: None,
             data_is_safe: "ファイルは変更されていません",
         },
-        move |ops, path| ops.resolve(path, &converted_choices, keep_other_copy, &message),
+        move |ops, path| ops.resolve(path, &converted_choices, &edits, keep_other_copy, &message),
         |_| OpSummary {
             detail: "resolved".to_string(),
             quiet: false,
@@ -3315,6 +3364,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             restore_preview,
             restore,
             list_conflicts,
+            conflict_text,
             resolve_conflicts,
             suggest_memo,
             list_files_at,

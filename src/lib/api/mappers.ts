@@ -61,6 +61,7 @@ import type {
 	ChangeType,
 	Choice,
 	ConflictFile,
+	ConflictEdit,
 	ConflictKind,
 	ConflictResolution,
 	DeviceFlow,
@@ -159,6 +160,11 @@ export function mapConflict(item: ConflictItem): ConflictFile {
 
 export function mapChoice(choice: Choice): ConflictChoice {
 	return choice === 'this' ? 'mine' : 'theirs';
+}
+
+/** 行ごとの編集（backend の引数はタプルの配列） */
+export function mapEdits(edits: ConflictEdit[]): [string, string][] {
+	return edits.map((edit) => [edit.path, edit.text]);
 }
 
 export function mapResolutions(resolutions: ConflictResolution[]): {

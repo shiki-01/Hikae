@@ -327,7 +327,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |
 | D2 元に戻す確認 | `features/history/RestoreDialog.svelte` | 実装済み |
-| D3 変更のぶつかり解消 | `features/conflict/ConflictModal.svelte` | 実装済み（2 択と「別名で残す」） |
+| D3 変更のぶつかり解消 | `features/conflict/ConflictModal.svelte` | 実装済み（2 択、「別名で残す」、行ごとに選ぶ `LineEditor`）。S6（保存しないファイル）はパターン管理と追跡解除まで実装済み |
 | D4 エラー表示 | `features/notifications`（`ErrorDialog`、`ToastHost`） | 実装済み |
 
 設計に無かった画面として、次のダイアログを追加した: 大きいファイルの確認（`SizeCheckDialog`。保存時の E07 / E08）、取り込み・アップロードを見送ったときの案内（`SyncSizeDialog`）、途中で止まった操作の案内（`InterruptedDialog`。E15）、ファイル追加の結果（`AddFilesResultDialog`。置き換えた／置き換えられず別名にした／別名にした／飛ばしたリンク／追加できなかった理由／大きいものを分けて出す）、同名のファイルの確認（`AddConflictDialog`。480px の警告系。ファイルごとに「両方残す（既定）／置き換える／追加しない」を Radio で選び、複数あるときは「すべてに同じ選択を使う」。置き換えられないファイルは「置き換える」を無効にして理由を出す。「置き換える場合も、置き換える前の内容は自動保存として残り、あとから取り消せます。」の安心文つき）、「一覧から外す」の確認（`RemoveProjectDialog`）。

@@ -22,6 +22,7 @@ import {
 	mapPush,
 	mapRemoteOutcome,
 	mapRemoteProjects,
+	mapEdits,
 	mapResolutions,
 	mapSaveResult,
 	mapSavePoint,
@@ -45,6 +46,7 @@ import type {
 	FolderCheck,
 	Change,
 	ClonePhase,
+	ConflictEdit,
 	ConflictFile,
 	ConnectRemoteInput,
 	DiscardResult,
@@ -364,9 +366,13 @@ export const tauriApi: ProjectApi = {
 		return items.map(mapConflict);
 	},
 
-	async resolveConflicts(projectId, resolutions): Promise<void> {
+	async conflictText(projectId: string, path: string): Promise<string | null> {
+		return unwrap(commands.conflictText(projectId, path));
+	},
+
+	async resolveConflicts(projectId, resolutions, edits: ConflictEdit[] = []): Promise<void> {
 		const { choices, keepOtherCopy } = mapResolutions(resolutions);
-		await unwrap(commands.resolveConflicts(projectId, choices, keepOtherCopy));
+		await unwrap(commands.resolveConflicts(projectId, choices, mapEdits(edits), keepOtherCopy));
 	},
 
 	async abortMerge(projectId: string): Promise<void> {

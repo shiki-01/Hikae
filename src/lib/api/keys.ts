@@ -19,6 +19,8 @@ export const keys = {
 		['compare', id, path, from, to] as const,
 	impact: (id: string, target: string, scope: string) => ['impact', id, target, scope] as const,
 	conflicts: (id: string) => ['conflicts', id] as const,
+	/** 行ごとの解消で開く、競合中のファイルの全文 */
+	conflictText: (id: string, path: string) => ['conflict-text', id, path] as const,
 	owners: ['owners'] as const,
 	remoteProjects: (query: string) => ['remote-projects', query] as const,
 	/** プロジェクトを指定しない場合は全体設定 */
