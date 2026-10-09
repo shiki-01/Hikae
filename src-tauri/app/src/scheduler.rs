@@ -10,7 +10,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use core_ops::{PullOutcome, UploadOutcome};
+use core_ops::{OpsError, PullOutcome, UploadOutcome};
 use core_store::{AppSettings, Project};
 use core_watch::{
     FailureKind, MaintenanceTimer, SnapshotAttempt, SnapshotPlanner, SnapshotPolicy, SyncHealth,
@@ -444,7 +444,7 @@ async fn run_loop(app: tauri::AppHandle) {
         // フォルダが見つかる全プロジェクト（リモートの有無は問わない）が、ファイル監視と自動保存の対象
         let active: Vec<(Project, AppSettings)> = listed
             .iter()
-            .filter(|(p, _)| !missing.contains(&p.id))
+            .filter(|(p, _)| !missing.contains(&p.id) && !ctx.health.is_broken(&p.id))
             .cloned()
             .collect();
         handle.sync_snapshot_planners(
@@ -487,7 +487,7 @@ async fn run_loop(app: tauri::AppHandle) {
 
         let targets: Vec<(Project, SyncPolicy, bool)> = listed
             .into_iter()
-            .filter(|(p, _)| !missing.contains(&p.id))
+            .filter(|(p, _)| !missing.contains(&p.id) && !ctx.health.is_broken(&p.id))
             .filter(|(p, _)| p.remote_url.as_deref().is_some_and(|u| !u.is_empty()))
             .map(|(p, s)| (p, policy_from_settings(&s), !s.save_before_pull))
             .collect();
@@ -606,6 +606,14 @@ async fn execute(
             // 取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った
             if matches!(r, Ok(PullOutcome::NeedsSizeDecision(_))) {
                 notify_large_files(ctx, project);
+            }
+            // 取り込む側に、この PC では作れないファイル名があり、何も変更せず見送った（E18）
+            if matches!(&r, Err(OpFailure::Ops(OpsError::UnsupportedFileNames(_)))) {
+                let _ = NeedsAttention {
+                    project_id: project.id.clone(),
+                    reason: AttentionReason::UnsupportedFileNames,
+                }
+                .emit(&ctx.app);
             }
             pull_task_result(&r)
         }

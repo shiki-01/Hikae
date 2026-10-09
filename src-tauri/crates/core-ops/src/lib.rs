@@ -5,11 +5,15 @@ mod auto_snapshot;
 mod broad_folder;
 mod changes;
 mod clone_dest;
+mod cloud_sync;
 mod default_excludes;
 mod discard_new_file;
+mod disk_full;
 mod file_in_use;
+mod git_probe;
 mod history;
 mod identity;
+mod index_lock;
 mod memo;
 mod models;
 mod new_file_diff;
@@ -21,9 +25,11 @@ mod project_tree;
 mod recover;
 mod relocate;
 mod remote;
+mod repo_health;
 mod restore_file;
 mod restore_save;
 mod size_check;
+mod windows_names;
 
 pub use add_files::{
     AddFilesRequest, FOLDER_MAX_DEPTH, FOLDER_MAX_FILES, LARGE_FILE_LIMIT_BYTES,
@@ -33,12 +39,20 @@ pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
 pub use broad_folder::{check_project_folder, BroadFolderReason, BroadFolders};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
+pub use cloud_sync::{
+    detect_cloud_sync, detect_cloud_sync_with_real, CloudRoots, CloudSyncService,
+};
 pub use default_excludes::{
     apply_block as apply_default_exclude_block, ExcludeOutcome, DEFAULT_EXCLUDE_PATTERNS,
     EXCLUDE_BLOCK_BEGIN, EXCLUDE_BLOCK_END,
 };
 pub use discard_new_file::{DiscardedNewFile, Trasher};
+pub use git_probe::{probe_git, GitProbe};
 pub use identity::{resolve_identity, FALLBACK_EMAIL, FALLBACK_NAME};
+pub use index_lock::{
+    assess_index_lock, ensure_index_free, index_lock_modified, index_lock_path, IndexLockState,
+    WaitPlan, DEFAULT_WAIT, STALE_LOCK_AGE,
+};
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use models::{
     new_restore_points, AddConflictAction, AddConflictDecision, AddConflictPolicy, AddFilesOutcome,
@@ -59,8 +73,15 @@ pub use remote::{
     project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
     RemoteConnection,
 };
+pub use repo_health::{
+    check_repo_health, parse_count_objects, repo_size, BrokenReason, RepoHealth, RepoSize,
+    REPO_SIZE_WARN_BYTES,
+};
 pub use restore_save::memo_for_auto_save;
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
+pub use windows_names::{
+    find_unsupported_names, root_path_len, UnsupportedName, UnsupportedReason, MAX_LISTED_NAMES,
+};
 
 use core_git::GitRunner;
 use core_safety::Signature;
@@ -77,6 +98,8 @@ pub struct Ops {
     signature: Signature,
     /// この PC の名前（保存・取り込みの commit のトレーラーに使う）。取得できなければ None
     pc_name: Option<String>,
+    /// 取り込み前に、取り込む側のファイル名が Windows で作れるかを検査する（既定は Windows のみ）
+    check_windows_names: bool,
 }
 
 impl Ops {
@@ -89,7 +112,15 @@ impl Ops {
             labels: Labels::default(),
             signature: Signature::default(),
             pc_name: pc_name::local_pc_name(),
+            check_windows_names: cfg!(windows),
         }
+    }
+
+    /// 取り込み前のファイル名の検査（設計書 5章 E18）を強制的に有効・無効にする（テスト用）。
+    /// 既定は Windows でだけ検査する。
+    pub fn with_windows_name_check(mut self, enabled: bool) -> Self {
+        self.check_windows_names = enabled;
+        self
     }
 
     /// 復元点（自動保存）の作者を指定する。ログイン済みなら GitHub のユーザー名と noreply アドレス。
@@ -237,6 +268,7 @@ impl Ops {
             &self.labels,
             limits,
             policy,
+            self.check_windows_names,
             self.meta(),
         )
     }
@@ -290,6 +322,7 @@ impl Ops {
             self.now(),
             &self.labels,
             limits,
+            self.check_windows_names,
             self.meta(),
         )
     }
@@ -313,6 +346,21 @@ impl Ops {
         limit: usize,
     ) -> Result<Vec<HistoryEntry>, OpsError> {
         history::history(self.runner(), repo, offset, limit)
+    }
+
+    /// 軽い検査でリポジトリが読めるかを確かめる（設計書 5章 E10。読み取りのみ）。
+    /// `expect_commits` は、すでに保存があるはずのプロジェクトか。
+    pub fn check_repo_health(
+        &self,
+        repo: &Path,
+        expect_commits: bool,
+    ) -> Result<RepoHealth, OpsError> {
+        repo_health::check_repo_health(self.runner(), repo, expect_commits)
+    }
+
+    /// リポジトリ（`.git`）の大きさ（設計書 5章 E09。読み取りのみ）。
+    pub fn repo_size(&self, repo: &Path) -> Result<RepoSize, OpsError> {
+        repo_health::repo_size(self.runner(), repo)
     }
 
     /// 最新の手動の保存の日時（ISO 8601）。まだ保存が無ければ None（読み取りのみ）。

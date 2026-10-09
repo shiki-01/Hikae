@@ -208,6 +208,10 @@ fn ahead_behind(runner: &GitRunner, repo: &Path) -> Result<(i32, i32), OpsError>
 }
 
 /// upstream から取り込む。未保存変更があれば自動保存してから pull。
+///
+/// `check_names` が真なら、取り込む側のファイル名が Windows で作れるかを fetch の後・merge の前に
+/// 検査し、作れない名前があれば何も変更せずに断る（設計書 5章 E18）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pull(
     runner: &GitRunner,
     repo: &Path,
@@ -215,6 +219,7 @@ pub(crate) fn pull(
     labels: &Labels,
     limits: SizeLimits,
     policy: UnsavedPolicy,
+    check_names: bool,
     meta: Meta,
 ) -> Result<PullOutcome, OpsError> {
     // マージ競合中でないか確認
@@ -240,6 +245,12 @@ pub(crate) fn pull(
     // 取り込む内容も自動保存する内容も無ければ何も変更しないため、復元点は作らない
     if behind_before == 0 && !has_unsaved {
         return Ok(PullOutcome::UpToDate);
+    }
+
+    // 取り込む側に、この PC では作れないファイル名があれば、何も変更せずに断る（E18）。
+    // 復元点・自動保存・確認より前に行う
+    if check_names && behind_before > 0 {
+        crate::windows_names::check_incoming_tree(runner, repo)?;
     }
 
     // 「取り込む前に保存」を「確認する」にしているとき（E06）。保存は取り込みの前処理のため、
@@ -959,6 +970,7 @@ pub(crate) fn upload(
     now: OffsetDateTime,
     labels: &Labels,
     limits: SizeLimits,
+    check_names: bool,
     meta: Meta,
 ) -> Result<UploadOutcome, OpsError> {
     // マージ競合中でないか確認
@@ -1005,6 +1017,7 @@ pub(crate) fn upload(
             labels,
             limits,
             UnsavedPolicy::SaveFirst,
+            check_names,
             meta,
         )?;
 

@@ -655,6 +655,12 @@ pub(crate) fn add_files(
         let parent_comps = &item.comps[..item.comps.len().saturating_sub(1)];
         let parent = match ensure_dirs(&root_real, &dest_dir, parent_comps, &mut created_dirs) {
             Ok(p) => p,
+            Err(e) if crate::disk_full::is_disk_full_error(&e) => {
+                for dir in created_dirs.iter().rev() {
+                    let _ = std::fs::remove_dir(dir);
+                }
+                return Err(OpsError::DiskFull);
+            }
             Err(_) => {
                 outcome.rejected.push(RejectedFile {
                     name: item.label,
@@ -714,6 +720,14 @@ pub(crate) fn add_files(
                     replaced: false,
                     replace_refused: refused,
                 });
+            }
+            // 空き容量が足りないと以降のコピーもすべて失敗するため、ここで止めて知らせる（E13）。
+            // コピー済みのファイルはそのまま残る（途中のコピーは片付け済み）
+            Err(e) if crate::disk_full::is_disk_full_error(&e) => {
+                for dir in created_dirs.iter().rev() {
+                    let _ = std::fs::remove_dir(dir);
+                }
+                return Err(OpsError::DiskFull);
             }
             Err(_) => outcome.rejected.push(RejectedFile {
                 name: item.label,

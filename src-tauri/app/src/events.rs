@@ -55,6 +55,15 @@ pub enum AttentionReason {
     /// アップロードは、フォルダが戻るまで見送る
     #[serde(rename = "folder-missing")]
     FolderMissing,
+    /// 保存のデータが 1GB を超えた（E09）。自動では何も削除しない
+    #[serde(rename = "repo-large")]
+    RepoLarge,
+    /// リポジトリの記録が読めなくなっている疑いがある（E10）。自動の取り込み・アップロードは見送る
+    #[serde(rename = "repo-broken")]
+    RepoBroken,
+    /// 取り込む側に、この PC では作れないファイル名があるため、自動の取り込みを見送った（E18）
+    #[serde(rename = "unsupported-file-names")]
+    UnsupportedFileNames,
 }
 
 /// プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。

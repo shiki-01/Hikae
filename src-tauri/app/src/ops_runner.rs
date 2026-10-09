@@ -31,6 +31,8 @@ pub(crate) struct OpContext {
     pub locks: Arc<ProjectLocks>,
     /// ログイン中のユーザー情報の控え。復元点（自動保存）の署名に、実行のたびに最新を読む
     pub session_user: Arc<Mutex<Option<core_github::User>>>,
+    /// プロジェクトごとの健全性の記憶（保守・保存の後の検査で更新する）
+    pub health: Arc<crate::health::ProjectHealth>,
 }
 
 impl OpContext {
@@ -40,6 +42,7 @@ impl OpContext {
             store: state.store_clone(),
             locks: state.locks_clone(),
             session_user: state.session_user.clone(),
+            health: state.health.clone(),
         }
     }
 
@@ -200,6 +203,7 @@ where
                 .with_labels(app_labels())
                 .with_signing_user(signing.as_ref().map(|(id, login)| (*id, login.as_str())));
             let started_at = now_rfc3339();
+            let auto_trigger = trigger == OpTrigger::Auto;
             let journal_trigger = if trigger == OpTrigger::Auto {
                 JournalTrigger::Auto
             } else {
@@ -218,7 +222,16 @@ where
             });
             let before = ops.restore_point_refs(&project.path).unwrap_or_default();
 
-            let result = body(&ops, &project.path);
+            // 他の操作が index.lock を持っていれば待つ（E14）。自動実行は待たずに見送る
+            let lock_check = if crate::health::touches_index(operation) {
+                crate::health::wait_for_index(&project.path, !auto_trigger)
+            } else {
+                Ok(())
+            };
+            let result = match lock_check {
+                Ok(()) => body(&ops, &project.path),
+                Err(e) => Err(e),
+            };
 
             let after = ops.restore_point_refs(&project.path).unwrap_or_default();
             let restore = new_restore_points(&before, &after);

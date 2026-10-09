@@ -21,6 +21,31 @@ pub fn run_git(repo: &Path, args: &[&str]) -> (i32, String, String) {
     (code, stdout, stderr)
 }
 
+/// 標準入力を渡して git を直接呼び出す（テスト用ヘルパー）
+#[allow(dead_code)]
+pub fn run_git_stdin(repo: &Path, args: &[&str], input: &str) -> (i32, String, String) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to execute git");
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input.as_bytes()).expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("wait git");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 /// bare リポジトリを作成
 #[allow(dead_code)]
 pub fn create_bare_repo(path: &Path) -> Result<(), Box<dyn std::error::Error>> {

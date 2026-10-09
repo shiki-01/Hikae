@@ -167,6 +167,19 @@ pub enum OpsError {
         file: Option<String>,
     },
 
+    /// ディスクの空き容量が足りず、書き込めなかった（設計書 5章 E13）
+    #[error("the disk is full")]
+    DiskFull,
+
+    /// 別のアプリがこのプロジェクトを操作中（`.git/index.lock` が残っている。設計書 5章 E14）。
+    /// `stale` が真なら、ロックが古く、git のプロセスも動いていない（前回の操作が途中で終わった）
+    #[error("the repository is locked by another operation (stale: {stale})")]
+    IndexLocked { stale: bool },
+
+    /// 取り込む側に、Windows では作れないファイル名がある（設計書 5章 E18）。何も取り込んでいない
+    #[error("incoming files have names this PC cannot create: {} file(s)", .0.len())]
+    UnsupportedFileNames(Vec<crate::windows_names::UnsupportedName>),
+
     /// 競合が未解決のまま操作しようとした
     #[error("merge conflict needs resolution")]
     Conflict(Vec<ConflictFile>),
@@ -544,7 +557,9 @@ impl From<core_safety::SafetyError> for OpsError {
 
 impl From<std::io::Error> for OpsError {
     fn from(e: std::io::Error) -> Self {
-        if crate::file_in_use::is_sharing_violation(&e) {
+        if crate::disk_full::is_disk_full_error(&e) {
+            OpsError::DiskFull
+        } else if crate::file_in_use::is_sharing_violation(&e) {
             OpsError::FileInUse { file: None }
         } else {
             OpsError::Io(e)
@@ -552,9 +567,17 @@ impl From<std::io::Error> for OpsError {
     }
 }
 
-/// git の失敗のうち、他のアプリがファイルを使用中のものを `FileInUse` に分類する。
+/// git の失敗のうち、空き容量の不足（`DiskFull`）、`index.lock` の競合（`IndexLocked`）、
+/// 他のアプリがファイルを使用中のもの（`FileInUse`）を分類する。
 fn classify_git_error(e: core_git::GitError) -> OpsError {
     if let core_git::GitError::Failed { stderr, .. } = &e {
+        // 空き容量の不足は、ほかの文言（`unable to write file` など）と重なるため先に判定する
+        if crate::disk_full::is_disk_full_message(stderr) {
+            return OpsError::DiskFull;
+        }
+        if crate::index_lock::is_index_lock_message(stderr) {
+            return OpsError::IndexLocked { stale: false };
+        }
         if crate::file_in_use::is_file_in_use_message(stderr) {
             return OpsError::FileInUse {
                 file: crate::file_in_use::file_name_in_message(stderr),
@@ -574,6 +597,9 @@ impl OpsError {
             OpsError::Safety(_) => "safety",
             OpsError::Io(_) => "io",
             OpsError::FileInUse { .. } => "file-in-use",
+            OpsError::DiskFull => "disk-full",
+            OpsError::IndexLocked { .. } => "index-locked",
+            OpsError::UnsupportedFileNames(_) => "unsupported-file-names",
             OpsError::Conflict(_) => "conflict",
             OpsError::InvalidInput(_) => "invalid-input",
             OpsError::RestorePointNotFound => "restore-point-not-found",

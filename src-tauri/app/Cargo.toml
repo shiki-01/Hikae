@@ -18,6 +18,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "=2.8.1"
 tauri-plugin-opener = "=2.7.0"
+# 二重起動を防ぎ、既存のウィンドウを前面に出す（設計書 8.3）。バージョンは固定する
+tauri-plugin-single-instance = "=2.4.5"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"

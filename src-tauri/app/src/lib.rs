@@ -19,6 +19,7 @@ mod app_settings;
 mod auto_snapshot;
 mod events;
 mod github;
+mod health;
 mod maintenance;
 mod ops_runner;
 mod os_trash;
@@ -115,6 +116,79 @@ impl AppError {
                         files.len(),
                         files.iter().map(|f| &f.path).collect::<Vec<_>>()
                     )),
+                )
+            }
+            // 設計書 5章 E17: git を起動できない（実行ファイルが消えた・壊れた）
+            OpsError::Git(core_git::GitError::Spawn(e)) => (
+                "git_unavailable",
+                "保存に必要な部品を起動できませんでした".to_string(),
+                "ファイルと履歴はこの PC に残っています。".to_string(),
+                "アプリを再インストールしてください".to_string(),
+                Some(e.to_string()),
+            ),
+            // 設計書 5章 E13: ディスクの空き容量が足りない
+            OpsError::DiskFull => (
+                "disk_full",
+                "PC の空き容量が足りないため、操作を完了できませんでした".to_string(),
+                "元のファイルは失われていません。".to_string(),
+                "不要なファイルを削除して空き容量を確保してから、もう一度お試しください"
+                    .to_string(),
+                Some("disk-full".to_string()),
+            ),
+            // 設計書 5章 E14: index.lock が残っている。ロックファイルは自動では削除しない
+            OpsError::IndexLocked { stale } => {
+                if stale {
+                    // 案内のために、残っているファイルの場所（プロジェクトの中での相対パス）を示す
+                    let lock = if cfg!(windows) {
+                        ".git\\index.lock"
+                    } else {
+                        ".git/index.lock"
+                    };
+                    params.push(("lock".to_string(), lock.to_string()));
+                    (
+                        "index_lock_stale",
+                        "前回の操作が途中で終わったままになっています".to_string(),
+                        "ファイルと履歴は無事です。".to_string(),
+                        format!("ほかのアプリでこのプロジェクトを開いていないことを確かめてから、プロジェクトのフォルダにある「{lock}」を削除して、もう一度お試しください"),
+                        Some("index-lock-stale".to_string()),
+                    )
+                } else {
+                    (
+                        "index_locked",
+                        "別のアプリがこのプロジェクトを操作中です".to_string(),
+                        "ファイルと履歴は無事です。".to_string(),
+                        "ほかのアプリの操作が終わるまで待ってから、もう一度お試しください"
+                            .to_string(),
+                        Some("index-locked".to_string()),
+                    )
+                }
+            }
+            // 設計書 5章 E18: 取り込む側に、この PC では作れないファイル名がある。何も取り込んでいない
+            OpsError::UnsupportedFileNames(names) => {
+                let first = names
+                    .first()
+                    .map(|n| file_name_of(&n.path))
+                    .unwrap_or_default();
+                params.push(("file".to_string(), first.clone()));
+                params.push(("count".to_string(), names.len().to_string()));
+                (
+                    "unsupported_file_names",
+                    format!(
+                        "別の PC で作られたファイルのうち、{} 件（「{}」など）はこの PC では扱えない名前のため、取り込めませんでした",
+                        names.len(),
+                        first
+                    ),
+                    "この PC のファイルは変更していません。".to_string(),
+                    "元の PC でファイルの名前を変えて保存し直してから、もう一度お試しください"
+                        .to_string(),
+                    Some(
+                        names
+                            .iter()
+                            .take(core_ops::MAX_LISTED_NAMES)
+                            .map(|n| n.path.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
                 )
             }
             OpsError::Git(e) => (
@@ -261,6 +335,11 @@ impl AppError {
     }
 }
 
+/// パスの最後の成分（ファイル名）。区切りはスラッシュとバックスラッシュのどちらも扱う
+fn file_name_of(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+}
+
 // ========== AppState ==========
 
 /// アプリケーション状態
@@ -275,6 +354,8 @@ pub struct AppState {
     pub login: Arc<core_github::LoginCoordinator>,
     /// ログイン中のユーザー情報の控え（トークンは含まない）
     pub session_user: Arc<Mutex<Option<core_github::User>>>,
+    /// プロジェクトごとの健全性の記憶（破損の疑い・保存の容量。E09・E10）
+    pub health: Arc<health::ProjectHealth>,
 }
 
 impl AppState {
@@ -286,6 +367,7 @@ impl AppState {
             scheduler: SchedulerHandle::new(),
             login: Arc::new(core_github::LoginCoordinator::new()),
             session_user: Arc::new(Mutex::new(None)),
+            health: Arc::new(health::ProjectHealth::default()),
         }
     }
 
@@ -477,23 +559,75 @@ fn broad_folder_reason(
         .and_then(|real| core_ops::check_project_folder(&real, &bases).err())
 }
 
-/// 選んだフォルダが広すぎるかを、登録の前に確かめる（フォルダ選択後の注意に使う）。
-/// 広すぎるときは理由の種類、問題なければ null。読み取りのみ。
+/// クラウド同期フォルダの判定に使う基準のパスを、環境変数とホームフォルダから作る（設計書 13.1）。
+/// OneDrive は環境変数（OneDrive・OneDriveConsumer・OneDriveCommercial）、そのほかはホームの
+/// 標準の場所（Dropbox、Google Drive、iCloud Drive）。見つからなくても、フォルダ名での判定は働く。
+pub(crate) fn cloud_roots(app: &tauri::AppHandle) -> core_ops::CloudRoots {
+    use core_ops::CloudSyncService as S;
+    let mut roots: Vec<(S, PathBuf)> = Vec::new();
+    for key in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        if let Some(value) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+            roots.push((S::OneDrive, PathBuf::from(value)));
+        }
+    }
+    if let Ok(home) = app.path().home_dir() {
+        roots.push((S::OneDrive, home.join("OneDrive")));
+        roots.push((S::Dropbox, home.join("Dropbox")));
+        roots.push((S::GoogleDrive, home.join("Google Drive")));
+        roots.push((S::ICloud, home.join("iCloudDrive")));
+        roots.push((S::ICloud, home.join("Library").join("Mobile Documents")));
+    }
+    core_ops::CloudRoots { roots }
+}
+
+/// 選んだフォルダが、同期ソフトの対象かを判定する。指定されたパスと、実体（リンクの先）の両方で調べる。
+fn is_cloud_synced(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
+    let real = path.canonicalize().ok();
+    core_ops::detect_cloud_sync_with_real(path, real.as_deref(), &cloud_roots(app)).is_some()
+}
+
+/// 選んだフォルダを、登録の前に確かめる（フォルダ選択後の注意に使う）。読み取りのみ。
+///
+/// - broad: 広すぎるときは理由の種類、問題なければ null（登録は断る）
+/// - warnings: 登録はできるが注意が必要なもの。いまは、クラウド同期フォルダ上（cloud-sync）。
+///   拒否はしない（続けるかどうかは利用者が選ぶ）
 #[tauri::command]
 #[specta::specta]
 async fn check_project_folder(
     app: tauri::AppHandle,
     path: PathBuf,
-) -> Result<Option<BroadFolderKind>, AppError> {
+) -> Result<FolderCheck, AppError> {
     run_blocking(move || {
-        Ok(broad_folder_reason(&app, &path).map(|reason| match reason {
+        let broad = broad_folder_reason(&app, &path).map(|reason| match reason {
             core_ops::BroadFolderReason::Home => BroadFolderKind::Home,
             core_ops::BroadFolderReason::DriveRoot => BroadFolderKind::DriveRoot,
             core_ops::BroadFolderReason::StandardFolder => BroadFolderKind::StandardFolder,
             core_ops::BroadFolderReason::SystemFolder => BroadFolderKind::SystemFolder,
-        }))
+        });
+        let mut warnings = Vec::new();
+        if is_cloud_synced(&app, &path) {
+            warnings.push(FolderWarning::CloudSync);
+        }
+        Ok(FolderCheck { broad, warnings })
     })
     .await
+}
+
+/// フォルダの確認結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct FolderCheck {
+    /// 広すぎるフォルダの種類。問題なければ null
+    pub broad: Option<BroadFolderKind>,
+    /// 登録はできるが注意が必要なこと
+    pub warnings: Vec<FolderWarning>,
+}
+
+/// フォルダについての注意
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum FolderWarning {
+    /// クラウド同期ソフト（OneDrive・iCloud Drive・Dropbox・Google Drive など）の対象フォルダ
+    CloudSync,
 }
 
 /// 広すぎるフォルダの種類
@@ -816,6 +950,7 @@ async fn remove_project(state: tauri::State<'_, AppState>, id: String) -> Result
     .await;
     // 外したプロジェクトの実行計画を直ちに捨て、監視の停止を促す
     state.scheduler.forget(&id);
+    state.health.forget(&id);
     result
 }
 
@@ -828,6 +963,7 @@ async fn project_status(
 ) -> Result<SyncStatus, AppError> {
     let store = state.store.clone();
     let scheduler = state.scheduler.clone();
+    let health = state.health.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store_guard = store.lock().map_err(|e| AppError {
             code: "status_failed".to_string(),
@@ -867,17 +1003,46 @@ async fn project_status(
             });
         }
 
-        let sync = ops
-            .sync_state(&project.path)
-            .map_err(AppError::from_ops_error)?;
-        let conflicts = ops
-            .conflicts(&project.path)
-            .map_err(AppError::from_ops_error)?;
-        // 件数は変更ファイル一覧と同じ関数から出す（一覧と件数がずれない）
-        let unsaved_changes = ops
-            .list_changes(&project.path)
-            .map_err(AppError::from_ops_error)?
-            .len();
+        // 破損が疑われる（E10）と分かっているプロジェクトは、もう一度だけ軽く確かめ、直っていなければ
+        // 他の git を実行せずに返す（フォルダが見つからない E11 と同じ扱い）
+        let broken_status = |interrupted: Option<String>| SyncStatus {
+            repo_broken: true,
+            interrupted_operation: interrupted,
+            ..SyncStatus::default()
+        };
+        if health.is_broken(&id) {
+            let expect_commits = project.initial_commit.is_some();
+            match ops.check_repo_health(&project.path, expect_commits) {
+                Ok(core_ops::RepoHealth::Healthy) => {
+                    health.set_broken(&id, false);
+                }
+                _ => return Ok(broken_status(interrupted_operation)),
+            }
+        }
+
+        let collected = (|| -> Result<_, OpsError> {
+            let sync = ops.sync_state(&project.path)?;
+            let conflicts = ops.conflicts(&project.path)?;
+            // 件数は変更ファイル一覧と同じ関数から出す（一覧と件数がずれない）
+            let unsaved_changes = ops.list_changes(&project.path)?.len();
+            Ok((sync, conflicts, unsaved_changes))
+        })();
+        let (sync, conflicts, unsaved_changes) = match collected {
+            Ok(v) => v,
+            Err(e) => {
+                // git の失敗のときは、リポジトリの破損が原因かを軽く確かめる（E10）
+                if matches!(e, OpsError::Git(_)) {
+                    let expect_commits = project.initial_commit.is_some();
+                    if let Ok(core_ops::RepoHealth::Broken(_)) =
+                        ops.check_repo_health(&project.path, expect_commits)
+                    {
+                        health.set_broken(&id, true);
+                        return Ok(broken_status(interrupted_operation));
+                    }
+                }
+                return Err(AppError::from_ops_error(e));
+            }
+        };
 
         // 保存先は設定済みだが一度もアップロードしていない（upstream なし）ときは、
         // 作った保存のすべてがアップロード待ち
@@ -897,6 +1062,8 @@ async fn project_status(
             is_syncing: false,
             interrupted_operation,
             folder_missing: false,
+            repo_broken: false,
+            repo_large: health.is_large(&id),
             watching: scheduler.is_watching(&id),
             last_auto_snapshot_at: store.lock().ok().and_then(|g| {
                 g.last_success_at(&id, auto_snapshot::OPERATION)
@@ -1029,6 +1196,8 @@ async fn run_save(
     // 「保存時に自動アップロード」がオンなら、スケジューラがキュー経由でアップロードする
     if commit.is_some() {
         state.scheduler.request_push(&id);
+        // 保存のデータが大きくなっていないかを確かめる（E09。読み取りのみ。失敗しても保存の結果は変えない）
+        refresh_repo_size_after_save(&ctx, &id).await;
     }
 
     Ok(SaveResult {
@@ -1036,6 +1205,34 @@ async fn run_save(
         message: Some(message),
         size_check,
     })
+}
+
+/// 保存の後に、保存のデータの容量を確かめる（設計書 5章 E09）。新しく 1GB を超えたときは、
+/// 画面へ知らせる。何も削除しない。
+async fn refresh_repo_size_after_save(ctx: &OpContext, id: &str) {
+    let store = ctx.store.clone();
+    let health = ctx.health.clone();
+    let project_id = id.to_string();
+    let change = run_blocking(move || {
+        let project = load_project(&store, &project_id)?;
+        Ok(health.refresh_size(&Ops::new(crate::git_runner()), &project))
+    })
+    .await;
+    if let Ok(change) = change {
+        if change.became_large {
+            let _ = events::NeedsAttention {
+                project_id: id.to_string(),
+                reason: events::AttentionReason::RepoLarge,
+            }
+            .emit(&ctx.app);
+        }
+        if change.changed {
+            let _ = StatusChanged {
+                project_id: id.to_string(),
+            }
+            .emit(&ctx.app);
+        }
+    }
 }
 
 /// 検査結果を画面向けの型にする（サイズはバイト）
@@ -2241,6 +2438,8 @@ async fn relocate_project(
     )
     .await?;
 
+    // 付け替え先は別のリポジトリになりうるため、破損・容量の記憶を捨てて、次の検査で調べ直す
+    state.health.forget(&info.id);
     // 付け替え先のフォルダで、ファイル監視と自動保存を直ちに始めさせる
     state.scheduler.refresh();
     let _ = StatusChanged {
@@ -2614,6 +2813,67 @@ pub struct FileEntry {
     pub size: f64,
 }
 
+/// アプリが使う git の入手元
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum GitSourceKind {
+    /// 環境変数 HIKAE_GIT_PATH で指定された
+    Explicit,
+    /// アプリに同梱
+    Bundled,
+    /// PC の PATH 上
+    Path,
+}
+
+/// git が使えない理由
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum GitProblem {
+    /// 実行ファイルが見つからない
+    NotFound,
+    /// 実行ファイルはあるが、起動できない・応答がおかしい
+    Broken,
+}
+
+/// アプリ全体の健全性（設計書 5章 E17）。起動直後に画面が確かめる
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct AppHealth {
+    /// 保存に必要な部品（git）が使える
+    pub git_available: bool,
+    /// 使っている（使おうとした）git の入手元
+    pub git_source: GitSourceKind,
+    /// 使えない理由。使えるときは null
+    pub git_problem: Option<GitProblem>,
+}
+
+/// アプリの健全性を返す。git が実行できるかを、リポジトリではない一時フォルダで確かめる（読み取りのみ）。
+/// バージョンは取得しない（git の呼び出しは許可リスト経由で、`--version` だけの呼び出しを受け付けないため）。
+#[tauri::command]
+#[specta::specta]
+async fn app_health() -> Result<AppHealth, AppError> {
+    run_blocking(|| {
+        let (probe, source) = health::probe_app_git();
+        Ok(app_health_of(&probe, source))
+    })
+    .await
+}
+
+fn app_health_of(probe: &core_ops::GitProbe, source: core_git::GitSource) -> AppHealth {
+    AppHealth {
+        git_available: probe.is_available(),
+        git_source: match source {
+            core_git::GitSource::Explicit => GitSourceKind::Explicit,
+            core_git::GitSource::Bundled => GitSourceKind::Bundled,
+            core_git::GitSource::Path => GitSourceKind::Path,
+        },
+        git_problem: match probe {
+            core_ops::GitProbe::Available => None,
+            core_ops::GitProbe::NotFound => Some(GitProblem::NotFound),
+            core_ops::GitProbe::Broken(_) => Some(GitProblem::Broken),
+        },
+    }
+}
+
 /// 同期状態
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct SyncStatus {
@@ -2626,6 +2886,10 @@ pub struct SyncStatus {
     pub interrupted_operation: Option<String>,
     /// 登録したフォルダが見つからない・フォルダでない・リポジトリでない（E11）。true のとき git は実行していない
     pub folder_missing: bool,
+    /// リポジトリの記録が読めなくなっている疑いがある（E10）。true のとき他の git は実行していない
+    pub repo_broken: bool,
+    /// 保存のデータが大きくなっている（1GB 超。E09）
+    pub repo_large: bool,
     /// ファイル監視が動いている。true の間、UI は変更一覧の定期的な取り直しをやめる（変更は `files_changed` で届く）
     pub watching: bool,
     /// 最後に自動保存を作った時刻（RFC3339）。まだ一度も作っていなければ null
@@ -2865,6 +3129,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             abort_merge,
             add_files,
             check_project_folder,
+            app_health,
             relocate_project,
             list_point_changes,
             open_file_at,
@@ -2904,6 +3169,15 @@ pub fn export_bindings() {
         .expect("TS 型の書き出しに失敗しました");
 }
 
+/// 既存のメインウィンドウを前面に出す（二重起動されたとき）。最小化されていれば戻す。
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 pub fn run() {
     let builder = specta_builder();
     let invoke_handler = builder.invoke_handler();
@@ -2912,6 +3186,11 @@ pub fn run() {
     export_bindings();
 
     tauri::Builder::default()
+        // 二重起動を防ぐ。2 つ目の起動は、すぐ終了して、既存のウィンドウを前面に出す。
+        // 他のプラグインより先に登録する必要がある
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -2975,8 +3254,11 @@ pub fn run() {
                 );
             });
 
-            // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）
-            scheduler::spawn(app.handle().clone());
+            // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）。
+            // git を使えないとき（E17）は、画面が専用の案内を出すため、自動実行は始めない
+            if health::probe_app_git().0.is_available() {
+                scheduler::spawn(app.handle().clone());
+            }
 
             Ok(())
         })

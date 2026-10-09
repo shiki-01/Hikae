@@ -22,7 +22,8 @@ use core_store::{
 use tauri_specta::Event;
 use time::OffsetDateTime;
 
-use crate::events::StatusChanged;
+use crate::events::{AttentionReason, NeedsAttention, StatusChanged};
+use crate::health::HealthChange;
 use crate::ops_runner::OpContext;
 use crate::run_exclusive;
 
@@ -48,6 +49,8 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
     let path = project.path.clone();
     let snapshot_days = settings.snapshot_retention_days;
     let signing = ctx.signing_user();
+    let health = ctx.health.clone();
+    let project_for_health = project.clone();
 
     let outcome = run_exclusive(
         ctx.locks.clone(),
@@ -55,6 +58,7 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
         "ファイルは安全です",
         move || {
             let mut deleted = 0usize;
+            let mut health_change = HealthChange::default();
 
             // 順番を待つあいだに「一覧から外す」が実行されていたら、何もしない
             let registered = store
@@ -62,7 +66,17 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
                 .ok()
                 .is_some_and(|g| g.get_project(&id).is_ok());
             if !registered {
-                return Ok(0);
+                return Ok((0, HealthChange::default()));
+            }
+
+            // リポジトリの破損（E10）と保存の容量（E09）を軽く確かめる（読み取りのみ。何も削除しない）。
+            // 壊れていると分かったプロジェクトには、以降の書き込みをしない
+            if path.is_dir() {
+                let ops = Ops::new(crate::git_runner());
+                health_change = health.refresh(&ops, &project_for_health);
+                if health.is_broken(&id) {
+                    return Ok((0, health_change));
+                }
             }
 
             // 一時ファイルの除外設定（管理する部分がまだ無いプロジェクトに 1 回だけ）
@@ -121,13 +135,31 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
             if let Ok(guard) = store.lock() {
                 let _ = guard.purge_journal(Some(&id), &journal_cutoff_from_now(journal_days));
             }
-            Ok(deleted)
+            Ok((deleted, health_change))
         },
     )
     .await;
 
-    // 履歴の自動保存の一覧が変わるため、画面に再取得させる
-    if matches!(outcome, Ok(n) if n > 0) {
+    let Ok((deleted, change)) = outcome else {
+        return;
+    };
+    // 新しく見つかった問題は、画面に知らせる（状態の取得にも載るため、画面が開く前でも見落とさない）
+    if change.became_broken {
+        let _ = NeedsAttention {
+            project_id: project.id.clone(),
+            reason: AttentionReason::RepoBroken,
+        }
+        .emit(&ctx.app);
+    }
+    if change.became_large {
+        let _ = NeedsAttention {
+            project_id: project.id.clone(),
+            reason: AttentionReason::RepoLarge,
+        }
+        .emit(&ctx.app);
+    }
+    // 履歴の自動保存の一覧が変わる、または健全性の表示が変わるため、画面に再取得させる
+    if deleted > 0 || change.changed {
         let _ = StatusChanged {
             project_id: project.id.clone(),
         }

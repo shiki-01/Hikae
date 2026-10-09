@@ -37,7 +37,7 @@ pub struct BroadFolders {
 }
 
 /// 比較用の正規形（成分を小文字にしたもの）。`.` は除き、`..` は 1 つ戻る。
-fn key_of(path: &Path) -> Vec<String> {
+pub(crate) fn key_of(path: &Path) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     for component in path.components() {
         match component {
