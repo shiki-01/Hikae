@@ -167,6 +167,22 @@ done
 # --- 5. 配置 ---
 # ソースの著作権表示（GPLv2）も同梱する
 cp "${SRC}/COPYING" "${UNI}/COPYING"
+# シンボリックリンクは実体のコピーに置き換える。Tauri の resources のコピーは、リンク先が
+# 存在しないリンク（git-shell など）で失敗し、キャッシュの復元でもリンクが壊れうるため。
+# リンク先が存在しないリンクは取り除く（Hikae が使わない補助コマンド）
+while IFS= read -r link; do
+  if [ -e "$link" ]; then
+    tmp="${link}.hikae-tmp"
+    cp -L "$link" "$tmp"
+    rm "$link"
+    mv "$tmp" "$link"
+  else
+    log "リンク先が無いリンクを取り除きます: ${link#"${UNI}/"}"
+    rm "$link"
+  fi
+done < <(find "$UNI" -type l)
+[ -z "$(find "$UNI" -type l)" ] || die "シンボリックリンクが残っています"
+
 mkdir -p "$RESOURCES"
 rm -rf "$DEST"
 mkdir -p "$DEST"
