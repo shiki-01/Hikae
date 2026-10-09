@@ -37,6 +37,10 @@ const messages = {
 	'wizard.done_message': 'このフォルダを見守っています。',
 	'wizard.done_detail':
 		'ファイルを変更すると「未保存の変更」として表示されます。区切りのよいところで保存してください。',
+	'relogin.title': 'GitHub にログインし直す',
+	'relogin.description':
+		'ログインすると、取り込みとアップロードを使えます。ファイルとこの PC の履歴はそのまま残っています。',
+	'relogin.back': '元の画面に戻る',
 	'wizard.back': '戻る',
 	'wizard.next': '次へ',
 	'wizard.finish': 'プロジェクトを開く',
@@ -58,6 +62,7 @@ const messages = {
 	'header.status_syncing_fetch': '取り込んでいます…',
 	'header.status_syncing_push': 'アップロードしています…',
 	'header.status_syncing_other': '処理しています…',
+	'header.relogin': 'ログインし直す',
 	'header.status_attention_auth': '再ログインが必要です。変更はこの PC に残っています',
 	'header.status_attention_unsaved': '未保存の変更があるため、取り込みを見送りました',
 	'header.status_offline': 'オフラインです。保存はこの PC で続けられます',
@@ -193,6 +198,8 @@ const messages = {
 	'memo.separator': '、',
 
 	'history.list_label': '保存の履歴',
+	'history.loading_more': '古い履歴を読み込んでいます',
+	'history.load_more_retry': '古い履歴をもう一度読み込む',
 	'history.now_hint': 'いまの状態です。未保存の変更は「変更」タブで確認できます。',
 	'history.select_hint': '時点を選ぶと、その内容が表示されます',
 	'history.changed_files': '変更されたファイル（{count}）',
@@ -376,6 +383,21 @@ const messages = {
 	'badge.danger': '要対応',
 	'badge.folder_missing': 'フォルダが見つかりません',
 
+	'account.title': 'GitHub アカウント',
+	'account.logged_in_as': '{name} としてログインしています',
+	'account.not_logged_in': 'GitHub にログインしていません',
+	'account.not_logged_in_text':
+		'ログインすると、取り込みとアップロードを使えます。保存はこの PC で続けられます。',
+	'account.reauth': '再ログインが必要です',
+	'account.reauth_text':
+		'GitHub との接続が切れています。ファイルとこの PC の履歴はそのまま残っています。',
+	'account.login': 'ログイン',
+	'account.relogin': 'ログインし直す',
+	'account.logout': 'ログアウト',
+	'account.logout_title': 'GitHub からログアウトしますか',
+	'account.logout_text':
+		'この PC に保存したログイン情報を削除します。ファイルとこの PC の履歴は消えません。ログインし直すまで、取り込みとアップロードは行われません。',
+	'account.logout_confirm': 'ログアウトする',
 	'settings.title': '設定',
 	'settings.back': '戻る',
 	'settings.general': '一般',
@@ -468,6 +490,10 @@ const messages = {
 	'error.generic.title': '操作を完了できませんでした',
 	'error.generic.message': '操作の前の状態は、自動保存として残っています。',
 	'error.close': '閉じる',
+	'errbtn.retry': 'もう一度',
+	'errbtn.login': 'ログインし直す',
+	'errbtn.copy_admin': '管理者向けの説明をコピー',
+	'errbtn.guide_remote': '保存先を確認する',
 	'error.show_details': '技術情報を表示',
 	'error.hide_details': '技術情報を隠す',
 	'error.copy_details': 'コピー',

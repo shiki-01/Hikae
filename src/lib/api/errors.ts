@@ -59,6 +59,23 @@ export class AppError extends Error {
 	}
 }
 
-export function isAutoRecovering(code: AppErrorCode): boolean {
-	return code === 'E03' || code === 'E04';
+/** バックエンドのエラーコードのうち、設計 5章の E03 / E04 に当たるもの（通信断、GitHub 側の障害） */
+const BACKEND_AUTO_RECOVERING: Record<string, ErrorCode> = {
+	network_unavailable: 'E03',
+	github_unavailable: 'E04'
+};
+
+/**
+ * バックエンドのエラーコードに対応する、自動で回復する画面側のコード（E03 / E04）。
+ * 当てはまらなければ undefined
+ */
+export function autoRecoveringScreenCode(backendCode: string): ErrorCode | undefined {
+	return Object.hasOwn(BACKEND_AUTO_RECOVERING, backendCode)
+		? BACKEND_AUTO_RECOVERING[backendCode]
+		: undefined;
+}
+
+/** 自動で回復するエラーか（画面側のコード E03 / E04 と、それに当たるバックエンドのコード） */
+export function isAutoRecovering(code: string): boolean {
+	return code === 'E03' || code === 'E04' || autoRecoveringScreenCode(code) !== undefined;
 }

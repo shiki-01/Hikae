@@ -6,14 +6,14 @@ const PROJECT = 'proj1';
 
 describe('モックの保存と大きいファイル', () => {
 	it('大きいファイルがあると何も保存せず確認を返す', async () => {
-		const before = (await mockApi.listSavePoints(PROJECT)).length;
+		const before = (await mockApi.listSavePoints(PROJECT, 0, 1000)).length;
 		const outcome = await mockApi.save(PROJECT, 'メモ');
 		expect(outcome.kind).toBe('size_check');
 		if (outcome.kind === 'size_check') {
 			expect(outcome.check.blocked).toEqual([]);
 			expect(outcome.check.warned.map((f) => f.path)).toEqual(['ロゴ原案.psd']);
 		}
-		expect((await mockApi.listSavePoints(PROJECT)).length).toBe(before);
+		expect((await mockApi.listSavePoints(PROJECT, 0, 1000)).length).toBe(before);
 	});
 
 	it('外す選択をすると、そのファイルを除いて保存し、未保存から消える', async () => {

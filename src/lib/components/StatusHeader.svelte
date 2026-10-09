@@ -45,6 +45,8 @@
 		oninterrupted?: () => void;
 		onlargefiles?: () => void;
 		onconnect?: () => void;
+		/** 再ログインが必要なとき、ログインし直す手順を開く */
+		onrelogin?: () => void;
 		class?: string;
 	}
 
@@ -70,6 +72,7 @@
 		oninterrupted,
 		onlargefiles,
 		onconnect,
+		onrelogin,
 		class: className = ''
 	}: Props = $props();
 
@@ -138,7 +141,12 @@
 			text:
 				attention === 'auth'
 					? t('header.status_attention_auth')
-					: t('header.status_attention_unsaved')
+					: t('header.status_attention_unsaved'),
+			// 再ログインが必要なときだけ、ログインし直すボタンを出す
+			action:
+				attention === 'auth'
+					? { label: t('header.relogin'), run: onrelogin, variant: 'primary' }
+					: undefined
 		},
 		offline: {
 			icon: CloudOff,

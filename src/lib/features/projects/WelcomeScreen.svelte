@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import {
 		AlertTriangle,
@@ -32,9 +33,12 @@
 	} from './login-flow';
 	import { useCompleteOnboarding } from './mutations';
 	import { useSession } from './queries';
+	import { goBackTo, safeReturnPath } from './relogin';
 
 	const client = useQueryClient();
 	const session = useSession();
+	// ?return= があるときは、初回の案内ではなく「ログインし直す」だけを出し、終わったら元の画面へ戻る
+	const returnTo = $derived(safeReturnPath(page.url.searchParams.get('return')));
 
 	let step = $state<1 | 2 | 3>(1);
 	let phase = $state<'idle' | 'starting' | 'waiting' | 'done'>('idle');
@@ -83,6 +87,8 @@
 			if (outcome === 'succeeded') {
 				phase = 'done';
 				await client.invalidateQueries({ queryKey: keys.session });
+				// ログインし直したときは、元の画面へ戻る
+				if (returnTo) await goBackTo(returnTo);
 			} else {
 				phase = 'idle';
 				failure = failureForOutcome(outcome);
@@ -164,42 +170,48 @@
 
 <div class="min-h:100vh flex flex-direction:column align-items:center bg:bg fg:fg px:4 py:8">
 	<header class="flex flex-direction:column align-items:center gap:4 mb:6">
-		<h1 class="m:0 type-title">{t('wizard.title')}</h1>
-		<ol class="m:0 p:0 list-style:none flex align-items:center gap:4">
-			{#each steps as label, index (label)}
-				{@const number = index + 1}
-				{@const done = number < step}
-				<li
-					aria-current={number === step ? 'step' : undefined}
-					class="flex align-items:center gap:2 type-body"
-				>
-					<span
-						class={`size:28px r:full flex align-items:center justify-content:center type-small font-weight:700 ${
-							done
-								? 'bg:accent-subtle fg:fg b:1px|solid|state-saved'
-								: number === step
-									? 'bg:accent fg:accent-fg'
-									: 'bg:bg-subtle fg:fg-muted b:1px|solid|border-strong'
-						}`}
+		<h1 class="m:0 type-title">{returnTo ? t('relogin.title') : t('wizard.title')}</h1>
+		{#if !returnTo}
+			<ol class="m:0 p:0 list-style:none flex align-items:center gap:4">
+				{#each steps as label, index (label)}
+					{@const number = index + 1}
+					{@const done = number < step}
+					<li
+						aria-current={number === step ? 'step' : undefined}
+						class="flex align-items:center gap:2 type-body"
 					>
-						{#if done}
-							<Check size={14} aria-hidden="true" />
-							<span class="sr-only">{t('wizard.step_done')}</span>
-						{:else}
-							{number}
-						{/if}
-					</span>
-					<span class={number === step ? 'font-weight:700' : 'fg:fg-muted'}>{t(label)}</span>
-				</li>
-			{/each}
-		</ol>
+						<span
+							class={`size:28px r:full flex align-items:center justify-content:center type-small font-weight:700 ${
+								done
+									? 'bg:accent-subtle fg:fg b:1px|solid|state-saved'
+									: number === step
+										? 'bg:accent fg:accent-fg'
+										: 'bg:bg-subtle fg:fg-muted b:1px|solid|border-strong'
+							}`}
+						>
+							{#if done}
+								<Check size={14} aria-hidden="true" />
+								<span class="sr-only">{t('wizard.step_done')}</span>
+							{:else}
+								{number}
+							{/if}
+						</span>
+						<span class={number === step ? 'font-weight:700' : 'fg:fg-muted'}>{t(label)}</span>
+					</li>
+				{/each}
+			</ol>
+		{/if}
 	</header>
 
 	<main class="w:100% max-w:480px flex flex-direction:column gap:6">
 		<section class="p:6 r:lg bg:bg-raised b:1px|solid|border flex flex-direction:column gap:4">
 			{#if step === 1}
-				<h2 class="m:0 type-heading">{t('wizard.step1')}</h2>
-				<p class="m:0 type-body fg:fg-muted">{t('wizard.login.description')}</p>
+				{#if returnTo}
+					<p class="m:0 type-body fg:fg-muted">{t('relogin.description')}</p>
+				{:else}
+					<h2 class="m:0 type-heading">{t('wizard.step1')}</h2>
+					<p class="m:0 type-body fg:fg-muted">{t('wizard.login.description')}</p>
+				{/if}
 
 				{#if loggedIn}
 					<p class="m:0 flex align-items:center gap:2 type-body" role="status">
@@ -337,12 +349,20 @@
 			{/if}
 		</section>
 
-		<div class="flex justify-content:space-between">
-			<Button variant="secondary" disabled={step === 1} onclick={back}>{t('wizard.back')}</Button>
-			<Button disabled={!canNext} loading={complete.isPending} onclick={next}>
-				{step === 3 ? t('wizard.finish') : t('wizard.next')}
-			</Button>
-		</div>
+		{#if returnTo}
+			<div class="flex justify-content:start">
+				<Button variant="secondary" onclick={() => goBackTo(returnTo)}>
+					{t('relogin.back')}
+				</Button>
+			</div>
+		{:else}
+			<div class="flex justify-content:space-between">
+				<Button variant="secondary" disabled={step === 1} onclick={back}>{t('wizard.back')}</Button>
+				<Button disabled={!canNext} loading={complete.isPending} onclick={next}>
+					{step === 3 ? t('wizard.finish') : t('wizard.next')}
+				</Button>
+			</div>
+		{/if}
 	</main>
 </div>
 

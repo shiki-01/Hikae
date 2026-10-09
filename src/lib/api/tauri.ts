@@ -24,7 +24,6 @@ import {
 	mapSavePoint,
 	mapSession,
 	mapSettingsView,
-	parseDate,
 	restoreFileFailure,
 	toBackendPatch,
 	toBackendSizeChoice
@@ -58,8 +57,6 @@ import type {
 	SizeChoice
 } from './types';
 
-const HISTORY_LIMIT = 200;
-
 type Result<T> =
 	{ status: 'ok'; data: T } | { status: 'error'; error: Parameters<typeof mapError>[0] };
 
@@ -83,13 +80,10 @@ async function loadProject(id: string): Promise<Project> {
 }
 
 async function buildProject(info: Parameters<typeof mapProject>[0]): Promise<Project> {
-	// フォルダが見つからない（E11）プロジェクトは、バックエンドが git を実行せず空の履歴を返す
-	const [status, history] = await Promise.all([
-		unwrap(commands.projectStatus(info.id)),
-		unwrap(commands.listHistory(info.id, HISTORY_LIMIT))
-	]);
-	const lastSave = history.find((item) => !item.is_snapshot) ?? history[0];
-	return mapProject(info, status, lastSave ? parseDate(lastSave.timestamp) : null);
+	// 最終保存の日時は `ProjectInfo` が持つ（履歴全体は読まない）。
+	// フォルダが見つからない（E11）プロジェクトは、バックエンドが git を実行しない
+	const status = await unwrap(commands.projectStatus(info.id));
+	return mapProject(info, status);
 }
 
 /** GitHub から取得する。進行状況のイベントは、呼び出しに渡した ID で絞り込む */
@@ -128,6 +122,10 @@ export const tauriApi: ProjectApi = {
 
 	async cancelLogin() {
 		await commands.cancelLogin();
+	},
+
+	async logout() {
+		await unwrap(commands.logout());
 	},
 
 	async openLoginPage() {
@@ -232,8 +230,8 @@ export const tauriApi: ProjectApi = {
 		return files.map((file) => mapChange(file, conflictPaths));
 	},
 
-	async listSavePoints(projectId: string): Promise<SavePoint[]> {
-		const items = await unwrap(commands.listHistory(projectId, HISTORY_LIMIT));
+	async listSavePoints(projectId: string, offset: number, limit: number): Promise<SavePoint[]> {
+		const items = await unwrap(commands.listHistory(projectId, offset, limit));
 		return items.map(mapSavePoint);
 	},
 

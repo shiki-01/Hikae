@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { Upload } from '@lucide/svelte';
 	import { untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
@@ -41,10 +42,12 @@
 	import HistoryPane from '#lib/features/history/HistoryPane.svelte';
 	import RestoreDialog from '#lib/features/history/RestoreDialog.svelte';
 	import { useRestore } from '#lib/features/history/mutations.js';
+	import { flattenHistoryPages } from '#lib/features/history/paging.js';
 	import { useHistory } from '#lib/features/history/queries.js';
 	import { useSettings } from '#lib/features/settings/queries.js';
 	import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 	import { network } from '#lib/utils/online.svelte.js';
+	import { reloginSearch } from './relogin';
 	import { liveStateOf } from './live.svelte.js';
 	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import InterruptedDialog from './InterruptedDialog.svelte';
@@ -109,13 +112,17 @@
 	let sizeRequest = $state<{ memo: string; check: SizeCheck } | null>(null);
 	let interruptedOpen = $state(false);
 	let connectOpen = $state(false);
+	// エラーの案内から保存先の確認へ誘導されたとき（?connect=1）は、接続のダイアログを開く
+	$effect(() => {
+		if (page.url.searchParams.get('connect') === '1') connectOpen = true;
+	});
 	// 大きいファイルのため、取り込み・アップロードを見送った内容
 	let syncSize = $state<SyncSizeRequest | null>(null);
 	// 取り込む前の保存の確認待ち（未保存のファイルの件数。E06）
 	let pullConfirmCount = $state<number | null>(null);
 
 	const changes = $derived(changesQuery.data ?? []);
-	const history = $derived(historyQuery.data ?? []);
+	const history = $derived(flattenHistoryPages(historyQuery.data?.pages ?? []));
 	const latest = $derived(latestManualPoint(history));
 	const snapshotsMode = $derived(
 		settingsQuery.data?.settings.showSnapshotsInTimeline ?? 'collapsed'
@@ -373,6 +380,7 @@
 		oninterrupted={() => (interruptedOpen = true)}
 		onlargefiles={() => fetchMutation.mutate()}
 		onconnect={() => (connectOpen = true)}
+		onrelogin={() => goto(`${resolve('/welcome')}${reloginSearch(page.url)}`)}
 	/>
 
 	<div bind:this={body} class="position:relative flex:1 min-h:0 flex">
@@ -424,6 +432,10 @@
 				<HistoryPane
 					{entries}
 					loading={historyQuery.isPending}
+					hasMore={historyQuery.hasNextPage}
+					loadingMore={historyQuery.isFetchingNextPage}
+					loadMoreFailed={historyQuery.isFetchNextPageError}
+					onloadmore={() => void historyQuery.fetchNextPage()}
 					selectedId={selectedPointId}
 					{expanded}
 					showAutos={snapshotsMode === 'shown'}

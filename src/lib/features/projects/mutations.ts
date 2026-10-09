@@ -1,3 +1,5 @@
+import { goto } from '$app/navigation';
+import { resolve } from '$app/paths';
 import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
@@ -11,6 +13,7 @@ import type {
 	SizeChoice
 } from '#lib/api/types.js';
 import { t } from '#lib/i18n/index.js';
+import { primaryKindOfBackendCode } from '#lib/features/notifications/error-view.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import {
 	connectInputFromAdd,
@@ -34,7 +37,20 @@ export function announceRemote(outcome: RemoteOutcome | null, context?: FollowUp
 		return;
 	}
 	if (outcome.error) {
-		reportError(outcome.error);
+		// 保存先の設定に関わるエラーは、プロジェクトの画面の接続のダイアログへ誘導できる
+		const projectId = context?.projectId;
+		const code = outcome.error.backend?.code;
+		const guide =
+			projectId !== undefined && code !== undefined && primaryKindOfBackendCode(code) === 'guide';
+		reportError(
+			outcome.error,
+			guide
+				? {
+						onprimary: () =>
+							void goto(`${resolve('/project')}?id=${encodeURIComponent(projectId)}&connect=1`)
+					}
+				: {}
+		);
 		return;
 	}
 	if (outcome.sizeCheck && outcome.connected) {
@@ -165,13 +181,16 @@ export function useCompleteOnboarding() {
 /** 中断された操作の前の状態へ戻す。成功で関連するクエリを更新し、失敗は 3 要素のエラーで表示する */
 export function useRecoverInterrupted(getProjectId: () => string, onDone?: () => void) {
 	const client = useQueryClient();
-	return createMutation(() => ({
+	const retry = { run: () => {} };
+	const mutation = createMutation(() => ({
 		mutationFn: () => api.recoverInterrupted(getProjectId()),
 		onSuccess: async () => {
 			await invalidateProject(client, getProjectId());
 			pushToast({ type: 'success', message: t('toast.recovered') });
 			onDone?.();
 		},
-		onError: (error) => reportError(error)
+		onError: (error) => reportError(error, { retry: () => retry.run() })
 	}));
+	retry.run = () => mutation.mutate();
+	return mutation;
 }

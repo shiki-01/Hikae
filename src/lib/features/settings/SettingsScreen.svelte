@@ -10,6 +10,7 @@
 	import Dialog from '#lib/components/Dialog.svelte';
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select from '#lib/components/Select.svelte';
+	import AccountSection from './AccountSection.svelte';
 	import NumberSetting from './NumberSetting.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import Tabs from '#lib/components/Tabs.svelte';
@@ -127,6 +128,10 @@
 							{t('settings.scope_all')}
 						</Button>
 					</div>
+				{/if}
+
+				{#if id === 'general' && scope === 'all'}
+					<AccountSection />
 				{/if}
 
 				{#if isSettingsTab(id)}

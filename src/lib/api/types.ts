@@ -355,6 +355,8 @@ export interface Session {
 	reauthRequired: boolean;
 	/** ログイン中の GitHub ユーザー名 */
 	userLogin: string | null;
+	/** アバター画像の URL（https のみ）。無い・確認できないときは null */
+	avatarUrl: string | null;
 }
 
 /** バックエンドが対応している操作。未対応の操作は画面に出さない */
@@ -371,6 +373,8 @@ export interface ProjectApi {
 	/** ユーザーが GitHub で許可するまで待つ。キャンセルされた場合は `canceled` で戻る */
 	waitLogin(): Promise<LoginOutcome>;
 	cancelLogin(): Promise<void>;
+	/** ログアウトする。この PC に保存したログイン情報だけを消し、ファイルとローカルの履歴は消えない */
+	logout(): Promise<void>;
 	/** 進行中のログインの確認ページを既定のブラウザで開く（URL は渡せない。デスクトップアプリのみ） */
 	openLoginPage(): Promise<void>;
 	completeOnboarding(): Promise<void>;
@@ -394,7 +398,8 @@ export interface ProjectApi {
 	relocateProject(id: string, folder: string): Promise<Project>;
 
 	listChanges(projectId: string): Promise<Change[]>;
-	listSavePoints(projectId: string): Promise<SavePoint[]>;
+	/** 履歴を新しい順に、`offset` 件目から最大 `limit` 件。ページを跨いでも重複・欠落しない */
+	listSavePoints(projectId: string, offset: number, limit: number): Promise<SavePoint[]>;
 	listPointFiles(projectId: string, savePointId: string): Promise<PointFile[]>;
 	/** その時点に存在するすべてのファイル */
 	listFilesAt(projectId: string, savePointId: string): Promise<FileEntry[]>;

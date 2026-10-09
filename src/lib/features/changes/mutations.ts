@@ -22,7 +22,8 @@ export function useSave(
 	onSizeCheck?: (memo: string, check: SizeCheck) => void
 ) {
 	const client = useQueryClient();
-	return createMutation(() => ({
+	const retry: { run?: (input: SaveInput) => void } = {};
+	const mutation = createMutation(() => ({
 		mutationFn: ({ memo, choice }: SaveInput) =>
 			choice
 				? api.saveWithSizeChoice(getProjectId(), memo, choice)
@@ -36,8 +37,10 @@ export function useSave(
 			pushToast({ type: 'success', message: t('toast.saved') });
 			onSaved?.();
 		},
-		onError: (error) => reportError(error)
+		onError: (error, input) => reportError(error, { retry: () => retry.run?.(input) })
 	}));
+	retry.run = (input) => mutation.mutate(input);
+	return mutation;
 }
 
 /** 結果（別名にしたもの・追加できなかったもの・大きいもの）は `onResult` で受け取り、画面で知らせる */
@@ -46,7 +49,8 @@ export function useAddFiles(
 	onResult?: (outcome: AddFilesOutcome) => void
 ) {
 	const client = useQueryClient();
-	return createMutation(() => ({
+	const retry: { run?: (files: DroppedFile[]) => void } = {};
+	const mutation = createMutation(() => ({
 		mutationFn: (files: DroppedFile[]) => api.addFiles(getProjectId(), files),
 		onSuccess: async (outcome) => {
 			await invalidateProject(client, getProjectId());
@@ -58,8 +62,10 @@ export function useAddFiles(
 			}
 			onResult?.(outcome);
 		},
-		onError: (error) => reportError(error)
+		onError: (error, files) => reportError(error, { retry: () => retry.run?.(files) })
 	}));
+	retry.run = (files) => mutation.mutate(files);
+	return mutation;
 }
 
 /**

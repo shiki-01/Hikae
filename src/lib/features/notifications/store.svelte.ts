@@ -46,13 +46,18 @@ export function pushToast(input: Omit<ToastItem, 'id'>): number {
 }
 
 export interface ReportOptions {
+	/** 元の操作をもう一度実行する。渡したときだけ、「もう一度」のボタンを出す */
 	retry?: () => void;
 	onsecondary?: () => void;
+	/** 主ボタンを押したときの動作。保存先の画面などへ誘導するエラーでは、これを渡したときだけ誘導のボタンを出す */
 	onprimary?: () => void;
 }
 
 export function reportError(error: unknown, options: ReportOptions = {}): void {
-	const view = describeError(error);
+	const view = describeError(error, {
+		retry: options.retry !== undefined,
+		guide: options.onprimary !== undefined
+	});
 	if (view.autoRecovering) {
 		pushToast({
 			type: 'warning',

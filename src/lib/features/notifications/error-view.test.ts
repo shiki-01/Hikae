@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { AppError, ERROR_CODES } from '#lib/api/errors.js';
+import { AppError, ERROR_CODES, isAutoRecovering } from '#lib/api/errors.js';
 import { mapError } from '#lib/api/mappers.js';
 import { t } from '#lib/i18n/index.js';
-import { describeError, resolveBackendMessage } from './error-view';
+import { describeError, primaryKindOfBackendCode, resolveBackendMessage } from './error-view';
 
 describe('エラー表示の組み立て', () => {
 	it('すべてのエラーコードに、何が起きたか・データの安否・ボタンの文言がある', () => {
@@ -182,5 +182,97 @@ describe('バックエンドのエラーコードによる文言', () => {
 			expect(resolved.dataIsSafe, code).not.toBe('RUST_SAFE');
 			expect(resolved.nextAction, code).not.toBe('RUST_NEXT');
 		}
+	});
+});
+
+describe('バックエンドのコードによる次の行動ボタン', () => {
+	const raw = {
+		what_happened: 'RUST_WHAT',
+		data_is_safe: 'RUST_SAFE',
+		next_action: 'RUST_NEXT',
+		technical_info: 'raw'
+	};
+	const view = (code: string, available?: { retry: boolean; guide: boolean }) =>
+		describeError(mapError({ ...raw, code, params: [['file', 'a.txt']] }), available);
+
+	it('認証が切れたときは、ログインし直すボタンになる', () => {
+		const result = view('not_logged_in');
+		expect(result.primaryKind).toBe('login');
+		expect(result.primaryLabel).toBe(t('errbtn.login'));
+		expect(result.autoRecovering).toBe(false);
+	});
+
+	it('権限が足りないときは、管理者向けの説明をコピーするボタンになる', () => {
+		const result = view('github_forbidden');
+		expect(result.primaryKind).toBe('copy');
+		expect(result.primaryLabel).toBe(t('errbtn.copy_admin'));
+		expect(result.copyText).toBe(t('error.E02.copy_text'));
+	});
+
+	it('一時的な失敗は「もう一度」になり、元の操作を再実行できないときは閉じるだけになる', () => {
+		for (const code of ['file_in_use', 'git_failed', 'git_timeout', 'io_error']) {
+			const result = view(code);
+			expect(result.primaryKind, code).toBe('retry');
+			expect(result.primaryLabel, code).toBe(t('errbtn.retry'));
+			const noRetry = view(code, { retry: false, guide: true });
+			expect(noRetry.primaryKind, code).toBe('close');
+			expect(noRetry.primaryLabel, code).toBe(t('error.close'));
+		}
+	});
+
+	it('保存先に関わるエラーは、行き先がある場合だけ誘導のボタンになる', () => {
+		for (const code of ['remote_name_taken', 'remote_conflict']) {
+			expect(view(code).primaryKind, code).toBe('guide');
+			expect(view(code).primaryLabel, code).toBe(t('errbtn.guide_remote'));
+			expect(view(code, { retry: true, guide: false }).primaryKind, code).toBe('close');
+		}
+	});
+
+	it('対応表にないコードは閉じるだけ', () => {
+		for (const code of ['invalid_input', 'database_error', 'conflict', 'something_new']) {
+			const result = view(code);
+			expect(result.primaryKind, code).toBe('close');
+			expect(primaryKindOfBackendCode(code), code).toBe('close');
+			expect(result.copyText).toBeUndefined();
+		}
+	});
+
+	it('通信断と GitHub 側の障害は、ダイアログではなく自動回復のトースト扱いになる', () => {
+		const offline = view('network_unavailable');
+		expect(offline.autoRecovering).toBe(true);
+		expect(offline.toastMessage).toBe(t('error.E03.toast'));
+		expect(offline.primaryKind).toBe('close');
+
+		const down = view('github_unavailable');
+		expect(down.autoRecovering).toBe(true);
+		expect(down.toastMessage).toBe(t('error.E04.toast'));
+		expect(down.primaryKind).toBe('retry');
+		expect(down.primaryLabel).toBe(t('error.E04.button'));
+		expect(view('github_unavailable', { retry: false, guide: false }).primaryKind).toBe('close');
+
+		for (const code of ['file_in_use', 'git_failed', 'not_logged_in']) {
+			expect(view(code).autoRecovering, code).toBe(false);
+			expect(view(code).toastMessage, code).toBeUndefined();
+		}
+	});
+
+	it('自動回復の判定は、画面側のコードとバックエンドのコードの両方に効く', () => {
+		expect(isAutoRecovering('E03')).toBe(true);
+		expect(isAutoRecovering('E04')).toBe(true);
+		expect(isAutoRecovering('network_unavailable')).toBe(true);
+		expect(isAutoRecovering('github_unavailable')).toBe(true);
+		expect(isAutoRecovering('E12')).toBe(false);
+		expect(isAutoRecovering('git_failed')).toBe(false);
+		expect(isAutoRecovering('toString')).toBe(false);
+	});
+
+	it('画面側の E01 はログインし直すボタン、E12 は再実行できないとき閉じるだけ', () => {
+		expect(describeError(new AppError('E01', '')).primaryKind).toBe('login');
+		const noRetry = describeError(new AppError('E12', '', { name: 'x' }), {
+			retry: false,
+			guide: false
+		});
+		expect(noRetry.primaryKind).toBe('close');
+		expect(noRetry.primaryLabel).toBe(t('error.close'));
 	});
 });

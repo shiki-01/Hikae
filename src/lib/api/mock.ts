@@ -417,6 +417,24 @@ function loginScenario(): string | null {
 	}
 }
 
+// 画面確認用: localStorage の 'hikae.mock.reauth' に 1 を入れると、トークンが切れた状態（再ログインが必要）を再現できる。
+// ログインし直すと消える
+function reauthScenario(): boolean {
+	try {
+		return localStorage.getItem('hikae.mock.reauth') === '1';
+	} catch {
+		return false;
+	}
+}
+
+function clearReauthScenario(): void {
+	try {
+		localStorage.removeItem('hikae.mock.reauth');
+	} catch {
+		return;
+	}
+}
+
 let cancelLoginWait: (() => void) | null = null;
 
 function readStorage<T extends object>(key: string, fallback: T): T {
@@ -528,8 +546,9 @@ export const mockApi: ProjectApi = {
 		return {
 			loggedIn: stored.loggedIn,
 			onboarded: stored.onboarded,
-			reauthRequired: false,
-			userLogin: stored.loggedIn ? 'shiki-01' : null
+			reauthRequired: stored.loggedIn && reauthScenario(),
+			userLogin: stored.loggedIn ? 'shiki-01' : null,
+			avatarUrl: null
 		};
 	},
 
@@ -568,12 +587,22 @@ export const mockApi: ProjectApi = {
 		cancelLoginWait = null;
 		if (canceled) return 'canceled';
 		if (scenario === 'denied' || scenario === 'expired') return scenario;
-		writeStorage('hikae.session', { loggedIn: true, onboarded: false });
+		// ログインし直したときも、初回設定を終えたかは変えない
+		const stored = readStorage('hikae.session', { loggedIn: false, onboarded: false });
+		writeStorage('hikae.session', { loggedIn: true, onboarded: stored.onboarded });
+		clearReauthScenario();
 		return 'succeeded';
 	},
 
 	async cancelLogin(): Promise<void> {
 		cancelLoginWait?.();
+	},
+
+	async logout(): Promise<void> {
+		await sleep(120);
+		const stored = readStorage('hikae.session', { loggedIn: false, onboarded: false });
+		writeStorage('hikae.session', { loggedIn: false, onboarded: stored.onboarded });
+		clearReauthScenario();
 	},
 
 	async openLoginPage(): Promise<void> {
@@ -802,9 +831,11 @@ export const mockApi: ProjectApi = {
 		return stateOf(projectId).changes.map((c) => ({ ...c }));
 	},
 
-	async listSavePoints(projectId: string): Promise<SavePoint[]> {
+	async listSavePoints(projectId: string, offset: number, limit: number): Promise<SavePoint[]> {
 		await sleep(WAIT_SHORT);
-		return stateOf(projectId).savePoints.map((s) => ({ ...s }));
+		return stateOf(projectId)
+			.savePoints.slice(offset, offset + limit)
+			.map((s) => ({ ...s }));
 	},
 
 	async listPointFiles(projectId: string, savePointId: string): Promise<PointFile[]> {

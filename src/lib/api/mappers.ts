@@ -161,18 +161,14 @@ export function mapSavePoint(item: HistoryItem): SavePoint {
 	};
 }
 
-export function mapProject(
-	info: ProjectInfo,
-	status: SyncStatus,
-	lastSavedAt: Date | null
-): Project {
+export function mapProject(info: ProjectInfo, status: SyncStatus): Project {
 	return {
 		id: info.id,
 		name: info.display_name,
 		path: info.path,
 		ownerName: info.owner,
 		ownerKind: 'personal',
-		lastSavedAt,
+		lastSavedAt: info.last_saved_at === null ? null : parseDate(info.last_saved_at),
 		remoteConnected: info.remote_url !== null && info.remote_url !== '',
 		lastUploadedAt: info.last_uploaded_at === null ? null : parseDate(info.last_uploaded_at),
 		unsavedCount: status.unsaved_changes,
@@ -279,12 +275,23 @@ export function mapFileEntries(items: BackendFileEntry[]): FileEntry[] {
 }
 
 /** ログイン状態。トークンはバックエンドが返さない */
+/** アバター画像として表示してよい（https の）URL だけを返す。それ以外は null */
+export function safeAvatarUrl(value: string | null): string | null {
+	if (value === null) return null;
+	try {
+		return new URL(value).protocol === 'https:' ? value : null;
+	} catch {
+		return null;
+	}
+}
+
 export function mapSession(info: SessionInfo): Session {
 	return {
 		loggedIn: info.logged_in,
 		onboarded: info.onboarded,
 		reauthRequired: info.reauth_required,
-		userLogin: info.user?.login ?? null
+		userLogin: info.user?.login ?? null,
+		avatarUrl: safeAvatarUrl(info.user?.avatar_url ?? null)
 	};
 }
 

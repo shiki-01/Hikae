@@ -59,8 +59,11 @@ export const commands = {
 	pull: (id: string, saveConfirmed: boolean) => typedError<PullResult, AppError>(__TAURI_INVOKE("pull", { id, saveConfirmed })),
 	/**  アップロード（push）を実行。 */
 	push: (id: string) => typedError<PushResult, AppError>(__TAURI_INVOKE("push", { id })),
-	/**  履歴を取得。 */
-	listHistory: (id: string, maxCount: number) => typedError<HistoryItem[], AppError>(__TAURI_INVOKE("list_history", { id, maxCount })),
+	/**
+	 *  履歴を取得。新しい順で `offset` 件目から最大 `limit` 件（ページ送り）。
+	 *  重複の判定は全体で行うため、ページを跨いでも重複・欠落しない。
+	 */
+	listHistory: (id: string, offset: number, limit: number) => typedError<HistoryItem[], AppError>(__TAURI_INVOKE("list_history", { id, offset, limit })),
 	/**  差分を取得（2つの時点の比較）。 */
 	diff: (id: string, from: string, to: string, path: string | null) => typedError<DiffResult, AppError>(__TAURI_INVOKE("diff", { id, from, to, path })),
 	/**  元に戻す操作のプレビュー（影響ファイル一覧）。 */
@@ -645,6 +648,8 @@ export type ProjectInfo = {
 	 *  フォルダが見つからないときは null
 	 */
 	last_uploaded_at: string | null,
+	/**  最新の手動の保存の日時（ISO 8601）。自動保存は含めない。まだ保存が無い、フォルダが見つからないときは null */
+	last_saved_at: string | null,
 };
 
 /**  プロジェクトフォルダ全体のファイル一覧 */

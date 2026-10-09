@@ -1,6 +1,10 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { ChevronDown, ChevronRight, Copy } from '@lucide/svelte';
 	import { t } from '#lib/i18n/index.js';
+	import { reloginSearch } from '#lib/features/projects/relogin.js';
 	import Button from '#lib/components/Button.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
 	import { closeError, notifications } from './store.svelte';
@@ -31,9 +35,16 @@
 		const state = notifications.error;
 		if (!state) return;
 		const { view, onretry, onprimary } = state;
+		// 管理者向けの説明のコピーは、ダイアログを開いたまま行い、コピーできたことを見せる
+		if (view.primaryKind === 'copy' && view.copyText) {
+			void copy(view.copyText);
+			return;
+		}
 		closeError();
 		if (view.primaryKind === 'retry') onretry?.();
-		else if (view.primaryKind === 'copy' && view.copyText) void copy(view.copyText);
+		// ログインし直す画面へ移り、終わったらいまの画面に戻る
+		else if (view.primaryKind === 'login')
+			void goto(`${resolve('/welcome')}${reloginSearch(page.url)}`);
 		onprimary?.();
 	}
 
@@ -104,6 +115,11 @@
 		{#if current}
 			{@const view = current.view}
 			{@const closeOnly = view.primaryKind === 'close' && !current.onprimary}
+			{#if copied && view.primaryKind === 'copy' && !showDetails}
+				<span class="type-small fg:fg-muted align-self:center" role="status">
+					{t('error.copied')}
+				</span>
+			{/if}
 			{#if view.secondaryLabel}
 				<Button variant="secondary" onclick={secondary}>{view.secondaryLabel}</Button>
 			{/if}
@@ -111,6 +127,9 @@
 				<Button variant="secondary" onclick={closeError}>{t('error.close')}</Button>
 			{/if}
 			<Button onclick={primary}>
+				{#if view.primaryKind === 'copy'}
+					<Copy size={14} aria-hidden="true" />
+				{/if}
 				{closeOnly ? t('error.close') : view.primaryLabel}
 			</Button>
 		{/if}

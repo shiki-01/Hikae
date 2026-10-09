@@ -24,7 +24,7 @@ import {
 } from './mappers';
 
 describe('ログインの変換', () => {
-	it('ユーザー名だけを取り出し、トークンに相当する値は持たない', () => {
+	it('ユーザー名とアバターの URL だけを取り出し、トークンに相当する値は持たない', () => {
 		const session = mapSession({
 			logged_in: true,
 			reauth_required: false,
@@ -35,8 +35,19 @@ describe('ログインの変換', () => {
 			loggedIn: true,
 			onboarded: true,
 			reauthRequired: false,
-			userLogin: 'shiki'
+			userLogin: 'shiki',
+			avatarUrl: 'https://example.com/a.png'
 		});
+	});
+
+	it('https 以外・不正な URL のアバターは使わない', () => {
+		const base = { logged_in: true, reauth_required: false, onboarded: true };
+		for (const avatar of ['http://example.com/a.png', 'javascript:alert(1)', 'not a url']) {
+			expect(
+				mapSession({ ...base, user: { login: 'x', avatar_url: avatar } }).avatarUrl
+			).toBeNull();
+		}
+		expect(mapSession({ ...base, user: { login: 'x', avatar_url: null } }).avatarUrl).toBeNull();
 	});
 
 	it('未ログインではユーザー名が無い', () => {
@@ -47,6 +58,7 @@ describe('ログインの変換', () => {
 			user: null
 		});
 		expect(session.userLogin).toBeNull();
+		expect(session.avatarUrl).toBeNull();
 	});
 
 	it('確認コード・確認ページ・有効期限を画面用にする', () => {
@@ -289,7 +301,8 @@ describe('プロジェクトの変換', () => {
 		owner: 'me',
 		last_viewed_at: '2026-10-08T00:00:00Z',
 		folder_missing: false,
-		last_uploaded_at: '2026-10-07T12:14:00+09:00'
+		last_uploaded_at: '2026-10-07T12:14:00+09:00',
+		last_saved_at: '2026-10-08T09:30:00+09:00'
 	};
 	const status = {
 		unsaved_changes: 0,
@@ -303,41 +316,46 @@ describe('プロジェクトの変換', () => {
 		last_auto_snapshot_at: null
 	};
 
+	it('最終保存の日時は、一覧の情報の値（自動保存を含まない最新の保存）から出す', () => {
+		expect(mapProject(info, status).lastSavedAt?.toISOString()).toBe('2026-10-08T00:30:00.000Z');
+		expect(mapProject({ ...info, last_saved_at: null }, status).lastSavedAt).toBeNull();
+	});
+
 	it('途中で止まった操作の名前を引き継ぐ', () => {
-		expect(mapProject(info, { ...status, interrupted_operation: 'pull' }, null)).toMatchObject({
+		expect(mapProject(info, { ...status, interrupted_operation: 'pull' })).toMatchObject({
 			interruptedOperation: 'pull'
 		});
-		expect(mapProject(info, status, null).interruptedOperation).toBeNull();
+		expect(mapProject(info, status).interruptedOperation).toBeNull();
 	});
 
 	it('最終アップロード日時と接続の有無を、実際の値から出す', () => {
-		const connected = mapProject(info, status, null);
+		const connected = mapProject(info, status);
 		expect(connected.remoteConnected).toBe(true);
 		expect(connected.lastUploadedAt?.toISOString()).toBe('2026-10-07T03:14:00.000Z');
 
-		const local = mapProject({ ...info, remote_url: null, last_uploaded_at: null }, status, null);
+		const local = mapProject({ ...info, remote_url: null, last_uploaded_at: null }, status);
 		expect(local.remoteConnected).toBe(false);
 		expect(local.lastUploadedAt).toBeNull();
-		expect(mapProject({ ...info, remote_url: '' }, status, null).remoteConnected).toBe(false);
+		expect(mapProject({ ...info, remote_url: '' }, status).remoteConnected).toBe(false);
 	});
 
 	it('ファイル監視の状態と、最後の自動保存の時刻を引き継ぐ', () => {
-		const idle = mapProject(info, status, null);
+		const idle = mapProject(info, status);
 		expect(idle.watching).toBe(false);
 		expect(idle.lastAutoSnapshotAt).toBeNull();
-		const watched = mapProject(
-			info,
-			{ ...status, watching: true, last_auto_snapshot_at: '2026-10-08T03:00:00Z' },
-			null
-		);
+		const watched = mapProject(info, {
+			...status,
+			watching: true,
+			last_auto_snapshot_at: '2026-10-08T03:00:00Z'
+		});
 		expect(watched.watching).toBe(true);
 		expect(watched.lastAutoSnapshotAt?.toISOString()).toBe('2026-10-08T03:00:00.000Z');
 	});
 
 	it('フォルダが見つからない状態を、一覧の情報と状態のどちらからでも拾う', () => {
-		expect(mapProject(info, status, null).folderMissing).toBe(false);
-		expect(mapProject({ ...info, folder_missing: true }, status, null).folderMissing).toBe(true);
-		expect(mapProject(info, { ...status, folder_missing: true }, null).folderMissing).toBe(true);
+		expect(mapProject(info, status).folderMissing).toBe(false);
+		expect(mapProject({ ...info, folder_missing: true }, status).folderMissing).toBe(true);
+		expect(mapProject(info, { ...status, folder_missing: true }).folderMissing).toBe(true);
 	});
 });
 

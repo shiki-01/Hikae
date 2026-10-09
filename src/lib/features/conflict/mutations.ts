@@ -7,7 +7,8 @@ import { invalidateProject } from '#lib/features/projects/sync.js';
 
 export function useResolve(getProjectId: () => string, onResolved?: () => void) {
 	const client = useQueryClient();
-	return createMutation(() => ({
+	const retry: { run?: (resolutions: ConflictResolution[]) => void } = {};
+	const mutation = createMutation(() => ({
 		mutationFn: (resolutions: ConflictResolution[]) =>
 			api.resolveConflicts(getProjectId(), resolutions),
 		onSuccess: async () => {
@@ -15,19 +16,24 @@ export function useResolve(getProjectId: () => string, onResolved?: () => void) 
 			pushToast({ type: 'success', message: t('toast.resolved') });
 			onResolved?.();
 		},
-		onError: (error) => reportError(error)
+		onError: (error, resolutions) => reportError(error, { retry: () => retry.run?.(resolutions) })
 	}));
+	retry.run = (resolutions) => mutation.mutate(resolutions);
+	return mutation;
 }
 
 export function useAbortMerge(getProjectId: () => string, onDone?: () => void) {
 	const client = useQueryClient();
-	return createMutation(() => ({
+	const retry = { run: () => {} };
+	const mutation = createMutation(() => ({
 		mutationFn: () => api.abortMerge(getProjectId()),
 		onSuccess: async () => {
 			await invalidateProject(client, getProjectId());
 			pushToast({ type: 'info', message: t('toast.merge_aborted') });
 			onDone?.();
 		},
-		onError: (error) => reportError(error)
+		onError: (error) => reportError(error, { retry: () => retry.run() })
 	}));
+	retry.run = () => mutation.mutate();
+	return mutation;
 }

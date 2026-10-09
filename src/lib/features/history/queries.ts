@@ -1,13 +1,17 @@
-import { createQuery } from '@tanstack/svelte-query';
+import { createInfiniteQuery, createQuery } from '@tanstack/svelte-query';
 import { api } from '#lib/api/index.js';
 import { keys } from '#lib/api/keys.js';
 import type { RestoreScope } from '#lib/api/types.js';
+import { HISTORY_PAGE_SIZE, nextHistoryOffset } from './paging';
 import { scopeKey } from './restore';
 
+/** 履歴。無限スクロール用に、ページ（`HISTORY_PAGE_SIZE` 件ずつ）で取得する。つなげるには `flattenHistoryPages` */
 export function useHistory(getProjectId: () => string) {
-	return createQuery(() => ({
+	return createInfiniteQuery(() => ({
 		queryKey: keys.history(getProjectId()),
-		queryFn: () => api.listSavePoints(getProjectId()),
+		queryFn: ({ pageParam }) => api.listSavePoints(getProjectId(), pageParam, HISTORY_PAGE_SIZE),
+		initialPageParam: 0,
+		getNextPageParam: (_lastPage, allPages) => nextHistoryOffset(allPages),
 		enabled: getProjectId() !== ''
 	}));
 }
