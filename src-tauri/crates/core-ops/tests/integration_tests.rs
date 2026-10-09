@@ -1448,6 +1448,68 @@ fn test_29_history_counts_japanese_file_names() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn test_29b_history_counts_merge_commit_against_first_parent(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let setup = TestSetup::new("test-29b")?;
+    let ops = Ops::new(new_runner());
+    let repo = &setup.pc_a;
+    let git = |args: &[&str]| {
+        let (code, out, err) = run_git(repo, args);
+        assert_eq!(code, 0, "git {args:?}: {err}");
+        out.trim().to_string()
+    };
+
+    // main: a.txt と b.txt を保存
+    common::write_test_file(repo, "a.txt", "a")?;
+    common::write_test_file(repo, "b.txt", "b")?;
+    save_commit(&ops, repo, "base")?;
+    let main_branch = git(&["symbolic-ref", "--short", "HEAD"]);
+
+    // 別の枝: 3 ファイルを追加し、1 ファイルを名前変更する（第 1 親から見て 4 件の変更）
+    git(&["checkout", "-q", "-b", "side"]);
+    for name in ["s1.txt", "s2.txt", "s3.txt"] {
+        common::write_test_file(repo, name, name)?;
+    }
+    git(&["mv", "b.txt", "b2.txt"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "side"]);
+
+    // main 側: 1 ファイルだけ追加（第 2 親から見ると、変更はこの 1 件と別の枝の差になる）
+    git(&["checkout", "-q", &main_branch]);
+    common::write_test_file(repo, "m.txt", "m")?;
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "main side"]);
+    git(&["merge", "-q", "--no-ff", "--no-edit", "side"]);
+
+    let parents = git(&["rev-list", "--parents", "-n", "1", "HEAD"]);
+    assert_eq!(parents.split_whitespace().count(), 3, "マージ commit");
+    let first_parent = parents.split_whitespace().nth(1).ok_or("first parent")?;
+    let expected = git(&["diff", "--name-only", "-M", first_parent, "HEAD"])
+        .lines()
+        .count() as u32;
+    assert_eq!(expected, 4, "追加 3 件 + 名前変更 1 件");
+
+    let entries = ops.history(repo, 50)?;
+    let merge = entries
+        .iter()
+        .find(|e| e.message.starts_with("Merge"))
+        .ok_or("マージ commit が履歴に無い")?;
+    assert_eq!(
+        merge.changed_files_count, expected,
+        "マージは第 1 親との差を数える"
+    );
+    // 通常の保存は従来どおり
+    let main_side = entries
+        .iter()
+        .find(|e| e.message == "main side")
+        .ok_or("main side")?;
+    assert_eq!(main_side.changed_files_count, 1);
+
+    setup.cleanup()?;
+    Ok(())
+}
+
+#[test]
 fn test_30_restore_returns_a_token_that_undoes_it() -> Result<(), Box<dyn std::error::Error>> {
     let setup = TestSetup::new("test-30")?;
     let ops = Ops::new(new_runner());

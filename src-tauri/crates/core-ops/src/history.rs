@@ -2,7 +2,8 @@
 //
 // - 手動の保存は `HEAD` の履歴、自動保存は `refs/hikae/snapshots/<ブランチ>/` の ref が指す commit
 // - 出力は `-z` と専用の区切り文字で解析する（メモに `|` や改行が入っても壊れない）
-// - ファイル数は親との `diff --numstat -z` で数える（ルートは全ファイルを追加として数える）
+// - ファイル数は第 1 親との差を `show --first-parent --name-only -z` で数える（ルートは全ファイルを
+//   追加として数える）。ページ全体を少ない回数（150 件ずつ）の `show` にまとめ、commit ごとの起動はしない
 // - 復元点のうち `refs/hikae/backup/` は履歴に出さない
 // - メモ末尾のトレーラー `Hikae-PC: <PC 名>` は `pc_name` に分け、`message` には含めない
 
@@ -62,27 +63,80 @@ pub(crate) fn parse_log_records(stdout: &[u8]) -> Vec<LogRecord> {
         .collect()
 }
 
-/// `diff --numstat -z -M` の出力から変更ファイル数を数える。
-/// 通常は `<追加>\t<削除>\t<パス>\0`、名前変更は `<追加>\t<削除>\t\0<元>\0<先>\0`（1 件として数える）。
-pub(crate) fn count_numstat_files(stdout: &[u8]) -> u32 {
-    let mut tokens = stdout.split(|b| *b == 0);
-    let mut count = 0;
-    while let Some(token) = tokens.next() {
+/// 変更ファイル数の取得で 1 回の `show` に並べる commit の上限。
+/// 引数が長すぎると OS のコマンドライン長の上限（Windows は約 32,000 文字）を超えるため、
+/// 完全な OID（SHA-256 でも 64 文字）で 150 件（約 10,000 文字）ずつに分ける。
+const COUNT_CHUNK: usize = 150;
+
+/// 変更ファイル数の取得で、commit の見出しに使う開始記号（RS）。ファイル名には現れない制御文字
+const HEADER_MARK: u8 = 0x1e;
+
+/// `show --first-parent --name-only -z --format=%x1e%H%x1f` の出力から、commit ごとの
+/// 変更ファイル数を数える。
+///
+/// 出力は commit ごとに `RS<OID>US NUL LF <ファイル> NUL <ファイル> NUL ...` と並ぶ。
+/// 見出し（RS で始まるトークン）を区切りにして、次の見出しまでのファイル名の数を数える。
+/// 見出しの直後のトークンに付く先頭の改行は区切りの揺れなので 1 つだけ取り除く。
+/// メモは出力に含めないため、メモの内容（改行・`|` など）は結果に影響しない。
+/// ルート commit は全ファイル、マージ commit は第 1 親との差になる（`--first-parent` による）。
+pub(crate) fn parse_changed_file_counts(stdout: &[u8]) -> HashMap<String, u32> {
+    let mut counts = HashMap::new();
+    let mut current: Option<String> = None;
+    let mut after_header = false;
+    for raw in stdout.split(|b| *b == 0) {
+        // 直前の commit にファイルが無いと、次の見出しにも先頭の改行が付く
+        let stripped = raw.strip_prefix(b"\n").unwrap_or(raw);
+        if stripped.first() == Some(&HEADER_MARK) {
+            let body = &stripped[1..];
+            let oid_end = body.iter().position(|b| *b == 0x1f);
+            if let Some(end) = oid_end {
+                let oid = String::from_utf8_lossy(&body[..end]).trim().to_string();
+                if !oid.is_empty() {
+                    counts.entry(oid.clone()).or_insert(0);
+                    current = Some(oid);
+                    after_header = true;
+                    continue;
+                }
+            }
+        }
+        // 見出しの直後のトークンだけ、先頭の改行を取り除く
+        let token = if after_header { stripped } else { raw };
+        after_header = false;
         if token.is_empty() {
             continue;
         }
-        let mut parts = token.splitn(3, |b| *b == b'\t');
-        let (Some(_), Some(_), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        count += 1;
-        if path.is_empty() {
-            // 名前変更・コピー: 続く 2 トークン（元・先）を読み飛ばす
-            tokens.next();
-            tokens.next();
+        if let Some(oid) = &current {
+            *counts.entry(oid.clone()).or_insert(0) += 1;
         }
     }
-    count
+    counts
+}
+
+/// 指定した commit それぞれの変更ファイル数を、少ない回数の `show` でまとめて取得する（読み取りのみ）。
+///
+/// commit ごとに `git` を起動すると Windows ではプロセスの起動が支配的になる（100 件で約 4 秒）。
+/// `show` は列挙（walk）をせず、並べた commit だけを表示するため、`--first-parent` の付与で
+/// マージ commit の差を第 1 親との差に揃えられる。許可リストに無い `log --no-walk` は使わない。
+fn changed_file_counts(
+    runner: &GitRunner,
+    repo: &Path,
+    oids: &[&str],
+) -> Result<HashMap<String, u32>, OpsError> {
+    let mut all = HashMap::new();
+    for chunk in oids.chunks(COUNT_CHUNK) {
+        let mut args: Vec<&str> = vec![
+            "show",
+            "--first-parent",
+            "--name-only",
+            "-z",
+            "--format=%x1e%H%x1f",
+        ];
+        args.extend(chunk.iter().copied());
+        args.push("--");
+        let out = runner.run_ok(repo, &args)?;
+        all.extend(parse_changed_file_counts(&out.stdout));
+    }
+    Ok(all)
 }
 
 /// 履歴の 1 回の取得で `git log` の引数に並べる自動保存の ref の上限。
@@ -164,7 +218,7 @@ pub(crate) fn last_saved_at(runner: &GitRunner, repo: &Path) -> Result<Option<St
 /// ページを跨いで重複・欠落が起きないよう、毎回「先頭から `offset + limit` 件」を同じ規則で
 /// 数え直し、その末尾の `limit` 件を返す（`--skip` で読み飛ばすと、重複判定の対象が窓の位置で
 /// 変わってしまう）。重複判定は窓の外の手動の保存も含めた全体で行うため、同じ自動保存が
-/// ページによって出たり消えたりしない。変更ファイル数の集計（commit ごとの `git diff`）は、
+/// ページによって出たり消えたりしない。変更ファイル数の集計（少ない回数の `git show`）は、
 /// 返す `limit` 件だけに行う。
 pub(crate) fn history(
     runner: &GitRunner,
@@ -224,27 +278,14 @@ pub(crate) fn history(
         .take(wanted)
         .collect();
 
+    // 返す分の変更ファイル数を、commit ごとではなくまとめて取得する
+    let page: Vec<(&LogRecord, Option<&str>)> = visible.into_iter().skip(offset).collect();
+    let page_oids: Vec<&str> = page.iter().map(|(record, _)| record.oid.as_str()).collect();
+    let counts = changed_file_counts(runner, repo, &page_oids)?;
+
     let mut entries = Vec::new();
-    for (record, snapshot_ref) in visible.into_iter().skip(offset) {
-        let changed_files_count = match record.parents.first() {
-            Some(parent) => {
-                let stat = runner.run_ok(
-                    repo,
-                    &["diff", "--numstat", "-z", "-M", parent, &record.oid, "--"],
-                )?;
-                count_numstat_files(&stat.stdout)
-            }
-            None => {
-                // ルート commit は比べる親が無い（空ツリーは diff の対象にできない）ため、
-                // その時点の全ファイルを「追加」として数える
-                let tree =
-                    runner.run_ok(repo, &["ls-tree", "-r", "-z", "--name-only", &record.oid])?;
-                tree.stdout
-                    .split(|b| *b == 0)
-                    .filter(|p| !p.is_empty())
-                    .count() as u32
-            }
-        };
+    for (record, snapshot_ref) in page {
+        let changed_files_count = counts.get(&record.oid).copied().unwrap_or(0);
         let cloud_synced = snapshot_ref.is_none()
             && unuploaded
                 .as_ref()
@@ -297,12 +338,25 @@ mod tests {
     }
 
     #[test]
-    fn numstat_counter_counts_renames_once() {
-        let raw = b"1\t0\ta.txt\0-\t-\tb c.bin\0\
-                    0\t0\t\0old name.txt\0new name.txt\0\
-                    3\t4\t\xe6\x97\xa5\xe6\x9c\xac.txt\0";
-        assert_eq!(count_numstat_files(raw), 4);
-        assert_eq!(count_numstat_files(b""), 0);
-        assert_eq!(count_numstat_files(b"\0"), 0);
+    fn file_count_parser_splits_by_headers() {
+        // 2 件目はファイル無し（マージで差が無い場合）、3 件目の直前の見出しにも改行が付く
+        let raw = "\u{1e}aaa\u{1f}\0\na.txt\0b c.txt\0\
+                   \u{1e}bbb\u{1f}\0\n\
+                   \u{1e}ccc\u{1f}\0\n日本語.txt\0";
+        let got = parse_changed_file_counts(raw.as_bytes());
+        assert_eq!(got.len(), 3);
+        assert_eq!(got["aaa"], 2);
+        assert_eq!(got["bbb"], 0);
+        assert_eq!(got["ccc"], 1);
+        assert!(parse_changed_file_counts(b"").is_empty());
+        assert!(parse_changed_file_counts(b"\0\n\0").is_empty());
+    }
+
+    #[test]
+    fn file_count_parser_is_not_confused_by_odd_file_names() {
+        // `|`・タブ・US を含む名前も 1 件として数える（見出しは RS で始まるものだけ）
+        let raw = "\u{1e}aaa\u{1f}\0\na|b.txt\0c\td.txt\0e\u{1f}f.txt\0";
+        let got = parse_changed_file_counts(raw.as_bytes());
+        assert_eq!(got["aaa"], 3);
     }
 }

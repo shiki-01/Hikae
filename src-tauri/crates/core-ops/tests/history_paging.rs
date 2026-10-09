@@ -143,6 +143,31 @@ fn pages_concatenate_to_the_full_history(
         "実際の自動保存が履歴に出る"
     );
 
+    // 変更ファイル数は、git の第 1 親との差（ルートは全ファイル）と一致する。
+    // 全体の取得は 150 件を超えるため、まとめて取得する単位の分割も通る
+    assert!(full.len() > 150);
+    for entry in full.iter().step_by(4) {
+        let oid = git_ok(repo, &["rev-parse", &entry.commit]);
+        let parents = git_ok(repo, &["rev-list", "--parents", "-n", "1", &oid]);
+        let expected = match parents.split_whitespace().nth(1) {
+            Some(parent) => git_ok(
+                repo,
+                &["diff", "--name-only", "-z", "-M", parent, &oid, "--"],
+            )
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .count(),
+            None => git_ok(repo, &["ls-tree", "-r", "--name-only", &oid])
+                .lines()
+                .count(),
+        };
+        assert_eq!(
+            entry.changed_files_count as usize, expected,
+            "{} の変更ファイル数",
+            entry.commit
+        );
+    }
+
     // どのページ幅でも、つなげると全体と一致する
     for page_size in [1usize, 64, 100, 200] {
         let mut joined = Vec::new();
