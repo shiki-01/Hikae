@@ -310,7 +310,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 
 - **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
 - **3.2 Hikae 固有の部品 14 種のうち 11 種が実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、DiffView、ConflictItem、ImpactList、OwnerPicker。MVP の 27 種はすべて実装済み
-- **未実装（3 種、いずれも Phase 2）**: ImageCompare、ModelCard、IgnoreRuleRow
+- **未実装（Phase 2）**: ModelCard。ImageCompare は実装済み（`features/compare/ImageCompare.svelte`）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
 - 一覧にない部品として、一覧系のローディング用に Skeleton（5章）と、変更の種類を示す小さな ChangeBadge（「すべてのファイル」のツリー用）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
 - StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」「GitHub に接続していない」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、未接続、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
 
@@ -322,7 +322,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | S1 プロジェクト一覧 | `features/projects/ProjectsScreen.svelte`（`/`） | 実装済み。要対応のカードを先頭に寄せる |
 | S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
 | S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、履歴の各項目の `cloudSynced`（バックエンドの `cloud_synced`）から出す。保存先に接続していない、まだ何も上げていないときは出ない（design.md 4.6、12章） |
-| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分のみ（左右／統合）。画像・docx・xlsx は Phase 2 |
+| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）と画像比較。docx・xlsx は Phase 2 |
 | S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」の 4 タブ。詳細設定は空。S6〜S8 は未実装（`features/ai` と `features/extensions` は空） |
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |

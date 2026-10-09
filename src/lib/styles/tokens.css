@@ -27,6 +27,8 @@
 	--color-diff-del-bg: #fbe9e7;
 	--color-diff-del-fg: #a3291f;
 	--color-diff-mod-bg: #fff4d6;
+	/* 画像の差分強調（canvas で画素の違いを塗る色。値は仮） */
+	--color-diff-highlight: #e8262a;
 	--color-snapshot: #b5b5b0;
 	--color-focus-ring: #2f6fdb;
 }
@@ -53,6 +55,7 @@
 	--color-diff-del-bg: #3a1b19;
 	--color-diff-del-fg: #f09a92;
 	--color-diff-mod-bg: #3a3115;
+	--color-diff-highlight: #ff5a5f;
 	--color-snapshot: #5e5e5e;
 	--color-focus-ring: #5b8fea;
 }

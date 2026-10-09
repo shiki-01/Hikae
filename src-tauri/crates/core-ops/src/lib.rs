@@ -2,6 +2,7 @@
 
 mod add_files;
 mod auto_snapshot;
+mod blob;
 mod broad_folder;
 mod changes;
 mod clone_dest;
@@ -37,6 +38,7 @@ pub use add_files::{
     LARGE_FILE_WARN_BYTES,
 };
 pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
+pub use blob::{Blob, WORK_REV};
 pub use broad_folder::{check_project_folder, BroadFolderReason, BroadFolders};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
@@ -616,6 +618,24 @@ impl Ops {
         preview_root: &Path,
     ) -> Result<std::path::PathBuf, OpsError> {
         preview_file::export_file_at(self.runner(), repo, commit, relative_path, preview_root)
+    }
+
+    /// 完全な OID に解決する（短縮形でも可。存在しなければ `InvalidInput`）。読み取りのみ。
+    /// 画面が持つ短縮 ID から `read_blob` 用の完全な OID を得るために使う。
+    pub fn full_commit_id(&self, repo: &Path, rev: &str) -> Result<String, OpsError> {
+        restore_file::resolve_commit(self.runner(), repo, rev)
+    }
+
+    /// 指定時点（完全な OID）または作業フォルダ（`work`）の画像ファイルを読む（設計書 9.3）。読み取りのみ。
+    /// 画像の拡張子（png・jpg・jpeg・gif・webp・bmp）だけを受け付ける。`max_bytes` を超えるものは読まない。
+    pub fn read_blob(
+        &self,
+        repo: &Path,
+        rev: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Blob, OpsError> {
+        blob::read_blob(self.runner(), repo, rev, path, max_bytes)
     }
 
     /// 中断された操作（`operation`、開始は Unix 秒 `started_at_unix`）の直前に作られた復元点へ、

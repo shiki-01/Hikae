@@ -17,6 +17,7 @@ use core_watch::SyncTask;
 
 mod app_settings;
 mod auto_snapshot;
+mod blob_protocol;
 mod events;
 mod github;
 mod health;
@@ -3447,6 +3448,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // 画像比較の読み取り経路（設計書 9.3）。読み取りのみで、状態は変えない
+        .register_asynchronous_uri_scheme_protocol(blob_protocol::SCHEME, blob_protocol::handle)
         .setup(move |app| {
             // イベントの登録（UI への通知に必要）
             builder.mount_events(app);

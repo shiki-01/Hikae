@@ -1836,6 +1836,7 @@ dependencies = [
  "core-safety",
  "core-store",
  "core-watch",
+ "percent-encoding",
  "serde",
  "specta",
  "specta-typescript",

@@ -20,7 +20,9 @@
         "minHeight": 600
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": "img-src 'self' app-blob: http://app-blob.localhost https://avatars.githubusercontent.com"
+    }
   },
   "bundle": {
     "active": true,

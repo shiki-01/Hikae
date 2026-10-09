@@ -8,6 +8,8 @@
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select, { type SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
+	import ImageCompare from './ImageCompare.svelte';
+	import { isImagePath } from './image-diff';
 	import { canStep, stepBlock, swapPoints, type StepDirection } from './navigation';
 	import { useCompare } from './queries';
 
@@ -28,11 +30,15 @@
 	let to = $state(untrack(() => initialTo));
 	let mode = $state<'split' | 'unified'>('split');
 
+	// 画像（対応する拡張子）は本文の差分を使わず、ImageCompare で比べる
+	const imageMode = $derived(isImagePath(path));
+
 	const diff = useCompare(
 		() => projectId,
 		() => path,
 		() => from,
-		() => to
+		() => to,
+		() => !imageMode
 	);
 
 	const total = $derived(diff.data?.kind === 'text' ? countBlocks(diff.data.rows) : 0);
@@ -78,31 +84,33 @@
 				{path}
 			</h2>
 			<div class="flex align-items:center gap:2 flex-shrink:0">
-				<span class="type-small fg:fg-muted" aria-live="polite">
-					{#if total > 0 && active !== null}
-						{t('compare.position', { current: active + 1, total })}
-					{:else if diff.data}
-						{t('compare.no_changes')}
-					{/if}
-				</span>
-				<Button
-					size="sm"
-					variant="secondary"
-					disabled={!canStep(active, total, -1) || total === 0}
-					onclick={() => step(-1)}
-				>
-					<ChevronUp size={14} aria-hidden="true" />
-					{t('compare.prev')}
-				</Button>
-				<Button
-					size="sm"
-					variant="secondary"
-					disabled={!canStep(active, total, 1) || total === 0}
-					onclick={() => step(1)}
-				>
-					<ChevronDown size={14} aria-hidden="true" />
-					{t('compare.next')}
-				</Button>
+				{#if !imageMode}
+					<span class="type-small fg:fg-muted" aria-live="polite">
+						{#if total > 0 && active !== null}
+							{t('compare.position', { current: active + 1, total })}
+						{:else if diff.data}
+							{t('compare.no_changes')}
+						{/if}
+					</span>
+					<Button
+						size="sm"
+						variant="secondary"
+						disabled={!canStep(active, total, -1) || total === 0}
+						onclick={() => step(-1)}
+					>
+						<ChevronUp size={14} aria-hidden="true" />
+						{t('compare.prev')}
+					</Button>
+					<Button
+						size="sm"
+						variant="secondary"
+						disabled={!canStep(active, total, 1) || total === 0}
+						onclick={() => step(1)}
+					>
+						<ChevronDown size={14} aria-hidden="true" />
+						{t('compare.next')}
+					</Button>
+				{/if}
 				<IconButton label={t('compare.close')} onclick={onclose}>
 					<X size={18} aria-hidden="true" />
 				</IconButton>
@@ -127,24 +135,40 @@
 				class="w:240px"
 			/>
 			<span class="flex:1"></span>
-			<SegmentedControl
-				bind:value={mode}
-				ariaLabel={t('compare.mode')}
-				options={[
-					{ value: 'split', label: t('compare.mode_split') },
-					{ value: 'unified', label: t('compare.mode_unified') }
-				]}
-			/>
+			{#if !imageMode}
+				<SegmentedControl
+					bind:value={mode}
+					ariaLabel={t('compare.mode')}
+					options={[
+						{ value: 'split', label: t('compare.mode_split') },
+						{ value: 'unified', label: t('compare.mode_unified') }
+					]}
+				/>
+			{/if}
 		</div>
 	</header>
 
-	<DiffView
-		diff={diff.data ?? null}
-		loading={diff.isPending}
-		{mode}
-		activeBlock={active}
-		leftLabel={labelOf(from)}
-		rightLabel={labelOf(to)}
-		{onopen}
-	/>
+	{#if imageMode}
+		<!-- 時点や対象が変わったら作り直す（画像の読み込み状態を持つため） -->
+		{#key `${path}|${from}|${to}`}
+			<ImageCompare
+				{projectId}
+				{path}
+				{from}
+				{to}
+				leftLabel={labelOf(from)}
+				rightLabel={labelOf(to)}
+			/>
+		{/key}
+	{:else}
+		<DiffView
+			diff={diff.data ?? null}
+			loading={diff.isPending}
+			{mode}
+			activeBlock={active}
+			leftLabel={labelOf(from)}
+			rightLabel={labelOf(to)}
+			{onopen}
+		/>
+	{/if}
 </section>

@@ -35,6 +35,8 @@ core-llm = { workspace = true }
 core-store = { workspace = true, features = ["specta"] }
 # 新規ファイルの「元に戻す（作成しない）」でごみ箱へ移す。バージョンは固定する
 trash = "=5.2.9"
+# app-blob のパス（URL エンコードされた相対パス）を戻す。Cargo.lock に既にある版を使う
+percent-encoding = "2"
 
 [[bin]]
 name = "hikae"
