@@ -27,6 +27,7 @@ $RECYCLE.BIN/
 *.swo
 
 # Claude Code のローカル設定
+.claude
 .claude/settings.local.json
 
 # 単体の rustc 実験で出る成果物
