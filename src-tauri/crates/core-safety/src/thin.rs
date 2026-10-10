@@ -11,6 +11,7 @@
 // `thin_restore_points` が `GitRunner` 経由の `update-ref -d` だけで行う（データの実体の削除は
 // git の通常の gc に任せる）。
 
+use crate::size::{DEFAULT_SNAPSHOT_SIZE_CAP_X, SIZE_CAP_FLOOR_BYTES};
 use crate::{SafetyError, BACKUP_REF_PREFIX, SNAPSHOT_REF_PREFIX};
 use core_git::GitRunner;
 use std::collections::{BTreeMap, HashSet};
@@ -37,6 +38,10 @@ pub struct ThinPolicy {
     pub snapshot_retention_days: u32,
     /// 操作前の控えの保持期間（日）
     pub backup_retention_days: u32,
+    /// 自動保存の容量上限（保存済みの木の大きさの倍数）。0 は上限なし。設定（0 / 1 / 2 / 5）から渡す
+    pub snapshot_size_cap_x: u32,
+    /// 容量上限の下限（バイト）。テストでは小さい値を渡す（本番は `SIZE_CAP_FLOOR_BYTES`）
+    pub size_cap_floor_bytes: u64,
 }
 
 impl Default for ThinPolicy {
@@ -44,6 +49,8 @@ impl Default for ThinPolicy {
         ThinPolicy {
             snapshot_retention_days: DEFAULT_SNAPSHOT_RETENTION_DAYS,
             backup_retention_days: BACKUP_RETENTION_DAYS,
+            snapshot_size_cap_x: DEFAULT_SNAPSHOT_SIZE_CAP_X,
+            size_cap_floor_bytes: SIZE_CAP_FLOOR_BYTES,
         }
     }
 }
@@ -58,17 +65,17 @@ pub struct ThinReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Kind {
+pub(crate) enum Kind {
     Snapshot,
     Backup,
 }
 
-struct Parsed<'a> {
-    name: &'a str,
-    kind: Kind,
+pub(crate) struct Parsed<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) kind: Kind,
     /// スナップショットはブランチ名、backup は操作名
-    group: &'a str,
-    at: OffsetDateTime,
+    pub(crate) group: &'a str,
+    pub(crate) at: OffsetDateTime,
 }
 
 /// ref 名の末尾の時刻（`YYYYMMDDTHHMMSSZ`、衝突時は `-<番号>` が付く）を読む。読めなければ None。
@@ -105,7 +112,7 @@ fn parse_ref_timestamp(s: &str) -> Option<OffsetDateTime> {
 
 /// 復元点として解釈できる ref 名だけを返す。名前空間の外、グループ名が空、
 /// 空白・制御文字を含む、時刻が読めない名前は None（= 間引きの対象にしない）。
-fn parse_ref(name: &str) -> Option<Parsed<'_>> {
+pub(crate) fn parse_ref(name: &str) -> Option<Parsed<'_>> {
     let (kind, rest) = match name.strip_prefix(SNAPSHOT_REF_PREFIX) {
         Some(rest) => (Kind::Snapshot, rest),
         None => (Kind::Backup, name.strip_prefix(BACKUP_REF_PREFIX)?),
@@ -124,6 +131,21 @@ fn parse_ref(name: &str) -> Option<Parsed<'_>> {
         group,
         at,
     })
+}
+
+/// グループ内（新しい順に並んだもの）で、期間にかかわらず残すものを示す。
+/// 先頭（グループの最新の 1 件）、保護対象、未来の時刻（時計のずれ）。
+/// 期間による間引き（`plan_thinning`）と容量による間引き（`plan_size_round`）で同じ規則を使う。
+pub(crate) fn forced_flags(
+    members: &[Parsed<'_>],
+    now_ts: i64,
+    protected: &HashSet<String>,
+) -> Vec<bool> {
+    members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| i == 0 || protected.contains(m.name) || m.at.unix_timestamp() > now_ts)
+        .collect()
 }
 
 /// 間引きで削除する ref を決める（純関数。時刻は `now` で受け取る）。
@@ -155,12 +177,8 @@ pub fn plan_thinning(
     for ((kind, _), mut members) in groups {
         members.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.name.cmp(a.name)));
 
-        // 期間にかかわらず残すもの: グループの最新の 1 件、保護対象、未来の時刻（時計のずれ）
-        let forced: Vec<bool> = members
-            .iter()
-            .enumerate()
-            .map(|(i, m)| i == 0 || protected.contains(m.name) || m.at.unix_timestamp() > now_ts)
-            .collect();
+        // 期間にかかわらず残すもの
+        let forced = forced_flags(&members, now_ts, protected);
 
         match kind {
             Kind::Backup => {

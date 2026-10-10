@@ -1,6 +1,7 @@
 // 保守作業（起動時と日次、スケジューラから呼ぶ）。
 //
-// - 復元点（`refs/hikae/snapshots/` と `refs/hikae/backup/`）の間引き（設計書 6.2）
+// - 復元点（`refs/hikae/snapshots/` と `refs/hikae/backup/`）の間引き（設計書 6.2）。
+//   期間による間引きのあとに、自動保存の容量上限による間引きを行う（同じ保護規則）
 // - 保持期間を過ぎた操作ジャーナルの整理（設計書 6.3、7章の保持期間）
 // - 既存のプロジェクトへの、OS・Office の一時ファイルの除外設定（`.git/info/exclude`）の適用。
 //   管理する部分がまだ無いプロジェクトに 1 回だけ。変更の前に復元点を作り、作業フォルダのファイルは
@@ -14,7 +15,7 @@
 use std::collections::HashSet;
 
 use core_ops::{ExcludeOutcome, Ops};
-use core_safety::{thin_restore_points, ThinPolicy, BACKUP_RETENTION_DAYS};
+use core_safety::{thin_restore_points, thin_snapshots_by_size, ThinPolicy, BACKUP_RETENTION_DAYS};
 use core_store::{
     journal_cutoff_from_now, now_rfc3339, AppSettings, JournalOutcome, JournalTrigger,
     NewJournalEntry, Project,
@@ -48,6 +49,7 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
     let id = project.id.clone();
     let path = project.path.clone();
     let snapshot_days = settings.snapshot_retention_days;
+    let size_cap_x = settings.snapshot_size_cap_x;
     let signing = ctx.signing_user();
     let health = ctx.health.clone();
     let project_for_health = project.clone();
@@ -114,19 +116,36 @@ async fn maintain_project(ctx: &OpContext, project: &Project, settings: &AppSett
                 let policy = ThinPolicy {
                     snapshot_retention_days: snapshot_days,
                     backup_retention_days: BACKUP_RETENTION_DAYS,
+                    snapshot_size_cap_x: size_cap_x,
+                    ..ThinPolicy::default()
                 };
-                if let Ok(report) = thin_restore_points(
-                    &crate::git_runner(),
-                    &path,
-                    OffsetDateTime::now_utc(),
-                    &policy,
-                    &protected,
-                ) {
-                    deleted = report.deleted.len();
-                    // 消えた復元点を、ジャーナルが指したままにしない
-                    if let Ok(guard) = store.lock() {
-                        let _ = guard.forget_restore_refs(&id, &report.deleted);
+                let now = OffsetDateTime::now_utc();
+                let mut deleted_refs: Vec<String> = Vec::new();
+                // 期間による間引きを先に行い、そのあとに容量上限の間引きを行う（設計書 6.2）
+                if let Ok(report) =
+                    thin_restore_points(&crate::git_runner(), &path, now, &policy, &protected)
+                {
+                    deleted_refs.extend(report.deleted);
+                }
+                if let Ok(report) =
+                    thin_snapshots_by_size(&crate::git_runner(), &path, now, &policy, &protected)
+                {
+                    // 件数だけを記録する（パス・内容は出さない）
+                    if !report.deleted.is_empty() {
+                        eprintln!(
+                            "自動保存の容量上限により {} 件を整理しました",
+                            report.deleted.len()
+                        );
                     }
+                    if report.over_limit {
+                        eprintln!("自動保存が容量上限を超えたままです");
+                    }
+                    deleted_refs.extend(report.deleted);
+                }
+                deleted = deleted_refs.len();
+                // 消えた復元点を、ジャーナルが指したままにしない
+                if let Ok(guard) = store.lock() {
+                    let _ = guard.forget_restore_refs(&id, &deleted_refs);
                 }
             }
 

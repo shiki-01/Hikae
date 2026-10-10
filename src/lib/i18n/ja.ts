@@ -592,6 +592,9 @@ const messages = {
 		'ファイルを変更してから、この時間だけ操作しなかったときに、自動で控えを残します。変更を続けている間は、操作が止まるまで待ちます。',
 	'settings.snapshot_retention': '自動保存を残す期間',
 	'settings.snapshot_retention_text': 'この期間を過ぎた自動保存は整理されます。',
+	'settings.snapshot_size_cap': '自動保存の容量上限',
+	'settings.snapshot_size_cap_text':
+		'保存したデータの大きさに対する、自動保存が使える容量の目安です。超えると古い自動保存から整理します。',
 
 	'settings.opt_off': 'オフ',
 	'settings.opt_interval_5': '5 分ごと',
@@ -603,6 +606,10 @@ const messages = {
 	'settings.opt_keep_30': '30 日',
 	'settings.opt_keep_90': '90 日',
 	'settings.opt_keep_365': '1 年',
+	'settings.opt_cap_none': '上限なし',
+	'settings.opt_cap_1': '1 倍',
+	'settings.opt_cap_2': '2 倍',
+	'settings.opt_cap_5': '5 倍',
 	'settings.opt_snap_collapsed': '折りたたむ',
 	'settings.opt_snap_shown': '表示する',
 	'settings.opt_snap_hidden': '表示しない',

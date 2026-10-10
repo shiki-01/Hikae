@@ -24,6 +24,7 @@ const current: AppSettings = {
 	autoSnapshotEnabled: true,
 	autoSnapshotDelaySecs: 120,
 	snapshotRetentionDays: 90,
+	snapshotSizeCapX: 2,
 	autoSaveAfterRestore: true,
 	largeFileWarnMb: 50,
 	showSnapshotsInTimeline: 'collapsed'
@@ -52,7 +53,8 @@ describe('設定項目の定義', () => {
 				'pullOnStartup',
 				'saveBeforePull',
 				'showSnapshotsInTimeline',
-				'snapshotRetentionDays'
+				'snapshotRetentionDays',
+				'snapshotSizeCapX'
 			].sort()
 		);
 	});

@@ -139,6 +139,18 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 				{ value: 365, label: 'settings.opt_keep_365' }
 			],
 			unit: 'settings.unit_days'
+		},
+		{
+			type: 'select',
+			key: 'snapshotSizeCapX',
+			label: 'settings.snapshot_size_cap',
+			text: 'settings.snapshot_size_cap_text',
+			options: [
+				{ value: 0, label: 'settings.opt_cap_none' },
+				{ value: 1, label: 'settings.opt_cap_1' },
+				{ value: 2, label: 'settings.opt_cap_2' },
+				{ value: 5, label: 'settings.opt_cap_5' }
+			]
 		}
 	]
 };

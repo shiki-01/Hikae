@@ -647,6 +647,12 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 次のものは期間にかかわらず残し、枠も先に使う: 各グループ（ブランチまたは操作名）で最も新しい 1 件、利用者の手動の操作に紐づく復元点（ジャーナルの `triggered_by` が `manual` の行が指す ref。6.3）、未来の時刻のもの（時計のずれ）。保護対象の一覧を読めないときは、間引き自体を見送る
 - 実行は、起動直後と 24 時間ごと（スケジューラの保守作業）。同一プロジェクトへの状態変更と同じ直列キューを通し、フォルダが見つからないプロジェクトは間引きを見送る。削除は `update-ref -d` だけで、削除した ref はジャーナルの参照からも外す
 - 保持期間は設定 `snapshot_retention_days`（プロジェクト別に上書き可）。backup の 90 日は固定
+- **容量上限**（設定 `snapshot_size_cap_x`。0 は上限なし、1 / 2 / 5 倍。`core-safety` の `thin_snapshots_by_size`。判定は時刻・大きさを引数で受け取る純関数 `size_cap_limit` / `plan_size_round`、測定と削除は `GitRunner` 経由）。期間による間引きのあとに、同じ実行（起動直後と 24 時間ごと、直列キュー内）で行う
+  - 測定（読み取りのみ）: P は `rev-list --objects --disk-usage HEAD^{tree}`（保存済みの木の大きさ。HEAD が無いときは何もしない）。S は `rev-list --objects --disk-usage --glob=refs/hikae/snapshots/* --not --branches --remotes`（スナップショットの ref からだけ到達できるオブジェクトの大きさ）。上限は `max(倍数 × P, 100 MiB)`。下限は、小さいプロジェクトで自動保存がほぼ全部消えるのを防ぐための確定の値（`SIZE_CAP_FLOOR_BYTES`）。S が上限以下なら何もしない
+  - 削除: S が上限を超えたら、保護されていないスナップショットを古い順に削除する。保護は期間の間引きと同じ（各ブランチの最新 1 件、手動の操作に紐づく復元点、未来の時刻。保護一覧を読めないときは見送り）。1 ラウンドで、残っている削除可能な候補の古い方 25%（最低 1 件）を削除し、S を測り直す。S が上限以下になったら止める。最大 8 ラウンドで打ち切り、超えたままなら「上限を超えたまま」として、件数だけをログに残す（利用者への通知はしない）。保護されたものしか残らないときは削除しない
+  - 削除は `update-ref -d` のみ（`refs/hikae/snapshots/` の ref）。backup は対象にしない。削除した ref はジャーナルの参照からも外す（期間の間引きと同じ）
+  - **限界**: 実際のディスク解放は Git の通常の gc（既定の猶予期間つき）に任せる。アプリは gc を実行しない（許可リストで拒否）ため、削除直後は容量が減らないことがある
+  - **既知の制限**: `rev-list --not --branches` は、スナップショットの親の系譜の外にあるブランチ上の内容を除外できない。スナップショットを作った後に、同じ内容を保存した場合は S に含まれ、S は過大になる。その結果、上限の超過と間引きが早まる方向に働く（保護規則は変わらない）
 
 ### 6.3 第3層: 操作ジャーナル
 
@@ -754,7 +760,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブに項目があり（ほかに「保存しないファイル」「AI」「拡張機能」「詳細設定」のタブがあるが、「今後のバージョンで利用できます」などの案内だけを出す）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`）。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブに項目があり（ほかに「保存しないファイル」「AI」「拡張機能」「詳細設定」のタブがあるが、「今後のバージョンで利用できます」などの案内だけを出す）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`）。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
@@ -768,7 +774,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `conflict_mode`、`push_reminder_hours` | 保存のみ・**画面から外した**。参照する処理が無い（自動の取り込みで起きたぶつかりは常に通知だけを出し、利用者が手動で取り込んで起きたときは解消画面を開く。アップロード待ちの通知は未実装） |
 | `auto_save_after_restore` | 反映済み（2026-10-09）。元に戻した後に続けて保存するかに使う（プロジェクト別の上書きを含む。4.2）。画面の「一般」に「元に戻した後に自動で保存」として置く |
 | `auto_snapshot_enabled`、`auto_snapshot_delay_secs` | 反映済み（2026-10-08 に Phase 1 へ前倒し）。ファイル監視による自動保存の有無と静止時間に使う（6.2）。変更は次の巡回を待たずに反映される。プロジェクト別の上書きに従う |
-| `snapshot_size_cap_x` | 保存のみ（Phase 2）。自動保存の容量上限は未実装。画面には元から無い |
+| `snapshot_size_cap_x` | 反映済み（自動保存の容量上限。6.2）。間引きの容量上限に使う。画面の「自動保存」タブに「自動保存の容量上限」として置く（上限なし / 1 / 2 / 5 倍）。プロジェクト別の上書きは対象外（全体の設定だけ） |
 | `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
 | `ai_runner`、`ai_model`、`ai_scope`、`ai_model_source`、`ai_custom_gguf_path` | 保存のみ（Phase 2） |
 | `git_executable` | 保存のみ。git の探索は設定ではなく `GitRunner::bundled` が行う（`HIKAE_GIT_PATH` → 同梱 → PATH。8.2） |

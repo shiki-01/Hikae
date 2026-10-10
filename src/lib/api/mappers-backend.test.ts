@@ -276,6 +276,7 @@ describe('設定の変換', () => {
 			autoSnapshotEnabled: false,
 			autoSnapshotDelaySecs: 30,
 			snapshotRetentionDays: 365,
+			snapshotSizeCapX: 2,
 			autoSaveAfterRestore: false,
 			largeFileWarnMb: 25,
 			showSnapshotsInTimeline: 'shown'

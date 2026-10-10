@@ -671,6 +671,7 @@ export const SETTING_BACKEND_KEYS = {
 	autoSnapshotEnabled: 'auto_snapshot_enabled',
 	autoSnapshotDelaySecs: 'auto_snapshot_delay_secs',
 	snapshotRetentionDays: 'snapshot_retention_days',
+	snapshotSizeCapX: 'snapshot_size_cap_x',
 	autoSaveAfterRestore: 'auto_save_after_restore',
 	largeFileWarnMb: 'large_file_warn_mb',
 	showSnapshotsInTimeline: 'show_snapshots_in_timeline'
@@ -687,6 +688,7 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		autoSnapshotEnabled: settings.auto_snapshot_enabled,
 		autoSnapshotDelaySecs: settings.auto_snapshot_delay_secs,
 		snapshotRetentionDays: settings.snapshot_retention_days,
+		snapshotSizeCapX: settings.snapshot_size_cap_x,
 		autoSaveAfterRestore: settings.auto_save_after_restore,
 		largeFileWarnMb: settings.large_file_warn_mb,
 		showSnapshotsInTimeline: settings.show_snapshots_in_timeline

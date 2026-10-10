@@ -505,6 +505,8 @@ export interface AppSettings {
 	autoSnapshotDelaySecs: number;
 	/** 自動保存の保持期間（日） */
 	snapshotRetentionDays: number;
+	/** 自動保存の容量上限（保存済みの木の大きさの倍数）。0 は上限なし */
+	snapshotSizeCapX: number;
 	autoSaveAfterRestore: boolean;
 	/** 大きいファイルの警告閾値（MB） */
 	largeFileWarnMb: number;
