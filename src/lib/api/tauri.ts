@@ -29,6 +29,7 @@ import {
 	mapSaveResult,
 	mapSavePoint,
 	mapIgnoreRule,
+	mapSkipWorktreeEntry,
 	mapSession,
 	mapSettingsView,
 	restoreFileFailure,
@@ -54,6 +55,7 @@ import type {
 	DiscardResult,
 	IgnoreKind,
 	IgnoreRule,
+	SkipWorktreeEntry,
 	DroppedFile,
 	FetchOptions,
 	FileDiff,
@@ -369,6 +371,31 @@ export const tauriApi: ProjectApi = {
 
 	async untrackFiles(projectId: string, memo: string, paths: string[]): Promise<void> {
 		await unwrap(commands.untrackFiles(projectId, memo, paths));
+	},
+
+	async listSkipWorktree(projectId: string): Promise<SkipWorktreeEntry[]> {
+		const items = await unwrap(commands.listSkipWorktree(projectId));
+		return items.map(mapSkipWorktreeEntry);
+	},
+
+	async listSkipWorktreeDrift(projectId: string): Promise<string[]> {
+		return unwrap(commands.listSkipWorktreeDrift(projectId));
+	},
+
+	async dismissSkipWorktreeDrift(projectId: string, paths: string[]): Promise<void> {
+		await unwrap(commands.dismissSkipWorktreeDrift(projectId, paths));
+	},
+
+	async setSkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await unwrap(commands.setSkipWorktree(projectId, paths));
+	},
+
+	async clearSkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await unwrap(commands.clearSkipWorktree(projectId, paths));
+	},
+
+	async reapplySkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await unwrap(commands.reapplySkipWorktree(projectId, paths));
 	},
 
 	async fetch(projectId: string, options?: FetchOptions) {

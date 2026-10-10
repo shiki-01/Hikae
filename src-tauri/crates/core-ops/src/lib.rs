@@ -32,6 +32,7 @@ mod repo_health;
 mod restore_file;
 mod restore_save;
 mod size_check;
+mod skip_worktree;
 mod windows_names;
 
 pub use add_files::{
@@ -66,7 +67,8 @@ pub use models::{
     Labels, NameConflict, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile,
     RelocateCheck, ResolveOutcome, RestoreAndSave, RestoreFileAndSave, RestoreFileChange,
     RestoreFileKind, RestoreFileOutcome, RestoreFilePreview, RestorePointInfo, RestorePreview,
-    SaveOutcome, SkipReason, SkippedItem, SyncState, UnsavedPolicy, UploadOutcome,
+    SaveOutcome, SkipReason, SkipWorktreeReport, SkippedItem, SyncState, UnsavedPolicy,
+    UploadOutcome,
 };
 pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};
@@ -91,7 +93,7 @@ pub use windows_names::{
 use core_git::GitRunner;
 use core_safety::Signature;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
 
 /// 高層操作のランナー。git および safety API を使用する。
@@ -105,6 +107,9 @@ pub struct Ops {
     pc_name: Option<String>,
     /// 取り込み前に、取り込む側のファイル名が Windows で作れるかを検査する（既定は Windows のみ）
     check_windows_names: bool,
+    /// 操作の中で溜めた「今後の変更だけ無視する」の再適用の結果（`take_skip_report` で取り出す）。
+    /// 取り込み・解消・中止・復旧の戻り値を変えずに、app 層へ通知するため
+    skip_report: Mutex<SkipWorktreeReport>,
 }
 
 impl Ops {
@@ -118,6 +123,26 @@ impl Ops {
             signature: Signature::default(),
             pc_name: pc_name::local_pc_name(),
             check_windows_names: cfg!(windows),
+            skip_report: Mutex::new(SkipWorktreeReport::default()),
+        }
+    }
+
+    /// 操作の中で溜めた「今後の変更だけ無視する」の再適用の結果を取り出し、空にする。
+    /// 取り込み（自動・手動・アップロード内）・解消・中止・復旧のあとに呼ぶ（設計書 4.8）。
+    pub fn take_skip_report(&self) -> SkipWorktreeReport {
+        self.skip_report
+            .lock()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default()
+    }
+
+    /// 再適用の結果を溜める（`take_skip_report` で取り出される）
+    fn record_skip(&self, report: SkipWorktreeReport) {
+        if report.is_empty() {
+            return;
+        }
+        if let Ok(mut g) = self.skip_report.lock() {
+            g.absorb(report);
         }
     }
 
@@ -266,7 +291,8 @@ impl Ops {
         limits: SizeLimits,
         policy: UnsavedPolicy,
     ) -> Result<PullOutcome, OpsError> {
-        operations::pull(
+        let mut skip = SkipWorktreeReport::default();
+        let outcome = operations::pull(
             self.runner(),
             repo,
             self.now(),
@@ -275,7 +301,10 @@ impl Ops {
             policy,
             self.check_windows_names,
             self.meta(),
-        )
+            &mut skip,
+        );
+        self.record_skip(skip);
+        outcome
     }
 
     /// 未保存の変更を 1 ファイルずつ返す（読み取りのみ）。
@@ -306,7 +335,8 @@ impl Ops {
         keep_other_copy: bool,
         message: &str,
     ) -> Result<ResolveOutcome, OpsError> {
-        operations::resolve(
+        let mut skip = SkipWorktreeReport::default();
+        let outcome = operations::resolve(
             self.runner(),
             repo,
             choices,
@@ -316,12 +346,18 @@ impl Ops {
             self.now(),
             &self.labels,
             self.meta(),
-        )
+            &mut skip,
+        );
+        self.record_skip(skip);
+        outcome
     }
 
-    /// merge をキャンセル。復元点は残る。
+    /// merge をキャンセル。復元点は残る。無視中のファイルの退避は、中止の後に書き戻す（設計書 4.8）。
     pub fn abort_merge(&self, repo: &Path) -> Result<(), OpsError> {
-        operations::abort_merge(self.runner(), repo, self.now(), self.meta())
+        operations::abort_merge(self.runner(), repo, self.now(), self.meta())?;
+        let report = skip_worktree::reapply_skip_worktree(self.runner(), repo)?;
+        self.record_skip(report);
+        Ok(())
     }
 
     /// upstream に push する。拒否されたら pull→再試行。
@@ -331,7 +367,8 @@ impl Ops {
 
     /// `upload` に、取り込み前の自動保存のサイズ検査の閾値を指定する版。
     pub fn upload_with(&self, repo: &Path, limits: SizeLimits) -> Result<UploadOutcome, OpsError> {
-        operations::upload(
+        let mut skip = SkipWorktreeReport::default();
+        let outcome = operations::upload(
             self.runner(),
             repo,
             self.now(),
@@ -339,7 +376,10 @@ impl Ops {
             limits,
             self.check_windows_names,
             self.meta(),
-        )
+            &mut skip,
+        );
+        self.record_skip(skip);
+        outcome
     }
 
     /// 同期状態を返す。ahead / behind / has_upstream / dirty。
@@ -686,14 +726,52 @@ impl Ops {
         operation: &str,
         started_at_unix: i64,
     ) -> Result<String, OpsError> {
-        recover::recover_interrupted(
+        let mut skip = SkipWorktreeReport::default();
+        let outcome = recover::recover_interrupted(
             self.runner(),
             repo,
             operation,
             started_at_unix,
             self.now(),
             self.meta(),
-        )
+            &mut skip,
+        );
+        self.record_skip(skip);
+        outcome
+    }
+
+    /// 無視中（skip-worktree）のパスを返す（読み取りのみ。設計書 4.8）。
+    pub fn list_skip_worktree(&self, repo: &Path) -> Result<Vec<String>, OpsError> {
+        skip_worktree::list_skip_worktree(self.runner(), repo)
+    }
+
+    /// 記録にあり、追跡中なのに無視が外れているパスを返す（読み取りのみ。設計書 4.8）。
+    /// `recorded` はアプリの記録（プロジェクトからの相対パス）。
+    pub fn list_skip_worktree_drift(
+        &self,
+        repo: &Path,
+        recorded: &[String],
+    ) -> Result<Vec<String>, OpsError> {
+        skip_worktree::list_drift(self.runner(), repo, recorded)
+    }
+
+    /// 今後の変更を無視する（印を付ける）。追跡中のファイルだけ。復元点を作ってから印を付け、
+    /// 作業フォルダのファイルは変えない（設計書 4.8）。
+    pub fn set_skip_worktree(&self, repo: &Path, paths: &[String]) -> Result<(), OpsError> {
+        skip_worktree::set_skip_worktree(self.runner(), repo, paths, self.now(), self.meta())
+    }
+
+    /// 無視を外す（印を外す）。復元点を作ってから外す。手元の変更は通常の未保存の変更として現れる。
+    pub fn clear_skip_worktree(&self, repo: &Path, paths: &[String]) -> Result<(), OpsError> {
+        skip_worktree::clear_skip_worktree(self.runner(), repo, paths, self.now(), self.meta())
+    }
+
+    /// 退避の内容を書き戻して印を付け直す（設計書 4.8 の再適用）。起動時の復旧で使う。
+    /// 結果は戻り値で返し、同時に `take_skip_report` の対象にも溜める。
+    pub fn reapply_skip_worktree(&self, repo: &Path) -> Result<SkipWorktreeReport, OpsError> {
+        let report = skip_worktree::reapply_skip_worktree(self.runner(), repo)?;
+        self.record_skip(report.clone());
+        Ok(report)
     }
 
     /// 付け替え先のフォルダが登録済みプロジェクトと同じリポジトリか確認する（ファイルは変更しない）。

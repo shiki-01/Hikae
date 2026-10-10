@@ -28,6 +28,7 @@ mod os_trash;
 mod preview;
 mod remote;
 mod scheduler;
+mod skip_worktree;
 mod version;
 mod watch;
 
@@ -244,6 +245,14 @@ impl AppError {
                 Some("file-in-use".to_string()),
                 )
             }
+            // 「今後の変更だけ無視する」の退避が残っているファイルには、印を付けられない（設計書 4.8）
+            OpsError::SkipStashPending => (
+                "skip_stash_pending",
+                "前回の取り込みで残した退避があるため、このファイルの無視の設定を変えられませんでした".to_string(),
+                "ファイルは変更されていません。手元の内容は退避に残っています".to_string(),
+                "そのファイルの内容を確認してから、もう一度お試しください".to_string(),
+                None,
+            ),
             OpsError::InvalidInput(msg) => (
                 "invalid_input",
                 "指定された場所またはファイルを扱えませんでした".to_string(),
@@ -3384,6 +3393,12 @@ fn specta_builder() -> Builder<tauri::Wry> {
             discard_new_file,
             list_ignore_patterns,
             list_tracked_ignored_files,
+            skip_worktree::list_skip_worktree,
+            skip_worktree::list_skip_worktree_drift,
+            skip_worktree::dismiss_skip_worktree_drift,
+            skip_worktree::set_skip_worktree,
+            skip_worktree::clear_skip_worktree,
+            skip_worktree::reapply_skip_worktree,
             add_ignore_pattern,
             remove_ignore_pattern,
             untrack_files,
@@ -3419,6 +3434,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::OpFinished,
             events::SyncStateChanged,
             events::NeedsAttention,
+            events::SkipWorktreeNotice,
             events::CloneProgress,
         ])
 }
@@ -3523,6 +3539,10 @@ pub fn run() {
             // 起動時・定期の取り込みとアップロードを開始（実行は操作キュー経由）。
             // git を使えないとき（E17）は、画面が専用の案内を出すため、自動実行は始めない
             if health::probe_app_git().0.is_available() {
+                // 取り込みの途中で終わった無視中のファイルの退避を、書き戻して印を付け直す（設計書 4.8）
+                tauri::async_runtime::spawn(skip_worktree::reapply_on_startup(
+                    app.handle().clone(),
+                ));
                 scheduler::spawn(app.handle().clone());
             }
 

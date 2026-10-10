@@ -45,6 +45,18 @@ export interface SizeCheck {
 /** 保存しないファイルのパターンの種類（追加するとき） */
 export type IgnoreKind = 'extension' | 'folder' | 'file';
 
+/** 「今後の変更だけ無視する」の記録 1 件（設計書 4.8、S6） */
+export interface SkipWorktreeEntry {
+	/** プロジェクトからの相対パス（`/` 区切り） */
+	path: string;
+	/** 無視を指定した時刻（RFC 3339） */
+	setAt: string;
+	/** いまこの PC で無視されているか。false なら無視が外れている */
+	ignored: boolean;
+	/** 再適用の提案で「今はしない」を選んだ（再度は提案しない） */
+	dismissed: boolean;
+}
+
 /** 保存しないファイル（`.gitignore`）の 1 行 */
 export interface IgnoreRule {
 	/** 行の内容（手書きの行も含む） */
@@ -613,6 +625,18 @@ export interface ProjectApi {
 	removeIgnorePattern(projectId: string, pattern: string): Promise<void>;
 	/** 追跡中のファイルを保存対象から外して保存する。作業フォルダのファイルは削除しない */
 	untrackFiles(projectId: string, memo: string, paths: string[]): Promise<void>;
+	/** 「今後の変更だけ無視する」の記録と、この PC での現在の状態（読み取りのみ。設計書 4.8） */
+	listSkipWorktree(projectId: string): Promise<SkipWorktreeEntry[]>;
+	/** 無視が外れている記録のうち、まだ提案していないもの（パス） */
+	listSkipWorktreeDrift(projectId: string): Promise<string[]>;
+	/** 再適用の提案で「今はしない」を選ぶ。記録に印を立て、同じ提案を繰り返さない（作業フォルダは変えない） */
+	dismissSkipWorktreeDrift(projectId: string, paths: string[]): Promise<void>;
+	/** 今後の変更だけ無視する（追跡中のファイルだけ）。作業フォルダのファイルは変えない */
+	setSkipWorktree(projectId: string, paths: string[]): Promise<void>;
+	/** 無視をやめる。手元の変更は通常の未保存の変更として現れる */
+	clearSkipWorktree(projectId: string, paths: string[]): Promise<void>;
+	/** 無視が外れている記録を、もう一度無視する（再適用の提案を承諾した） */
+	reapplySkipWorktree(projectId: string, paths: string[]): Promise<void>;
 	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;

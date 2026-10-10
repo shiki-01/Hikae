@@ -164,19 +164,9 @@ pub(crate) fn restore_file(
     let branch = current_branch(runner, repo)?;
     let point = meta.restore_point(runner, repo, &branch, "restore-file", now)?;
 
+    // 無視中（skip-worktree）の印は、復元の後に付け直す（設計書 4.8）
     let spec = literal_pathspec(&rel);
-    runner.run_ok(
-        repo,
-        &[
-            "restore",
-            "--source",
-            &oid,
-            "--staged",
-            "--worktree",
-            "--",
-            &spec,
-        ],
-    )?;
+    crate::skip_worktree::restore_keeping_skip(runner, repo, &oid, &spec)?;
 
     let undo_ref = undo_target(runner, repo, &branch, point, dirty_before)?;
     Ok(RestoreFileOutcome::Restored { undo_ref })
@@ -256,18 +246,8 @@ pub(crate) fn undo_restore(
     let branch = current_branch(runner, repo)?;
     let _ = meta.restore_point(runner, repo, &branch, "undo-restore", now)?;
 
-    runner.run_ok(
-        repo,
-        &[
-            "restore",
-            "--source",
-            &oid,
-            "--staged",
-            "--worktree",
-            "--",
-            ":/",
-        ],
-    )?;
+    // 無視中（skip-worktree）の印は、復元の後に付け直す（設計書 4.8）
+    crate::skip_worktree::restore_keeping_skip(runner, repo, &oid, ":/")?;
     Ok(())
 }
 

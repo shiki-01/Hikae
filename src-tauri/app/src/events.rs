@@ -115,6 +115,17 @@ pub struct NeedsAttention {
     pub reason: AttentionReason,
 }
 
+/// 「今後の変更だけ無視する」の再適用の結果を知らせる（設計書 4.8）。取り込み・解消・中止・復旧の後に出す。
+/// 内容は退避（この PC の `.git` の中）に残っている。作業フォルダの内容は変えていない。
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct SkipWorktreeNotice {
+    pub project_id: String,
+    /// 手元の内容を書き戻せず、退避に残したまま（利用者がその間に編集した、など）のパス
+    pub pending: Vec<String>,
+    /// 相手が削除したため、書き戻さず退避に残したパス
+    pub removed_upstream: Vec<String>,
+}
+
 /// GitHub から取得する処理の段階
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
 pub enum ClonePhase {

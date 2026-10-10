@@ -11,10 +11,11 @@
 //   `refs/hikae/backup/<操作名>/<時刻>` を探す。見つからなければ何も変更せず `RestorePointNotFound`
 // - 未追跡ファイルは消さない
 
-use crate::models::OpsError;
+use crate::models::{OpsError, SkipWorktreeReport};
 use crate::operations::{abort_merge, current_branch};
 use crate::pc_name::Meta;
 use crate::restore_file::undo_restore;
+use crate::skip_worktree::reapply_skip_worktree;
 use core_git::GitRunner;
 use core_safety::{BACKUP_REF_PREFIX, SNAPSHOT_REF_PREFIX};
 use std::path::Path;
@@ -168,6 +169,7 @@ pub(crate) fn recover_interrupted(
     started_at_unix: i64,
     now: OffsetDateTime,
     meta: Meta,
+    skip: &mut SkipWorktreeReport,
 ) -> Result<String, OpsError> {
     // 見つからなければ、ここで何も変更せずに終わる
     let restore_point = select_restore_point(runner, repo, operation, started_at_unix)?
@@ -180,6 +182,8 @@ pub(crate) fn recover_interrupted(
 
     // 戻す前にいまの状態の復元点を作り、復元点の内容へ戻す
     undo_restore(runner, repo, &restore_point, now, meta)?;
+    // 無視中のファイルの退避を書き戻し、印を付け直す（設計書 4.8）。取り消しの後に行う
+    skip.absorb(reapply_skip_worktree(runner, repo)?);
     Ok(restore_point)
 }
 

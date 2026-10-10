@@ -14,7 +14,9 @@ function invalidateIgnore(client: QueryClient, projectId: string): Promise<unkno
 	return Promise.all([
 		invalidateProject(client, projectId),
 		client.invalidateQueries({ queryKey: keys.ignoreRules(projectId) }),
-		client.invalidateQueries({ queryKey: keys.trackedIgnored(projectId) })
+		client.invalidateQueries({ queryKey: keys.trackedIgnored(projectId) }),
+		client.invalidateQueries({ queryKey: keys.skipWorktree(projectId) }),
+		client.invalidateQueries({ queryKey: keys.skipDrift(projectId) })
 	]);
 }
 
@@ -77,5 +79,69 @@ export function useUntrackFiles(getProjectId: () => string, onDone?: () => void)
 		onError: (error, paths) => reportError(error, { retry: () => retry.run?.(paths) })
 	}));
 	retry.run = (paths) => mutation.mutate(paths);
+	return mutation;
+}
+
+/** 今後の変更だけ無視する（追跡中のファイルだけ。作業フォルダのファイルは変えない。設計書 4.8） */
+export function useSetSkipWorktree(getProjectId: () => string, onDone?: () => void) {
+	const client = useQueryClient();
+	const retry: { run?: (paths: string[]) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (paths: string[]) => api.setSkipWorktree(getProjectId(), paths),
+		onSuccess: async (_result, paths) => {
+			await invalidateIgnore(client, getProjectId());
+			pushToast({ type: 'success', message: t('toast.ignore_skipped', { count: paths.length }) });
+			onDone?.();
+		},
+		onError: (error, paths) => reportError(error, { retry: () => retry.run?.(paths) })
+	}));
+	retry.run = (paths) => mutation.mutate(paths);
+	return mutation;
+}
+
+/** 無視をやめる（手元の変更は通常の未保存の変更として現れる） */
+export function useClearSkipWorktree(getProjectId: () => string) {
+	const client = useQueryClient();
+	const retry: { run?: (paths: string[]) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (paths: string[]) => api.clearSkipWorktree(getProjectId(), paths),
+		onSuccess: async (_result, paths) => {
+			await invalidateIgnore(client, getProjectId());
+			pushToast({ type: 'success', message: t('toast.ignore_cleared', { count: paths.length }) });
+		},
+		onError: (error, paths) => reportError(error, { retry: () => retry.run?.(paths) })
+	}));
+	retry.run = (paths) => mutation.mutate(paths);
+	return mutation;
+}
+
+/** 無視が外れている記録を、もう一度無視する（提案を承諾した） */
+export function useReapplySkipWorktree(getProjectId: () => string, onDone?: () => void) {
+	const client = useQueryClient();
+	const retry: { run?: (paths: string[]) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (paths: string[]) => api.reapplySkipWorktree(getProjectId(), paths),
+		onSuccess: async () => {
+			await invalidateIgnore(client, getProjectId());
+			pushToast({ type: 'success', message: t('toast.skip_reapplied') });
+			onDone?.();
+		},
+		onError: (error, paths) => reportError(error, { retry: () => retry.run?.(paths) })
+	}));
+	retry.run = (paths) => mutation.mutate(paths);
+	return mutation;
+}
+
+/** 再適用の提案で「今はしない」を選ぶ（記録に印を立て、同じ提案を繰り返さない） */
+export function useDismissSkipDrift(getProjectId: () => string, onDone?: () => void) {
+	const client = useQueryClient();
+	const mutation = createMutation(() => ({
+		mutationFn: (paths: string[]) => api.dismissSkipWorktreeDrift(getProjectId(), paths),
+		onSuccess: async () => {
+			await client.invalidateQueries({ queryKey: keys.skipDrift(getProjectId()) });
+			onDone?.();
+		},
+		onError: (error) => reportError(error)
+	}));
 	return mutation;
 }

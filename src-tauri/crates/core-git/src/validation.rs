@@ -166,6 +166,7 @@ fn validate_subcommand(cmd: &str, args: &[&str], has_c_args: bool) -> Result<(),
         "merge" => validate_merge_args(args),
         "checkout" => validate_checkout_args(args),
         "restore" => validate_restore_args(args),
+        "update-index" => validate_update_index_args(args),
 
         // Rejected subcommands
         "reset" | "clean" | "rebase" | "filter-branch" | "gc" | "reflog" | "stash" | "tag"
@@ -888,6 +889,8 @@ fn validate_show_args(args: &[&str]) -> Result<(), Rejection> {
 fn validate_ls_files_args(args: &[&str]) -> Result<(), Rejection> {
     let allowed = [
         "-z",
+        // 「今後の変更だけ無視する」の印（skip-worktree）を `S` で表す（設計書 4.8）
+        "-v",
         "-c",
         "--cached",
         "-o",
@@ -1654,6 +1657,47 @@ fn validate_restore_args(args: &[&str]) -> Result<(), Rejection> {
     Ok(())
 }
 
+/// `update-index` は、「今後の変更だけ無視する」の印（skip-worktree、設計書 4.8）の付け外しだけを許可する。
+/// 形は `--skip-worktree -- <パス…>` か `--no-skip-worktree -- <パス…>` のどちらか 1 通りだけ。
+/// `--` の後は、パスをリテラルとして扱う（git の `update-index` はパスに pathspec の書き方を解釈しない）。
+/// パスは 1 件以上必要。`--cacheinfo`・`--add`・`--force-remove`・`--assume-unchanged` など、
+/// それ以外のオプションは、どの位置にあっても拒否する（`--` の後の値はパスとして扱われる）。
+fn validate_update_index_args(args: &[&str]) -> Result<(), Rejection> {
+    let rest = match args {
+        ["--skip-worktree", rest @ ..] | ["--no-skip-worktree", rest @ ..] => rest,
+        _ => {
+            return Err(Rejection {
+                reason: "update-index only accepts --skip-worktree or --no-skip-worktree"
+                    .to_string(),
+            })
+        }
+    };
+    let [sep, paths @ ..] = rest else {
+        return Err(Rejection {
+            reason: "update-index requires '--' before the paths".to_string(),
+        });
+    };
+    if *sep != "--" {
+        return Err(Rejection {
+            reason: "update-index requires '--' before the paths".to_string(),
+        });
+    }
+    if paths.is_empty() {
+        return Err(Rejection {
+            reason: "update-index requires at least one path".to_string(),
+        });
+    }
+    if paths
+        .iter()
+        .any(|p| p.is_empty() || p.contains('\0') || p.contains('\n'))
+    {
+        return Err(Rejection {
+            reason: "update-index path is empty or contains a control character".to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1674,6 +1718,67 @@ mod tests {
         assert!(validate(&["ls-files", "-ci", "--exclude-standard", "-z"]).is_ok());
         // 書き込み系のフラグは通さない
         assert!(validate(&["ls-files", "--delete"]).is_err());
+    }
+
+    #[test]
+    fn test_allow_ls_files_skip_worktree_tags() {
+        assert!(validate(&["ls-files", "-v", "-z"]).is_ok());
+    }
+
+    #[test]
+    fn test_allow_update_index_skip_worktree_only_in_the_fixed_form() {
+        assert!(validate(&["update-index", "--skip-worktree", "--", "a.psd"]).is_ok());
+        assert!(validate(&[
+            "update-index",
+            "--no-skip-worktree",
+            "--",
+            "dir/a b.psd",
+            "-x"
+        ])
+        .is_ok());
+        // `--` が無い、パスが無い、形が違う、空のパス
+        assert!(validate(&["update-index", "--skip-worktree", "a.psd"]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "--"]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree"]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "--", ""]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "--", "a\nb"]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "--", "a\0b"]).is_err());
+        assert!(validate(&["update-index", "--"]).is_err());
+        assert!(validate(&["update-index"]).is_err());
+    }
+
+    #[test]
+    fn test_reject_other_update_index_options() {
+        // 印の付け外し以外の機能は、どの組み合わせでも通さない
+        assert!(validate(&["update-index", "--assume-unchanged", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--no-assume-unchanged", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--add", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--remove", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--force-remove", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--cacheinfo", "100644,abc,a"]).is_err());
+        assert!(validate(&["update-index", "--index-info"]).is_err());
+        assert!(validate(&["update-index", "--refresh"]).is_err());
+        assert!(validate(&["update-index", "-q", "--", "a"]).is_err());
+        assert!(validate(&[
+            "update-index",
+            "--skip-worktree",
+            "--no-skip-worktree",
+            "--",
+            "a"
+        ])
+        .is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "--add", "--", "a"]).is_err());
+        assert!(validate(&["update-index", "--skip-worktree", "-z", "--", "a"]).is_err());
+        // `-c` で設定を足す形も、許可リストの外のキーは拒否される
+        assert!(validate(&[
+            "-c",
+            "alias.x=!sh",
+            "update-index",
+            "--skip-worktree",
+            "--",
+            "a"
+        ])
+        .is_err());
     }
 
     #[test]

@@ -41,6 +41,7 @@ import type {
 	RestorePreviewData,
 	IgnoreKindArg,
 	IgnoreRuleItem,
+	SkipWorktreeItem,
 	SaveResult,
 	SaveSizeChoice,
 	SessionInfo,
@@ -91,6 +92,7 @@ import type {
 	RemoteProjectList,
 	IgnoreKind,
 	IgnoreRule,
+	SkipWorktreeEntry,
 	SaveOutcome,
 	SavePoint,
 	SettingKey,
@@ -641,6 +643,16 @@ export function toBackendSizeChoice(choice: SizeChoice): SaveSizeChoice {
 /** 保存しないファイルの 1 行をバックエンドから受け取った形にする */
 export function mapIgnoreRule(item: IgnoreRuleItem): IgnoreRule {
 	return { pattern: item.pattern, trackedCount: item.tracked_count };
+}
+
+/** 「今後の変更だけ無視する」の記録 1 件（バックエンドの形から画面の形へ） */
+export function mapSkipWorktreeEntry(item: SkipWorktreeItem): SkipWorktreeEntry {
+	return {
+		path: item.path,
+		setAt: item.set_at,
+		ignored: item.ignored,
+		dismissed: item.dismissed
+	};
 }
 
 /** 保存しないファイルの種類をバックエンドの形にする（文字列は同じ） */

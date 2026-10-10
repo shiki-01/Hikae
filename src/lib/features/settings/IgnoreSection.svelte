@@ -8,8 +8,15 @@
 	import IgnoreAddDialog from './IgnoreAddDialog.svelte';
 	import UntrackDialog from './UntrackDialog.svelte';
 	import { ignoreRuleStatus } from './ignore-model';
-	import { useAddIgnorePattern, useRemoveIgnorePattern, useUntrackFiles } from './mutations';
-	import { useIgnoreRules, useTrackedIgnoredFiles } from './queries';
+	import { displayPath, skipEntryStatus } from './skip-model';
+	import {
+		useAddIgnorePattern,
+		useClearSkipWorktree,
+		useRemoveIgnorePattern,
+		useSetSkipWorktree,
+		useUntrackFiles
+	} from './mutations';
+	import { useIgnoreRules, useSkipWorktreeEntries, useTrackedIgnoredFiles } from './queries';
 
 	interface Props {
 		/** 開いているプロジェクト */
@@ -20,9 +27,10 @@
 
 	const rules = useIgnoreRules(() => projectId);
 	const tracked = useTrackedIgnoredFiles(() => projectId);
+	const skipEntries = useSkipWorktreeEntries(() => projectId);
 
 	let addOpen = $state(false);
-	/** 保存対象から外す確認で扱うファイル。null のときは閉じている */
+	/** 保存対象から外す／無視する確認で扱うファイル。null のときは閉じている */
 	let untrackFiles = $state<string[] | null>(null);
 
 	const add = useAddIgnorePattern(
@@ -38,6 +46,11 @@
 		() => projectId,
 		() => (untrackFiles = null)
 	);
+	const skip = useSetSkipWorktree(
+		() => projectId,
+		() => (untrackFiles = null)
+	);
+	const clearSkip = useClearSkipWorktree(() => projectId);
 
 	/** 確認を開く。一覧に出ている追跡中のファイルを対象にする */
 	function openUntrack() {
@@ -105,6 +118,44 @@
 	{:else}
 		<p class="m:0 type-body fg:fg-muted">{t('ignore.empty')}</p>
 	{/if}
+
+	<section class="flex flex-direction:column gap:2 mt:4">
+		<h3 class="m:0 type-heading">{t('ignore.skip_section_title')}</h3>
+		<p class="m:0 type-small fg:fg-muted">{t('ignore.skip_section_description')}</p>
+		{#if skipEntries.isPending}
+			<Skeleton class="h:48px" />
+		{:else if skipEntries.data && skipEntries.data.length > 0}
+			<ul
+				class="m:0 p:0 list-style:none flex flex-direction:column"
+				aria-label={t('ignore.skip_list_label')}
+			>
+				{#each skipEntries.data as entry (entry.path)}
+					<li
+						class="flex align-items:center justify-content:space-between gap:3 py:3 bb:1px|solid|border"
+					>
+						<div class="flex flex-direction:column gap:1 min-w:0">
+							<span class="type-body overflow-wrap:anywhere">{displayPath(entry.path)}</span>
+							<span class="type-small fg:fg-muted">
+								{skipEntryStatus(entry) === 'ignored'
+									? t('ignore.skip_status_ignored')
+									: t('ignore.skip_status_lost')}
+							</span>
+						</div>
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={clearSkip.isPending}
+							onclick={() => clearSkip.mutate([entry.path])}
+						>
+							{t('ignore.skip_clear')}
+						</Button>
+					</li>
+				{/each}
+			</ul>
+		{:else}
+			<p class="m:0 type-body fg:fg-muted">{t('ignore.skip_empty')}</p>
+		{/if}
+	</section>
 </div>
 
 <IgnoreAddDialog
@@ -116,7 +167,8 @@
 
 <UntrackDialog
 	files={untrackFiles}
-	busy={untrack.isPending}
+	busy={untrack.isPending || skip.isPending}
 	onsubmit={(paths: string[]) => untrack.mutate(paths)}
+	onskip={(paths: string[]) => skip.mutate(paths)}
 	oncancel={() => (untrackFiles = null)}
 />

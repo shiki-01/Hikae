@@ -65,6 +65,7 @@
 	import { liveStateOf } from './live.svelte.js';
 	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import InterruptedDialog from './InterruptedDialog.svelte';
+	import SkipDriftDialog from './SkipDriftDialog.svelte';
 	import PullSaveDialog from './PullSaveDialog.svelte';
 	import SyncSizeDialog from './SyncSizeDialog.svelte';
 	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
@@ -632,6 +633,8 @@
 	onrecover={() => recover.mutate()}
 	onclose={() => (interruptedOpen = false)}
 />
+
+<SkipDriftDialog {projectId} />
 
 <ConnectRemoteDialog
 	open={connectOpen}

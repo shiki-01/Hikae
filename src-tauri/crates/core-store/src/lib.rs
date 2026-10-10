@@ -11,6 +11,7 @@ pub mod journal;
 pub mod migrations;
 pub mod models;
 pub mod settings;
+pub mod skip_worktree;
 
 pub use journal::{
     journal_cutoff, journal_cutoff_from_now, now_rfc3339, redact, JournalEntry, JournalFinish,
@@ -23,6 +24,7 @@ pub use settings::{
     MemoSuggestion, OpenAction, SettingsPatch, TermDisplay, TimelineSnapshots,
     PROJECT_OVERRIDABLE_KEYS,
 };
+pub use skip_worktree::SkipWorktreeRecord;
 
 /// Store のエラー型
 #[derive(Error, Debug)]

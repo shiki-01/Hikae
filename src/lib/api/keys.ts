@@ -15,6 +15,10 @@ export const keys = {
 	ignoreRules: (id: string) => ['ignore-rules', id] as const,
 	/** 追跡中で、保存しないファイルに当たるファイル */
 	trackedIgnored: (id: string) => ['tracked-ignored', id] as const,
+	/** 「今後の変更だけ無視する」の記録と、この PC での現在の状態 */
+	skipWorktree: (id: string) => ['skip-worktree', id] as const,
+	/** 無視が外れている記録（再適用の提案の対象） */
+	skipDrift: (id: string) => ['skip-drift', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,
 	/** Office 文書の比較。`['compare', id]` の接頭辞で、変更後に一緒に無効化される */

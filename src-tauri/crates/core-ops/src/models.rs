@@ -123,6 +123,34 @@ pub enum Choice {
     Theirs,
 }
 
+/// 「今後の変更だけ無視する」の再適用の結果（設計書 4.8）。取り込みなどの戻り値には載せず、
+/// `Ops` が操作の中で溜め、app 層が取り出して通知する（`Ops::take_skip_report`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkipWorktreeReport {
+    /// 手元の内容を書き戻せず、退避に残したまま（利用者がその間に編集した、書き戻しに失敗したなど）。
+    /// 印は付け直していない。パスは利用者の画面に出す
+    pub pending: Vec<String>,
+    /// 相手が削除したため、書き戻さず退避に残した（記録は外す対象）
+    pub removed_upstream: Vec<String>,
+}
+
+impl SkipWorktreeReport {
+    /// 通知すべき件が無いか
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty() && self.removed_upstream.is_empty()
+    }
+
+    /// 別の結果を足す（同じパスが重なっても、一覧の重複は除く）
+    pub(crate) fn absorb(&mut self, other: SkipWorktreeReport) {
+        self.pending.extend(other.pending);
+        self.removed_upstream.extend(other.removed_upstream);
+        self.pending.sort();
+        self.pending.dedup();
+        self.removed_upstream.sort();
+        self.removed_upstream.dedup();
+    }
+}
+
 /// 競合解消の結果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveOutcome {
@@ -172,6 +200,10 @@ pub enum OpsError {
     DiskFull,
 
     /// 別のアプリがこのプロジェクトを操作中（`.git/index.lock` が残っている。設計書 5章 E14）。
+    /// 「今後の変更だけ無視する」の退避が残っているファイルには、印を付けられない（設計書 4.8）。何も変更していない
+    #[error("a saved local copy of an ignored file is still waiting to be restored")]
+    SkipStashPending,
+
     /// `stale` が真なら、ロックが古く、git のプロセスも動いていない（前回の操作が途中で終わった）
     #[error("the repository is locked by another operation (stale: {stale})")]
     IndexLocked { stale: bool },
@@ -605,6 +637,7 @@ impl OpsError {
             OpsError::RestorePointNotFound => "restore-point-not-found",
             OpsError::DiscardRefused { .. } => "discard-refused",
             OpsError::AddRefused(_) => "add-refused",
+            OpsError::SkipStashPending => "skip-stash-pending",
             OpsError::Unexpected(_) => "unexpected",
         }
     }

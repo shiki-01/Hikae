@@ -28,6 +28,7 @@ describe('i18n', () => {
 			'count',
 			'time',
 			'name',
+			'names',
 			'when',
 			'n',
 			'max',

@@ -44,6 +44,7 @@ import type {
 	RemoteProjectList,
 	IgnoreKind,
 	IgnoreRule,
+	SkipWorktreeEntry,
 	RestoreResult,
 	RestoreScope,
 	SaveOutcome,
@@ -610,6 +611,23 @@ function impactFor(state: ProjectState, targetId: string, scope: RestoreScope): 
 
 /** 保存しないファイルのパターン（プロジェクトごと。ブラウザ単体の確認用に保持する） */
 const ignorePatterns = new Map<string, string[]>();
+
+/** 「今後の変更だけ無視する」の記録（プロジェクトごと。ブラウザ単体の確認用に保持する） */
+const skipRecords = new Map<string, { path: string; setAt: string; dismissed: boolean }[]>();
+
+function skipRecordsOf(projectId: string) {
+	return skipRecords.get(projectId) ?? [];
+}
+
+/** 記録を足す（同じパスは時刻を更新し、提案の印を戻す） */
+function setMockSkipRecords(projectId: string, paths: string[]): void {
+	const now = new Date().toISOString();
+	const kept = skipRecordsOf(projectId).filter((r) => !paths.includes(r.path));
+	skipRecords.set(projectId, [
+		...kept,
+		...paths.map((path) => ({ path, setAt: now, dismissed: false }))
+	]);
+}
 
 function ignorePatternsOf(projectId: string): string[] {
 	return ignorePatterns.get(projectId) ?? [];
@@ -1240,6 +1258,54 @@ export const mockApi: ProjectApi = {
 	async untrackFiles(projectId: string): Promise<void> {
 		await sleep(WAIT_LONG);
 		stateOf(projectId);
+	},
+
+	async listSkipWorktree(projectId: string): Promise<SkipWorktreeEntry[]> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		// ブラウザ単体では git の印を持たないため、記録の内容を無視中として返す
+		return skipRecordsOf(projectId).map((r) => ({
+			path: r.path,
+			setAt: r.setAt,
+			ignored: true,
+			dismissed: r.dismissed
+		}));
+	},
+
+	async listSkipWorktreeDrift(projectId: string): Promise<string[]> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		return [];
+	},
+
+	async dismissSkipWorktreeDrift(projectId: string, paths: string[]): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		skipRecords.set(
+			projectId,
+			skipRecordsOf(projectId).map((r) => (paths.includes(r.path) ? { ...r, dismissed: true } : r))
+		);
+	},
+
+	async setSkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		setMockSkipRecords(projectId, paths);
+	},
+
+	async clearSkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		skipRecords.set(
+			projectId,
+			skipRecordsOf(projectId).filter((r) => !paths.includes(r.path))
+		);
+	},
+
+	async reapplySkipWorktree(projectId: string, paths: string[]): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		setMockSkipRecords(projectId, paths);
 	},
 
 	async fetch(projectId: string, options?: FetchOptions): Promise<FetchResult> {

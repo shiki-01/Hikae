@@ -5,6 +5,9 @@ import { events } from '#lib/bindings.js';
 import { applyLiveEvent, initialLiveState, type LiveEvent, type LiveState } from './live-state';
 import { invalidateProject } from './sync';
 import { invalidateChanges } from '#lib/features/changes/invalidate.js';
+import { describeSkipNotice } from '#lib/features/settings/skip-notice.js';
+import { pushToast } from '#lib/features/notifications/store.svelte.js';
+import { keys } from '#lib/api/keys.js';
 
 const states = $state<Record<string, LiveState>>({});
 
@@ -64,6 +67,21 @@ export function useBackendEvents(client: QueryClient): void {
 		events.needsAttention.listen((e) =>
 			dispatch(e.payload.project_id, { type: 'needs-attention', payload: e.payload })
 		)
+	);
+	// 「今後の変更だけ無視する」の再適用の結果（取り込み・解消・中止・復旧の後）。退避が残ったファイルを知らせる
+	subscribe(() =>
+		events.skipWorktreeNotice.listen((e) => {
+			for (const message of describeSkipNotice({
+				pending: e.payload.pending,
+				removedUpstream: e.payload.removed_upstream
+			})) {
+				pushToast({ type: 'warning', message });
+			}
+			const id = e.payload.project_id;
+			void client.invalidateQueries({ queryKey: keys.skipWorktree(id) });
+			void client.invalidateQueries({ queryKey: keys.skipDrift(id) });
+			void client.invalidateQueries({ queryKey: keys.ignoreRules(id) });
+		})
 	);
 
 	onDestroy(() => {

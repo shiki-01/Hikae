@@ -134,6 +134,21 @@ export const commands = {
 	listIgnorePatterns: (id: string) => typedError<IgnoreRuleItem[], AppError>(__TAURI_INVOKE("list_ignore_patterns", { id })),
 	/**  追跡中（保存対象になっている）で、保存しないファイルに当たるファイルのパス（読み取りのみ）。 */
 	listTrackedIgnoredFiles: (id: string) => typedError<string[], AppError>(__TAURI_INVOKE("list_tracked_ignored_files", { id })),
+	/**  「今後の変更だけ無視する」の記録と、この PC での現在の状態（読み取りのみ） */
+	listSkipWorktree: (id: string) => typedError<SkipWorktreeItem[], AppError>(__TAURI_INVOKE("list_skip_worktree", { id })),
+	/**
+	 *  無視が外れている記録のうち、まだ提案していないもの（読み取りのみ。設計書 4.8 の 3）。
+	 *  プロジェクトを開いたときに、画面が一度だけ提案するために使う。
+	 */
+	listSkipWorktreeDrift: (id: string) => typedError<string[], AppError>(__TAURI_INVOKE("list_skip_worktree_drift", { id })),
+	/**  再適用の提案で「今はしない」を選んだ。記録の印を立て、同じ提案を繰り返さない（作業フォルダは変えない）。 */
+	dismissSkipWorktreeDrift: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("dismiss_skip_worktree_drift", { id, paths })),
+	/**  今後の変更を無視する（印を付ける）。追跡中のファイルだけ。復元点を作る。 */
+	setSkipWorktree: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("set_skip_worktree", { id, paths })),
+	/**  無視をやめる（印を外す）。手元の変更は通常の未保存の変更として現れる。復元点を作る。 */
+	clearSkipWorktree: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("clear_skip_worktree", { id, paths })),
+	/**  無視が外れている記録を、もう一度無視する（再適用の提案を承諾した）。`set_skip_worktree` と同じ処理。 */
+	reapplySkipWorktree: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reapply_skip_worktree", { id, paths })),
 	/**  保存しないファイルのパターンを追加する（保存はしない）。書いたパターンを返す。 */
 	addIgnorePattern: (id: string, kind: IgnoreKindArg, value: string) => typedError<string, AppError>(__TAURI_INVOKE("add_ignore_pattern", { id, kind, value })),
 	/**  保存しないファイルのパターンを、完全一致する 1 行だけ削除する（保存はしない）。 */
@@ -261,6 +276,7 @@ export const events = {
 	needsAttention: makeEvent<NeedsAttention>("needs-attention"),
 	opFinished: makeEvent<OpFinished>("op-finished"),
 	opProgress: makeEvent<OpProgress>("op-progress"),
+	skipWorktreeNotice: makeEvent<SkipWorktreeNotice>("skip-worktree-notice"),
 	statusChanged: makeEvent<StatusChanged>("status-changed"),
 	syncStateChanged: makeEvent<SyncStateChanged>("sync-state-changed"),
 };
@@ -1259,6 +1275,30 @@ export type SkipKind =
 "hidden" | 
 /**  OS・Office の一時ファイル */
 "os-temp";
+
+/**  「今後の変更だけ無視する」の記録 1 件（S6 の「この PC だけ無視中のファイル」） */
+export type SkipWorktreeItem = {
+	/**  プロジェクトからの相対パス（`/` 区切り） */
+	path: string,
+	/**  無視を指定した時刻（RFC 3339） */
+	set_at: string,
+	/**  いまこの PC で無視されているか。false なら無視が外れている（再適用の提案の対象） */
+	ignored: boolean,
+	/**  再適用の提案で「今はしない」を選んだ（再度は提案しない） */
+	dismissed: boolean,
+};
+
+/**
+ *  「今後の変更だけ無視する」の再適用の結果を知らせる（設計書 4.8）。取り込み・解消・中止・復旧の後に出す。
+ *  内容は退避（この PC の `.git` の中）に残っている。作業フォルダの内容は変えていない。
+ */
+export type SkipWorktreeNotice = {
+	project_id: string,
+	/**  手元の内容を書き戻せず、退避に残したまま（利用者がその間に編集した、など）のパス */
+	pending: string[],
+	/**  相手が削除したため、書き戻さず退避に残したパス */
+	removed_upstream: string[],
+};
 
 /**  飛ばしたもの */
 export type SkippedFileItem = {

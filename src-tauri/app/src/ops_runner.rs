@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use core_git::GitError;
 use core_ops::{
-    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits, UnsavedPolicy,
-    UploadOutcome,
+    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits,
+    SkipWorktreeReport, UnsavedPolicy, UploadOutcome,
 };
 use core_store::{
     now_rfc3339, JournalFinish, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks,
@@ -20,7 +20,7 @@ use core_store::{
 use core_watch::{classify_failure, FailureKind};
 use tauri_specta::Event;
 
-use crate::events::{OpFinished, OpProgress, OpTrigger, StatusChanged};
+use crate::events::{OpFinished, OpProgress, OpTrigger, SkipWorktreeNotice, StatusChanged};
 use crate::{run_exclusive, AppError, AppState};
 
 /// 操作の実行コンテキスト（コマンドとスケジューラで共有する）
@@ -129,6 +129,8 @@ struct Done<T> {
     result: Result<T, OpsError>,
     detail: String,
     quiet: bool,
+    /// 無視中のファイルの再適用の結果（設計書 4.8）。通知は `run_op` の外で出す
+    skip: SkipWorktreeReport,
 }
 
 /// `OpsError` を同期の失敗種別へ分類する（オフライン・認証失敗・ぶつかり・その他）。
@@ -233,6 +235,15 @@ where
                 Err(e) => Err(e),
             };
 
+            // 無視中のファイルの再適用の結果（設計書 4.8）。相手が削除したものは記録から外す。
+            // 退避は残すため、ファイルは変えない。通知は呼び出し側（結果を返した後）で出す
+            let skip = ops.take_skip_report();
+            if !skip.removed_upstream.is_empty() {
+                if let Ok(g) = store.lock() {
+                    let _ = g.remove_skip_worktree(&id_owned, &skip.removed_upstream);
+                }
+            }
+
             let after = ops.restore_point_refs(&project.path).unwrap_or_default();
             let restore = new_restore_points(&before, &after);
 
@@ -303,6 +314,7 @@ where
                 result,
                 detail,
                 quiet,
+                skip,
             })
         },
     )
@@ -318,6 +330,15 @@ where
                 outcome: done.detail.clone(),
             }
             .emit(&ctx.app);
+            // 無視中のファイルの退避があれば、結果に関わらず知らせる（退避は残っているため）
+            if !done.skip.is_empty() {
+                let _ = SkipWorktreeNotice {
+                    project_id: project_id.clone(),
+                    pending: done.skip.pending.clone(),
+                    removed_upstream: done.skip.removed_upstream.clone(),
+                }
+                .emit(&ctx.app);
+            }
             if !done.quiet {
                 let _ = StatusChanged { project_id }.emit(&ctx.app);
             }

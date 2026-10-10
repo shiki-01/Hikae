@@ -47,3 +47,19 @@ export function useTrackedIgnoredFiles(getProjectId: () => string) {
 		queryFn: () => api.listTrackedIgnoredFiles(getProjectId())
 	}));
 }
+
+/** 「今後の変更だけ無視する」の記録と、この PC での現在の状態（設計書 4.8、S6） */
+export function useSkipWorktreeEntries(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.skipWorktree(getProjectId()),
+		queryFn: () => api.listSkipWorktree(getProjectId())
+	}));
+}
+
+/** 無視が外れている記録（再適用の提案の対象。提案を出すかどうかは呼び出し側が決める） */
+export function useSkipDrift(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.skipDrift(getProjectId()),
+		queryFn: () => api.listSkipWorktreeDrift(getProjectId())
+	}));
+}

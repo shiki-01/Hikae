@@ -6,15 +6,18 @@
 	import { summarizeTracked } from './ignore-model';
 
 	interface Props {
-		/** 保存対象から外すファイルのパス。null のときは閉じている */
+		/** 対象のファイルのパス。null のときは閉じている */
 		files: string[] | null;
-		/** 保存の処理中は true */
+		/** 処理中は true */
 		busy: boolean;
+		/** 保存対象から外す（以降の保存には入らない） */
 		onsubmit: (paths: string[]) => void;
+		/** 今後の変更だけ無視する（この PC での変更は保存されない。作業フォルダは変えない） */
+		onskip: (paths: string[]) => void;
 		oncancel: () => void;
 	}
 
-	let { files, busy, onsubmit, oncancel }: Props = $props();
+	let { files, busy, onsubmit, onskip, oncancel }: Props = $props();
 
 	const summary = $derived(files ? summarizeTracked(files) : null);
 </script>
@@ -42,6 +45,16 @@
 					{t('ignore.untrack_more', { count: summary.rest })}
 				</p>
 			{/if}
+			<ul class="m:0 p:0 list-style:none flex flex-direction:column gap:2 mt:2">
+				<li class="type-body">
+					<strong>{t('ignore.skip_option_title')}</strong>
+					<span class="fg:fg-muted">{t('ignore.skip_option_description')}</span>
+				</li>
+				<li class="type-body">
+					<strong>{t('ignore.untrack_submit')}</strong>
+					<span class="fg:fg-muted">{t('ignore.untrack_description')}</span>
+				</li>
+			</ul>
 		</div>
 	{/if}
 
@@ -55,6 +68,15 @@
 	{#snippet actions()}
 		<div class="flex flex-flow:row|wrap justify-content:end gap:3 flex:1">
 			<Button variant="ghost" disabled={busy} onclick={oncancel}>{t('ignore.cancel')}</Button>
+			<Button
+				variant="secondary"
+				disabled={busy}
+				onclick={() => {
+					if (files) onskip(files);
+				}}
+			>
+				{t('ignore.skip_submit')}
+			</Button>
 			<Button
 				variant="primary"
 				loading={busy}

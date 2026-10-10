@@ -655,6 +655,36 @@ const messages = {
 	'toast.ignore_added': '「{name}」を保存しないファイルに追加しました',
 	'toast.ignore_removed': '保存しないファイルから削除しました',
 	'toast.ignore_untracked': '{count} 件を保存の対象から外しました',
+	'ignore.skip_option_title': '今後の変更だけ無視する',
+	'ignore.skip_option_description':
+		'この PC での変更は保存されなくなります。クラウドには今の版が残ります。',
+	'ignore.skip_submit': '今後の変更だけ無視する',
+	'ignore.skip_section_title': 'この PC だけ無視中のファイル',
+	'ignore.skip_section_description':
+		'この PC で今後の変更を保存しない設定にしたファイルです。クラウドには、設定した時点の版が残ります。',
+	'ignore.skip_status_ignored': '無視中',
+	'ignore.skip_status_lost': '無視が外れています',
+	'ignore.skip_clear': '無視をやめる',
+	'ignore.skip_clear_label': '「{name}」の無視をやめる',
+	'ignore.skip_empty': 'この PC だけ無視中のファイルはありません。',
+	'ignore.skip_list_label': 'この PC だけ無視中のファイルの一覧',
+	'ignore.untrack_choices_label': '保存しないファイルの扱い',
+	'toast.ignore_skipped': '{count} 件について、この PC では今後の変更を保存しないようにしました',
+	'toast.ignore_cleared': '{count} 件の無視をやめました',
+	'toast.skip_reapplied': '無視する設定を戻しました',
+	'skip.notice_pending':
+		'無視中のファイル（{names}）の手元の内容を、取り込み後に作業フォルダへ戻せませんでした。手元の内容は退避に残っています。作業フォルダの内容を確認してください。',
+	'skip.notice_removed':
+		'相手の側で削除されたため、無視中のファイル（{names}）は作業フォルダから消えました。手元の内容は退避に残っています。必要なら作り直してください。',
+	'skip.names_more': '{names} ほか {count} 件',
+	'skip.drift_title': 'この PC で無視する設定が外れているファイルがあります',
+	'skip.drift_description':
+		'この PC で無視していたファイルの設定が外れています。もう一度無視しますか。',
+	'skip.drift_list_label': '無視が外れているファイルの一覧',
+	'skip.drift_apply': '無視する',
+	'skip.drift_later': '今はしない',
+	'skip.drift_safe':
+		'ファイルの内容は変わりません。無視すると、この PC での変更は保存されなくなります。',
 	'settings.note_ai':
 		'AI を使わなくても、メモは自動で提案されます。AI の設定は今後のバージョンで利用できます。',
 	'settings.note_extensions': '拡張機能の設定は、今後のバージョンで利用できます。',

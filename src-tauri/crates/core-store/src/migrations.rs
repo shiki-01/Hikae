@@ -22,6 +22,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 5 {
         migrate_to_v5(conn)?;
     }
+    if current_version < 6 {
+        migrate_to_v6(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -230,6 +233,39 @@ fn migrate_to_v5(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v6: 「今後の変更だけ無視する」（skip-worktree、設計書 4.8）の記録に `dismissed` を足す。
+/// 「プロジェクトを開いたとき」の再適用の提案で、利用者が「今はしない」を選んだ記録に印を付ける
+/// （この PC で同じ提案を繰り返さないため）。既存の行は既定値 0（未通知）になる。
+fn migrate_to_v6(conn: &Connection) -> Result<(), StoreError> {
+    // v1 で作られる表が無い古い形（テスト用の手作り DB など）でも動くように、表を先に用意する
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS skip_worktree (
+            project_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            set_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, path),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        "#,
+    )?;
+    let has_dismissed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('skip_worktree') WHERE name = 'dismissed'",
+        [],
+        |row| row.get(0),
+    )?;
+    let add_column = if has_dismissed == 0 {
+        "ALTER TABLE skip_worktree ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;"
+    } else {
+        ""
+    };
+    conn.execute_batch(&format!(
+        "BEGIN;\n{add_column}\nPRAGMA user_version = 6;\nCOMMIT;"
+    ))?;
+
+    Ok(())
+}
+
 /// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
 /// 壊れた JSON、null、選択肢にない値は取り込まない。
 fn legacy_overrides(config: &str) -> Vec<(String, String)> {
@@ -283,7 +319,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         let (outcome, finished, backup): (String, Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT outcome, finished_at, backup_ref FROM journal WHERE id = 1",
@@ -337,7 +373,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",
@@ -346,6 +382,46 @@ mod tests {
             )
             .expect("select");
         assert_eq!(initial, None);
+
+        // 2 回目の実行は何も変えない
+        run_migrations(&conn).expect("rerun");
+    }
+
+    #[test]
+    fn v6_adds_dismissed_flag_and_keeps_existing_skip_records() {
+        let conn = Connection::open_in_memory().expect("open");
+        migrate_to_v1(&conn).expect("v1");
+        migrate_to_v2(&conn).expect("v2");
+        migrate_to_v3(&conn).expect("v3");
+        migrate_to_v4(&conn).expect("v4");
+        migrate_to_v5(&conn).expect("v5");
+        conn.execute(
+            "INSERT INTO projects (id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config)
+             VALUES ('p1', 'name', '/p', NULL, 'o', 'main', '2026-01-01T00:00:00Z', '{}')",
+            [],
+        )
+        .expect("insert project");
+        conn.execute(
+            "INSERT INTO skip_worktree (project_id, path, set_at) VALUES ('p1', 'a.psd', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert old record");
+
+        run_migrations(&conn).expect("migrate");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(version, 6);
+        let (path, dismissed): (String, i64) = conn
+            .query_row(
+                "SELECT path, dismissed FROM skip_worktree WHERE project_id = 'p1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("old record");
+        assert_eq!(path, "a.psd");
+        assert_eq!(dismissed, 0);
 
         // 2 回目の実行は何も変えない
         run_migrations(&conn).expect("rerun");

@@ -6,6 +6,7 @@ use crate::open_path::{resolve_entry_in_project, OpenPathError};
 use crate::pc_name::{split_trailer, Meta};
 use crate::restore_file::normalize_project_path;
 use crate::size_check::{self, SaveOptions, SizeLimits};
+use crate::skip_worktree;
 use core_git::GitRunner;
 use core_safety::create_backup_ref;
 use std::collections::HashSet;
@@ -224,6 +225,9 @@ fn ahead_behind(runner: &GitRunner, repo: &Path) -> Result<(i32, i32), OpsError>
 ///
 /// `check_names` が真なら、取り込む側のファイル名が Windows で作れるかを fetch の後・merge の前に
 /// 検査し、作れない名前があれば何も変更せずに断る（設計書 5章 E18）。
+///
+/// 無視中のファイル（設計書 4.8）: 相手が変更・削除するものは、取り込みの前に手元の内容を退避し、
+/// 取り込みの後に書き戻して印を付け直す。その結果（保留・相手が削除した件）は `skip` に溜める。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pull(
     runner: &GitRunner,
@@ -234,6 +238,7 @@ pub(crate) fn pull(
     policy: UnsavedPolicy,
     check_names: bool,
     meta: Meta,
+    skip: &mut SkipWorktreeReport,
 ) -> Result<PullOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -316,22 +321,41 @@ pub(crate) fn pull(
             .trim()
             .to_string();
 
-    if ahead == 0 {
-        // fast-forward のみ
-        runner.run_ok(repo, &["merge", "--ff-only", "@{u}"])?;
-        restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
-        return Ok(PullOutcome::FastForwarded);
+    // 双方に差がある場合は backup ref を作成する（復元点は退避より前）
+    if ahead > 0 {
+        let _ = create_backup_ref(runner, repo, "pre-merge", now)?;
     }
 
-    // 双方に差がある場合は backup ref を作成してから merge
-    let _ = create_backup_ref(runner, repo, "pre-merge", now)?;
+    // 無視中のファイルで相手が変更・削除するものは、手元の内容を退避してから印を外し、
+    // 作業フォルダを HEAD の版へ戻す（設計書 4.8）。途中で失敗したときは中で元に戻している
+    skip_worktree::prepare_incoming(runner, repo)?;
 
-    // merge --no-edit @{u}（終了コード 0, 1 を許容）
-    let merge_output = runner.run_allow_codes(repo, &["merge", "--no-edit", "@{u}"], &[0, 1])?;
+    // fast-forward のみ（ahead == 0）、または merge --no-edit @{u}（終了コード 0 と 1 を許容。1 は競合）
+    let merged = if ahead == 0 {
+        runner
+            .run_ok(repo, &["merge", "--ff-only", "@{u}"])
+            .map(|_| true)
+    } else {
+        runner
+            .run_allow_codes(repo, &["merge", "--no-edit", "@{u}"], &[0, 1])
+            .map(|out| out.code == 0)
+    };
+    let clean = match merged {
+        Ok(clean) => clean,
+        Err(e) => {
+            // 取り込みが git の判断で止まった。退避が残っていれば作業フォルダへ書き戻す
+            skip_worktree::recover_after_failed_incoming(runner, repo);
+            return Err(e.into());
+        }
+    };
 
-    if merge_output.code == 0 {
-        // merge 成功
+    if clean {
         restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
+        // 退避の書き戻しと印の付け直し（設計書 4.8 の再適用）
+        skip.absorb(skip_worktree::reapply_skip_worktree(runner, repo)?);
+        if ahead == 0 {
+            return Ok(PullOutcome::FastForwarded);
+        }
         let commit_output = runner.run(repo, &["rev-parse", "HEAD"])?;
         let commit = String::from_utf8_lossy(&commit_output.stdout)
             .trim()
@@ -339,7 +363,7 @@ pub(crate) fn pull(
         return Ok(PullOutcome::Merged { commit });
     }
 
-    // merge 失敗（競合）
+    // merge 失敗（競合）。退避は残したままにし、解消（resolve）または中止（abort_merge）の後に書き戻す
     let conflict_files = conflicts(runner, repo)?;
     Ok(PullOutcome::Conflicted {
         files: conflict_files,
@@ -492,7 +516,7 @@ pub(crate) fn conflict_text(
 }
 
 /// `resolve_entry_in_project` の失敗を `OpsError` に変える（プロジェクト外・不正なパスは InvalidInput）
-fn entry_error(e: OpenPathError) -> OpsError {
+pub(crate) fn entry_error(e: OpenPathError) -> OpsError {
     match e {
         OpenPathError::Io(io) | OpenPathError::RootUnavailable(io) => OpsError::from(io),
         other => OpsError::InvalidInput(format!("path is not allowed: {other}")),
@@ -858,19 +882,9 @@ pub(crate) fn restore(
     let point = meta.restore_point(runner, repo, &branch, "restore", now)?;
 
     // restore --source で指定時点のファイル状態に復元（未追跡ファイルは消さない）
-    // 注意: restore --source は reset と異なり、staged / worktree の両方を復元する
-    runner.run_ok(
-        repo,
-        &[
-            "restore",
-            "--source",
-            target_commit,
-            "--staged",
-            "--worktree",
-            "--",
-            ":",
-        ],
-    )?;
+    // 注意: restore --source は reset と異なり、staged / worktree の両方を復元する。
+    // 無視中（skip-worktree）の印は、復元の後に付け直す（設計書 4.8、skip_worktree モジュール）
+    crate::skip_worktree::restore_keeping_skip(runner, repo, target_commit, ":")?;
 
     crate::restore_file::undo_target(runner, repo, &branch, point, dirty_before)
 }
@@ -891,6 +905,7 @@ pub(crate) fn resolve(
     now: OffsetDateTime,
     labels: &Labels,
     meta: Meta,
+    skip: &mut SkipWorktreeReport,
 ) -> Result<ResolveOutcome, OpsError> {
     // 現在の競合ファイルを確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -1020,6 +1035,8 @@ pub(crate) fn resolve(
     // 競合で止まった取り込みにも、通常の取り込みと同じ手順 8 を行う。
     // 相手が追跡を外したファイルが取り込みで消えていれば、取り込み前の内容を書き戻す
     restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
+    // 無視中のファイルの退避を書き戻し、印を付け直す（設計書 4.8）
+    skip.absorb(skip_worktree::reapply_skip_worktree(runner, repo)?);
 
     let commit_output = runner.run(repo, &["rev-parse", "HEAD"])?;
     let commit = String::from_utf8_lossy(&commit_output.stdout)
@@ -1104,7 +1121,8 @@ pub(crate) fn abort_merge(
     Ok(())
 }
 
-/// upstream に push。拒否されたら pull して再試行。
+/// upstream に push。拒否されたら pull して再試行。取り込みの中の無視中のファイルの結果は `skip` に溜める。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn upload(
     runner: &GitRunner,
     repo: &Path,
@@ -1113,6 +1131,7 @@ pub(crate) fn upload(
     limits: SizeLimits,
     check_names: bool,
     meta: Meta,
+    skip: &mut SkipWorktreeReport,
 ) -> Result<UploadOutcome, OpsError> {
     // マージ競合中でないか確認
     let current_conflicts = conflicts(runner, repo)?;
@@ -1160,6 +1179,7 @@ pub(crate) fn upload(
             UnsavedPolicy::SaveFirst,
             check_names,
             meta,
+            skip,
         )?;
 
         match &pull_result {
