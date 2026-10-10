@@ -537,6 +537,7 @@
 					file={selectedFile}
 					{baseId}
 					{baseLabel}
+					listView={changesView}
 					oncompare={() => selectedChange && openCompare(selectedChange.path, baseId, 'current')}
 					onrestore={() =>
 						selectedChange && askRestore(latest, { kind: 'file', path: selectedChange.path })}

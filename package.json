@@ -20,6 +20,7 @@
 		"@tanstack/svelte-query": "6.3.1",
 		"@tauri-apps/api": "2.12.1",
 		"@tauri-apps/plugin-dialog": "2.8.1",
+		"pdfjs-dist": "6.3.289",
 		"svelte": "5.57.2"
 	},
 	"devDependencies": {

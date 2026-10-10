@@ -7,6 +7,8 @@ import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features
 import type {
 	OfficeDiff,
 	FilePreview,
+	PreviewSheet,
+	PreviewSlide,
 	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
@@ -154,6 +156,58 @@ function mockRemoteCheck(ownerId: string, name: string, adopt: boolean): RemoteO
 	if (adopt) throw mockNameTaken();
 	return null;
 }
+
+/** モックのプレビューの xlsx。今の版（current）には Sheet2 が無く Sheet3 があり、Sheet1 の値が変わっている */
+function mockSheets(now: boolean): PreviewSheet[] {
+	const cells: PreviewSheet['cells'] = [
+		{ row: 0, col: 0, value: t('mock.xlsx.item') },
+		{ row: 0, col: 1, value: t('mock.xlsx.value') },
+		{ row: 0, col: 2, value: t('mock.xlsx.note') },
+		{ row: 1, col: 0, value: t('mock.xlsx.item') },
+		{ row: 1, col: 1, value: '100' },
+		{ row: 2, col: 0, value: t('mock.xlsx.item') },
+		{ row: 2, col: 1, value: now ? '150' : '120' }
+	];
+	if (now) cells.push({ row: 4, col: 2, value: t('mock.office.value') });
+	const main: PreviewSheet = { name: 'Sheet1', rows: 5, cols: 3, cells, truncated: false };
+	if (now) {
+		return [
+			main,
+			{
+				name: 'Sheet3',
+				rows: 2,
+				cols: 2,
+				cells: [{ row: 0, col: 0, value: t('mock.xlsx.added') }],
+				truncated: false
+			}
+		];
+	}
+	return [
+		main,
+		{
+			name: 'Sheet2',
+			rows: 1,
+			cols: 1,
+			cells: [{ row: 0, col: 0, value: t('mock.xlsx.dropped') }],
+			truncated: false
+		}
+	];
+}
+
+/** モックのプレビューのスライド（pptx） */
+function mockSlides(): PreviewSlide[] {
+	return [
+		{ index: 1, paragraphs: [t('mock.pptx.title'), t('mock.pptx.point1'), t('mock.pptx.point2')] },
+		{ index: 2, paragraphs: [t('mock.pptx.result'), t('mock.pptx.result1')] },
+		{ index: 3, paragraphs: [t('mock.pptx.next'), t('mock.pptx.next1')] }
+	];
+}
+
+/** モックで「内容を表示できない」理由にする拡張子（実際の判定はバックエンドが行う） */
+const MOCK_BINARY = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'pdf', 'psd'];
+const MOCK_UNSUPPORTED = ['zip'];
+const MOCK_CORRUPT = ['rar'];
+const MOCK_TOO_LARGE = ['tar'];
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -949,10 +1003,11 @@ export const mockApi: ProjectApi = {
 				truncated: 0
 			};
 		}
+		// プレビューのモック（mockSheets）と対応する: Sheet2 は削除、Sheet3 は追加、Sheet1 の B3 と C5 が変わる
 		return {
 			kind: 'xlsx',
-			addedSheets: [],
-			removedSheets: [],
+			addedSheets: ['Sheet3'],
+			removedSheets: ['Sheet2'],
 			cells: [
 				{ sheet: 'Sheet1', cell: 'B3', row: 2, col: 1, before: '120', after: '150' },
 				{
@@ -962,23 +1017,42 @@ export const mockApi: ProjectApi = {
 					col: 2,
 					before: null,
 					after: t('mock.office.value')
-				},
-				{ sheet: 'Sheet2', cell: 'A1', row: 0, col: 0, before: t('mock.office.value'), after: null }
+				}
 			],
 			truncated: 0
 		};
 	},
 
-	async previewFile(_projectId: string, _rev: string, path: string): Promise<FilePreview> {
+	async previewFile(projectId: string, rev: string, path: string): Promise<FilePreview> {
 		await sleep(WAIT_SHORT);
-		if (officeKindOf(path) === 'docx') {
+		const state = stateOf(projectId);
+		const now = rev === 'current' || rev === 'work';
+		// ファイルの有無の例: 「古い案.txt」は今の版に無く、「新しい案.txt」は過去の版に無い
+		if (now && path === t('mock.file.old_draft')) return { kind: 'not_found' };
+		if (!now && path === t('mock.file.draft_new')) return { kind: 'not_found' };
+		const office = officeKindOf(path);
+		if (office === 'docx') {
 			return {
 				kind: 'docx',
-				paragraphs: [t('mock.office.title'), t('mock.office.after')],
+				paragraphs: [
+					t('mock.office.title'),
+					'',
+					t(now ? 'mock.office.after' : 'mock.office.before'),
+					t('mock.office.next')
+				],
 				truncated: false
 			};
 		}
-		return { kind: 'text', content: t('mock.office.title'), truncated: false };
+		if (office === 'xlsx') return { kind: 'xlsx', sheets: mockSheets(now) };
+		const ext = path.split('.').pop()?.toLowerCase() ?? '';
+		if (ext === 'pptx') return { kind: 'pptx', slides: mockSlides(), truncated: false };
+		if (MOCK_BINARY.includes(ext)) return { kind: 'unavailable', reason: 'binary' };
+		if (MOCK_UNSUPPORTED.includes(ext))
+			return { kind: 'unavailable', reason: 'unsupported_format' };
+		if (MOCK_CORRUPT.includes(ext)) return { kind: 'unavailable', reason: 'corrupt' };
+		if (MOCK_TOO_LARGE.includes(ext)) return { kind: 'unavailable', reason: 'too_large' };
+		const body = lines(path, tierOf(state, rev)) ?? [t('mock.preview.body')];
+		return { kind: 'text', content: body.join('\n'), truncated: false };
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

@@ -3,17 +3,12 @@
 	import { onMount, untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
-	import DiffView from '#lib/components/DiffView.svelte';
-	import { countBlocks } from '#lib/components/diff-rows.js';
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select, { type SelectOption } from '#lib/components/Select.svelte';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
-	import ImageCompare from './ImageCompare.svelte';
-	import OfficeCompare from './OfficeCompare.svelte';
-	import { isImagePath } from './image-diff';
-	import { officeKindOf } from './office-diff';
+	import FileDiffPane from './FileDiffPane.svelte';
+	import type { DiffStatus } from './preview-kind';
 	import { canStep, stepBlock, swapPoints, type StepDirection } from './navigation';
-	import { useCompare } from './queries';
 
 	interface Props {
 		projectId: string;
@@ -31,26 +26,14 @@
 	let from = $state(untrack(() => initialFrom));
 	let to = $state(untrack(() => initialTo));
 	let mode = $state<'split' | 'unified'>('split');
-
-	// 画像（対応する拡張子）は本文の差分を使わず、ImageCompare で比べる
-	const imageMode = $derived(isImagePath(path));
-	// docx・xlsx は抽出した内容を OfficeCompare で比べる（抽出できないときは中で従来の表示にする）
-	const officeMode = $derived(officeKindOf(path) !== null);
-	// ページ送りと表示方法は、行差分（テキスト）のときだけ使う
-	const plainMode = $derived(!imageMode && !officeMode);
-
-	const diff = useCompare(
-		() => projectId,
-		() => path,
-		() => from,
-		() => to,
-		() => plainMode
-	);
-
-	const total = $derived(diff.data?.kind === 'text' ? countBlocks(diff.data.rows) : 0);
-	const labelOf = (id: string) => points.find((p) => p.value === id)?.label ?? '';
+	// 本体の状態（FileDiffPane が知らせる）。行差分のときだけ、前へ・次へと表示方法を出す
+	let status = $state<DiffStatus>({ textual: false, ready: false, total: 0 });
+	const textual = $derived(status.textual);
+	const ready = $derived(status.ready);
+	const total = $derived(status.total);
 
 	let active = $derived<number | null>(total > 0 ? 0 : null);
+	const labelOf = (id: string) => points.find((p) => p.value === id)?.label ?? '';
 
 	onMount(() => {
 		const opener = document.activeElement as HTMLElement | null;
@@ -90,11 +73,11 @@
 				{path}
 			</h2>
 			<div class="flex align-items:center gap:2 flex-shrink:0">
-				{#if plainMode}
+				{#if textual}
 					<span class="type-small fg:fg-muted" aria-live="polite">
 						{#if total > 0 && active !== null}
 							{t('compare.position', { current: active + 1, total })}
-						{:else if diff.data}
+						{:else if ready}
 							{t('compare.no_changes')}
 						{/if}
 					</span>
@@ -141,7 +124,7 @@
 				class="w:240px"
 			/>
 			<span class="flex:1"></span>
-			{#if plainMode}
+			{#if textual}
 				<SegmentedControl
 					bind:value={mode}
 					ariaLabel={t('compare.mode')}
@@ -154,29 +137,16 @@
 		</div>
 	</header>
 
-	{#if imageMode}
-		<!-- 時点や対象が変わったら作り直す（画像の読み込み状態を持つため） -->
-		{#key `${path}|${from}|${to}`}
-			<ImageCompare
-				{projectId}
-				{path}
-				{from}
-				{to}
-				leftLabel={labelOf(from)}
-				rightLabel={labelOf(to)}
-			/>
-		{/key}
-	{:else if officeMode}
-		<OfficeCompare {projectId} {path} {from} {to} {onopen} />
-	{:else}
-		<DiffView
-			diff={diff.data ?? null}
-			loading={diff.isPending}
-			{mode}
-			activeBlock={active}
-			leftLabel={labelOf(from)}
-			rightLabel={labelOf(to)}
-			{onopen}
-		/>
-	{/if}
+	<FileDiffPane
+		{projectId}
+		{path}
+		{from}
+		{to}
+		fromLabel={labelOf(from)}
+		toLabel={labelOf(to)}
+		{mode}
+		activeBlock={active}
+		onstatus={(next) => (status = next)}
+		{onopen}
+	/>
 </section>

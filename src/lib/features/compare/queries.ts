@@ -17,6 +17,20 @@ export function useCompare(
 	}));
 }
 
+/** ある時点のファイルの内容（プレビュー）。`rev` は画面の時点 ID（current・this・cloud・短縮 ID） */
+export function useFilePreview(
+	getProjectId: () => string,
+	getRev: () => string,
+	getPath: () => string | null,
+	getEnabled: () => boolean = () => true
+) {
+	return createQuery(() => ({
+		queryKey: keys.filePreview(getProjectId(), getRev(), getPath() ?? ''),
+		queryFn: () => api.previewFile(getProjectId(), getRev(), getPath() ?? ''),
+		enabled: getProjectId() !== '' && getPath() !== null && getEnabled()
+	}));
+}
+
 /** docx・xlsx の内容の比較。抽出できないものは `unavailable` の結果になる（エラーにはしない） */
 export function useCompareOffice(
 	getProjectId: () => string,
