@@ -12,10 +12,7 @@
 
 use crate::{git_runner, load_project, run_blocking, version, AppError, AppState};
 use core_ops::{OfficeFile, Ops, OpsError, TextFile};
-use core_preview::{
-    extract_docx, extract_pptx, extract_xlsx, office_kind, Limits, OfficeKind, PreviewError, Sheet,
-    Slide,
-};
+use core_preview::{office_kind, ExtensionHost, Limits, OfficeKind, PreviewError, Sheet, Slide};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -108,9 +105,10 @@ pub async fn preview_file(
     path: String,
 ) -> Result<FilePreview, AppError> {
     let store = state.store.clone();
+    let extensions = state.extensions.clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        preview(&project.path, &rev, &path)
+        preview(&extensions, &project.path, &rev, &path)
     })
     .await
 }
@@ -141,15 +139,20 @@ fn kind_of(path: &str) -> Kind {
     }
 }
 
-/// 比較の本体（同期処理。呼び出し側が別スレッドで実行する）
-fn preview(repo: &Path, point: &str, path: &str) -> Result<FilePreview, AppError> {
+/// 表示の本体（同期処理。呼び出し側が別スレッドで実行する）。Office 文書の抽出は拡張ホストで行う
+fn preview(
+    extensions: &ExtensionHost,
+    repo: &Path,
+    point: &str,
+    path: &str,
+) -> Result<FilePreview, AppError> {
     let ops = Ops::new(git_runner());
     let Some(rev) = version::resolve_rev(&ops, repo, point).map_err(AppError::from_ops_error)?
     else {
         return Ok(FilePreview::NotFound);
     };
     match kind_of(path) {
-        Kind::Office(kind) => preview_office(&ops, repo, &rev, path, kind),
+        Kind::Office(kind) => preview_office(extensions, &ops, repo, &rev, path, kind),
         Kind::Binary => preview_binary(&ops, repo, &rev, path),
         Kind::Text => preview_text(&ops, repo, &rev, path),
     }
@@ -157,6 +160,7 @@ fn preview(repo: &Path, point: &str, path: &str) -> Result<FilePreview, AppError
 
 /// Office 文書を読んで抽出する。抽出の失敗は `unavailable`
 fn preview_office(
+    extensions: &ExtensionHost,
     ops: &Ops,
     repo: &Path,
     rev: &str,
@@ -170,9 +174,9 @@ fn preview_office(
         Err(e) => return read_error(e),
     };
     let result = match kind {
-        OfficeKind::Docx => extract_docx(&bytes, &limits).map(docx_preview),
-        OfficeKind::Xlsx => extract_xlsx(&bytes, &limits).and_then(xlsx_preview),
-        OfficeKind::Pptx => extract_pptx(&bytes, &limits).map(pptx_preview),
+        OfficeKind::Docx => extensions.docx_paragraphs(&bytes).map(docx_preview),
+        OfficeKind::Xlsx => extensions.xlsx_sheets(&bytes).and_then(xlsx_preview),
+        OfficeKind::Pptx => extensions.pptx_slides(&bytes).map(pptx_preview),
     };
     Ok(match result {
         Ok(preview) => preview,

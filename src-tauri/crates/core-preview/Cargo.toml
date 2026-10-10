@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# 既定では拡張ホスト（wasmtime で抽出器を実行する部分）を含める。
+# WASM 抽出器（extensions/office-extractor）は `default-features = false` で使い、wasmtime を含めない
+default = ["host"]
+host = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:semver", "dep:tokio", "dep:bytes"]
+
 [dependencies]
 # docx / xlsx は zip の中身の読み取りだけを使う。展開先のファイルは作らない。
 # 版は calamine が使う 8.6 に揃える（二重に入らないように）。圧縮器は要らないため、
@@ -17,6 +23,26 @@ quick-xml = "0.41.0"
 calamine = "0.36.1"
 # 段落・セルの差分（行単位の Myers 法）
 similar = "3.2.0"
+# 抽出結果の受け渡し（拡張の JSON 形式）。WASM 抽出器にも入るため、host の feature には含めない
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 拡張ホストの依存（host の feature）。最新の安定版を完全に固定する（設計書 8.2）。
+# Component Model は使わず、WASI preview1 のコマンドだけを実行する
+wasmtime = { version = "=49.0.2", optional = true, default-features = false, features = ["cranelift", "runtime", "std"] }
+# p1（WASI preview1）は内部で p2 を要求するため、Component Model も含まれる。コンポーネントとしては使わない。
+# p3 は使わないため既定の機能から外す
+wasmtime-wasi = { version = "=49.0.2", optional = true, default-features = false, features = ["p1"] }
+# wasmtime-wasi の出力先（AsyncWrite）の型と、stdout の受け口（OutputStream）の型を名指しするためだけに使う
+tokio = { version = "1", optional = true, default-features = false }
+bytes = { version = "1", optional = true, default-features = false }
+# 拡張のマニフェストの version（semver）の検証
+semver = { version = "1", optional = true }
+
+[dev-dependencies]
+# テスト専用の WASM（無限ループ・メモリの食い尽くし・WASI の呼び出しなど）を WAT から作る
+wat = "1"
+# 拡張のフォルダを一時ディレクトリに作って、マニフェストの読み込みを試す
+tempfile = "3"
 
 [lints]
 workspace = true

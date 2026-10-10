@@ -1,6 +1,8 @@
 // ファイルプレビュー（設計書 3.3 S4 の docx / xlsx 比較、8.3）。docx の段落テキスト、xlsx のセルの値を取り出し、
 // pptx のスライドごとのテキストを取り出す（pptx は表示のみ。比較の対象ではない）。
 // 2 つの版の差分を作る。Tauri・core-git・他の core-* に依存しない純粋なライブラリ。
+// 拡張ホスト（`extension`、設計書 11 章）は feature `host` で含まれ、wasmtime で WASM の抽出器を実行する。
+// WASM の抽出器（extensions/office-extractor）は feature を切ってこのクレートを使い、同じ抽出のコードを持つ。
 //
 // - 入力は呼び出し側が読んだバイト列。ファイルシステムへは一切書かない（zip の中身はメモリ上でだけ読む）
 // - zip のエントリ名（パストラバーサルを含みうる）は、名前の完全一致の比較にだけ使う
@@ -11,6 +13,7 @@ mod archive;
 mod diff;
 mod docx;
 mod error;
+pub mod extension;
 mod kind;
 mod limits;
 mod pptx;
@@ -19,6 +22,12 @@ mod xlsx;
 pub use diff::{cell_ref, diff_paragraphs, diff_sheets, CellChange, ParagraphDiff, SheetsDiff};
 pub use docx::extract_docx;
 pub use error::PreviewError;
+#[cfg(feature = "host")]
+pub use extension::host::{
+    ExtensionHost, ExtensionId, ExtensionInfo, ExtractError, ExtractorRef, ManifestError,
+    RuntimeLimits,
+};
+pub use extension::{ExtractOutput, OutputKind};
 pub use kind::{office_kind, OfficeKind};
 pub use limits::Limits;
 pub use pptx::{extract_pptx, Slide};
@@ -46,6 +55,54 @@ pub(crate) mod test_support {
             writer.write_all(data).expect("write_all");
         }
         writer.finish().expect("finish").into_inner()
+    }
+
+    /// 名前と中身の組から pptx 相当の zip を作る（メモリ上だけ）
+    pub(crate) fn pptx_of(parts: &[(&str, String)]) -> Vec<u8> {
+        let entries: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (*n, d.as_bytes())).collect();
+        zip_of(&entries, true)
+    }
+
+    /// スライドの部品の XML（本文を `p:spTree` の中に入れる）
+    pub(crate) fn pptx_slide(body: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>"#
+        )
+    }
+
+    /// 1 段落（`a:p`）の XML
+    pub(crate) fn pptx_para(text: &str) -> String {
+        format!(r#"<a:p><a:r><a:t>{text}</a:t></a:r></a:p>"#)
+    }
+
+    /// 関係の Id を順に並べた `presentation.xml`
+    pub(crate) fn pptx_presentation(rel_ids: &[&str]) -> String {
+        let items: String = rel_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| format!(r#"<p:sldId id="{}" r:id="{id}"/>"#, 256 + i))
+            .collect();
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>{items}</p:sldIdLst></p:presentation>"#
+        )
+    }
+
+    /// `(Id, Target)` の組から `presentation.xml.rels`
+    pub(crate) fn pptx_rels(pairs: &[(&str, &str)]) -> String {
+        let items: String = pairs
+            .iter()
+            .map(|(id, target)| {
+                format!(
+                    r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="{target}"/>"#
+                )
+            })
+            .collect();
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{items}</Relationships>"#
+        )
     }
 
     /// `word/document.xml` だけを持つ docx 相当の zip

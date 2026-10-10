@@ -42,3 +42,6 @@ $RECYCLE.BIN/
 /src-tauri/app/resources/llama/*
 !/src-tauri/app/resources/llama/.gitkeep
 /src-tauri/app/resources/.llama-staging/
+
+# 組み込みの拡張の wasm（scripts/build-extensions.mjs が生成する。バイナリはコミットしない。extension.json は入れる）
+/src-tauri/app/resources/extensions/*/*.wasm

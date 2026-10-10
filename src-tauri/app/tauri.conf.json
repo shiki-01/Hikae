@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "identifier": "com.shiki01.hikae",
   "build": {
-    "beforeDevCommand": "node scripts/fetch-git-windows.mjs && node scripts/fetch-llama-windows.mjs && pnpm dev",
+    "beforeDevCommand": "node scripts/fetch-git-windows.mjs && node scripts/fetch-llama-windows.mjs && node scripts/build-extensions.mjs && pnpm dev",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "node scripts/fetch-git-windows.mjs && node scripts/fetch-llama-windows.mjs && pnpm build",
     "frontendDist": "../../build"
@@ -30,6 +30,7 @@
     "resources": {
       "resources/git": "git",
       "resources/llama": "llama",
+      "resources/extensions": "extensions",
       "resources/NOTICE.txt": "NOTICE.txt"
     },
     "icon": [

@@ -830,9 +830,11 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `uuid`（v4）、`time` | `core-safety`、`core-ops` | 一時インデックスの名前、復元点の時刻（UTC） |
 | `notify` 8、`notify-debouncer-full` 0.6、`ignore` 0.4 | `core-watch` | ファイル監視（6.2 の自動保存、9.2）。OS の通知を 300ms でまとめ、`.git`・OS／Office の一時ファイル・プロジェクト直下の `.gitignore` と `.git/info/exclude` に合うパスの変更を無視する。ファイル ID のキャッシュ（`NoCache`）は、監視の開始時にフォルダ全体を走査するため使わない |
 | `tauri-specta` / `specta` 2.0.0-rc.25、`specta-typescript` 0.0.12 | `app`、`core-store` | `src/lib/bindings.ts` の生成 |
-| 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2` | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
+| `serde` 1、`serde_json` 1 | `core-preview`（既定の機能に関係なく含む） | 抽出結果の JSON 形式（11.2）。WASM 抽出器も使う |
+| `wasmtime` 49.0.2（`=` で固定。`default-features = false`、`cranelift`・`runtime`・`std`）、`wasmtime-wasi` 49.0.2（`=` で固定。`default-features = false`、`p1`）、`semver` 1、`bytes` 1、`tokio` 1（`default-features = false`。型名の参照だけ） | `core-preview`（feature `host`。既定で有効） | 拡張ホストの WASM 実行（11 章）、マニフェストの版（semver）の検証。p1 は内部で p2 を要求するため Component Model の機能も含まれるが、コンポーネントとしては使わない |
+| 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2`、`wat` 1（`core-preview` のテスト専用の WASM を WAT から作る） | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
 
-設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`wasmtime`。`llama-server` サイドカーと `core-llm` のモデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続は Phase 2 で導入済み（10.5。Windows は同梱の取得と `--version` まで確認。macOS は未確認）。Phase 2 で追加した依存: `sysinfo` 0.39.6（`app`。総メモリと空き容量の取得。機能は `system`・`disk` のみ）、`tokio` 1（`app`。`time`・`sync`。生成の時間制限と、設定変更の共有ロック。`core-llm` と同じ版の系列）、`tokio-util` 0.7（`app`。ダウンロードの中断の `CancellationToken`。`core-llm` と同じ版）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
+設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`。`wasmtime` は Phase 2 で導入済み（11 章。Windows での実行は確認済み、macOS は未確認）。`llama-server` サイドカーと `core-llm` のモデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続は Phase 2 で導入済み（10.5。Windows は同梱の取得と `--version` まで確認。macOS は未確認）。Phase 2 で追加した依存: `sysinfo` 0.39.6（`app`。総メモリと空き容量の取得。機能は `system`・`disk` のみ）、`tokio` 1（`app`。`time`・`sync`。生成の時間制限と、設定変更の共有ロック。`core-llm` と同じ版の系列）、`tokio-util` 0.7（`app`。ダウンロードの中断の `CancellationToken`。`core-llm` と同じ版）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
 
 **同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
 
@@ -866,7 +868,8 @@ Rust 側は Cargo workspace で機能ごとに crate を分け、Tauri 層（`ap
 | `core-ops` | 保存、元に戻す（戻した後の保存を含む）、取り込み、アップロード、ぶつかり解消、ファイル・フォルダの追加、除外設定（初期の一時ファイルの除外）、広すぎるフォルダの判定の各ユースケース | core-git, core-safety |
 | `core-watch` | ファイル監視（`ProjectWatcher`）と、無視するパスの判定・変更のまとめ方・自動保存の静止判定（`SnapshotPlanner`。時刻を引数で受け取る純関数）、取り込み・アップロードの実行計画（起動時・定期・再試行）、保守タイマー、登録に合わせた監視・計画の整理（`registration`。登録を外した・付け替えたプロジェクトの監視と計画を捨てる判断） | core-safety |
 | `core-github` | Device Flow、REST API、keyring、credential helper | なし |
-| `core-preview` | 種別判定、テキスト／画像／docx／xlsx 抽出、拡張機能ホスト（雛形のみ） | なし |
+| `core-preview` | 種別判定、テキスト／画像／docx／xlsx／pptx 抽出（ネイティブ。WASM 抽出器と同じコード）、差分、拡張機能ホスト（feature `host`。wasmtime による抽出器の実行、11 章） | なし |
+| `extensions/office-extractor`（workspace の member、bin は 3 つ） | 組み込みの Office 抽出器（WASM、WASI preview1）。docx・xlsx・pptx ごとに 1 つの bin。入力は stdin、出力は stdout の JSON（11 章） | `core-preview`（`default-features = false`。wasmtime を含めない） |
 | `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成（雛形のみ） | core-preview |
 | `core-store` | SQLite、設定、プロジェクト登録、操作ジャーナル、プロジェクト単位のロック（`ProjectLocks`） | なし |
 | `app` | Tauri コマンド・イベント、スケジューラ、プロジェクト単位の操作キュー | 上記すべて |
@@ -1076,6 +1079,15 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - 抽出器の `output` が `paragraphs` / `cells` / `pages` のいずれかなら、アプリ側の行差分・セル差分ビューと LLM 入力（10章 段階2）にそのまま使える
 - `permissions` は将来の拡張用に予約（例: 外部フォント読み込み）。初期は空のみ受け付ける
 
+**実装で定めた検証**（登録の失敗は理由の種類だけを返し、パス・内容は含めない。拡張は登録されず、ほかの拡張には影響しない）:
+
+- `id` は `^[a-z0-9]+([.-][a-z0-9]+)*$`。`name` は空でない文字列。`version` は semver。`apiVersion` は `"1"` のみ
+- `fileTypes` は `.` で始まる英小文字・数字 1〜16 文字（`.DOCX` は拒否）。同じ拡張子を 2 つの抽出器が扱う宣言は拒否し、登録済みの拡張が扱う拡張子との重複も拒否する。同じ `id` の二重登録も拒否する
+- `entry` は `/` 区切りの相対パスだけ。空の要素、`.`、`..`、先頭の `/`、`\`、`:` を含むものは拒否する。登録時には、実体が拡張フォルダの中にあることも確かめる（リンクで外へ出るものは拒否）
+- マニフェストは 64 KiB まで、wasm は 1 ファイル 32 MiB まで
+- `output` は `paragraphs`・`cells`・`pages` のいずれか。抽出器の出力の形が宣言と違えば失敗（`ExtractorFailed`）
+- 未知のキーは無視する。`renderers` は検証だけ行い、使うのは第 2 段階
+
 ### 11.3 段階的な公開
 
 | フェーズ | 内容 |
@@ -1089,6 +1101,24 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - **拡張の JS をメイン WebView で実行**: Tauri の IPC に到達でき、ファイル削除や push も呼べるため不採用
 - **Node.js ベース（VS Code 型）**: Tauri には Node が無く、同梱すると配布サイズの利点が消えるため不採用
 - **ネイティブの動的ライブラリ**: OS・CPU ごとのビルドが必要で、異常時にアプリごと落ちるため不採用
+
+### 11.5 実装状況（Phase 2 第 1 段階。2026-10-10）
+
+**実装済み**: 拡張ホスト（`core-preview` の feature `host`。`ExtensionHost`）、マニフェストの検証、組み込みの拡張 `hikae.builtin.office`（docx・xlsx・pptx の 3 つの抽出器）、WASM 抽出器（`extensions/office-extractor`）、ビルド（`scripts/build-extensions.mjs`）。`preview_file`、`compare_office`、AI の入力（docx・xlsx の差分）は、ネイティブの抽出ではなく拡張ホストで抽出する。ネイティブの `extract_*` は WASM 抽出器のソースとして残し、同値性テストの基準にする。差分の計算（`diff_paragraphs`・`diff_sheets`）はネイティブのまま。
+
+**起動時の登録**: `resources/extensions/<id>/` の各フォルダを登録する。失敗は件数だけをログに出し（パスは出さない）、アプリは起動を続ける。その場合 docx・xlsx・pptx は「対応しない形式」として扱われる。
+
+**抽出器の権限**: 与えるのは stdin（入力）と stdout・stderr の受け口だけ。preopen（ファイル）、環境変数、引数、ネットワーク（ソケット）は与えない。時計は常に 0 を返す。テスト `wasi_gives_no_files_no_environment_and_no_sockets` で、`path_open`（EBADF）、`environ_sizes_get`（数は 0）、`sock_accept`・`sock_recv`・`sock_send`（EBADF）の結果を確かめている。
+
+**制限**: 実時間 10 秒（epoch による中断）、線形メモリ 256 MiB（`ResourceLimiter`）、stdin 50 MiB（実行の前に検査）、stdout 16 MiB（超えた書き込みを拒否）。超過は `Timeout`・`OutOfMemory`・`TooLarge`、トラップや異常終了は `ExtractorFailed` で返し、アプリは落ちない。画面への写し方は、時間・メモリ・大きさの超過を「大きすぎる」、異常終了を「壊れている」とする（`ExtractError::to_preview_error`）。同じ拡張の実行は 1 つずつ行う（epoch による中断が別の実行に効かないように、拡張ごとの排他）。
+
+**出力の形式**: 成功は stdout の JSON（`output` で形式を示す）。失敗は終了コード 1 と `{"error": "<語彙>"}`。語彙は `too-large`・`unsupported-format`・`encrypted`・`corrupt` の 4 つ。zip ではない入力と、対応しない内容は、画面の分類と同じく `unsupported-format` にまとめる。
+
+**未実装（次の段階）**: 表示拡張（`contributes.renderers` の実行と iframe、CSP）、拡張の一覧の画面、利用者フォルダの追加（Phase 3 の開発者モード）。
+
+**計測**（Windows、2026-10-10）: wasm の大きさ（release。`opt-level = "s"`、LTO、strip）は docx 363 KiB、xlsx 505 KiB、pptx 389 KiB。wasm の作成（release）は約 16 秒。`Cargo.lock` には 79 件の crate が加わった（うち `wat` とその依存は開発専用）。wasmtime 系の crate を作り直すのに debug で約 41 秒。app の debug 実行ファイルは 37.9 MB から 68.3 MB になった（比較元は別のビルドで、条件は完全には揃っていない参考値）。app の release の大きさは未計測。起動時の登録（3 つの wasm のコンパイル）は、release で 0.79 秒、debug で 1.0 秒。debug では cranelift の crate を `[profile.dev.package]` で最適化しており、最適化しないと約 23 秒かかった。release のテスト用ビルド（LTO、wasmtime を含む初回）は約 10 分 37 秒。
+
+**テスト**（`core-preview`）: 同値性（ネイティブと WASM の結果が完全に一致。段落・セル・スライド・空・順序・上限・失敗の種類）、制限（時間・メモリ・stdout・stdin、トラップのあとの回復）、WASI の権限、マニフェストの検証、一時フォルダからの登録。wasm が無いときは、スキップせず失敗する（`node scripts/build-extensions.mjs` を先に実行する）。
 
 ## 12. 開発ロードマップ
 

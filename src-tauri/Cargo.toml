@@ -9,6 +9,7 @@ members = [
 	"crates/core-preview",
 	"crates/core-llm",
 	"crates/core-store",
+	"extensions/office-extractor",
 ]
 resolver = "3"
 
@@ -33,6 +34,35 @@ core-github = { path = "crates/core-github" }
 core-preview = { path = "crates/core-preview" }
 core-llm = { path = "crates/core-llm" }
 core-store = { path = "crates/core-store" }
+
+# 拡張（WASM 抽出器）は起動時に cranelift でコンパイルする（設計書 11.1）。debug の最適化なしだと数十秒かかるため、
+# コンパイラの crate だけ最適化する（依存の初回ビルドは長くなるが、起動は速くなる。release の設定には影響しない）
+[profile.dev.package.cranelift-codegen]
+opt-level = 2
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 2
+
+[profile.dev.package.cranelift-entity]
+opt-level = 2
+
+[profile.dev.package.cranelift-bitset]
+opt-level = 2
+
+[profile.dev.package.cranelift-bforest]
+opt-level = 2
+
+[profile.dev.package.cranelift-control]
+opt-level = 2
+
+[profile.dev.package.cranelift-native]
+opt-level = 2
+
+[profile.dev.package.regalloc2]
+opt-level = 2
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 2
 
 [profile.release]
 opt-level = "s"

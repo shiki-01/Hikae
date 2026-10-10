@@ -11,6 +11,7 @@
 - Rust は 1.99.0 固定（`src-tauri/rust-toolchain.toml`）。パッケージマネージャは pnpm
 - SvelteKit 3 のため、`src/lib` は `#lib` で参照する（`$lib` は使えない）。設定は `vite.config.ts` に書く
 - Windows では tauri にリンクするテストが起動しないため、tauri 依存の crate（`app`）には単体テストを置かない。型生成は `cargo run -p hikae --bin export-bindings`
+- 組み込みの拡張（Office 抽出器の WASM）は `node scripts/build-extensions.mjs` で作る（`pnpm build` と `beforeDevCommand` に含む）。`cargo test` の前にも実行する。wasm が無いと `core-preview` の拡張ホストのテストは失敗する。`wasm32-wasip1` の target は `src-tauri/rust-toolchain.toml` の `targets` で取得する。`.wasm` はコミットせず、`extension.json` はコミットする
 
 ## 技術スタック（確定）
 

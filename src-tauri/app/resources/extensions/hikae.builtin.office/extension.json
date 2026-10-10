@@ -1,0 +1,15 @@
+{
+  "id": "hikae.builtin.office",
+  "name": "Office 文書（組み込み）",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "contributes": {
+    "renderers": [],
+    "extractors": [
+      { "fileTypes": [".docx"], "output": "paragraphs", "entry": "extract-docx.wasm" },
+      { "fileTypes": [".xlsx"], "output": "cells", "entry": "extract-xlsx.wasm" },
+      { "fileTypes": [".pptx"], "output": "pages", "entry": "extract-pptx.wasm" }
+    ]
+  },
+  "permissions": []
+}

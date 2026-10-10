@@ -1,0 +1,29 @@
+[package]
+name = "office-extractor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# ネイティブの抽出（extract_*）をそのまま WASM にコンパイルする（コードを二重にしない）。
+# ホスト側の機能（wasmtime）は含めない
+core-preview = { path = "../../crates/core-preview", default-features = false }
+
+# 抽出器は 3 つ（docx・xlsx・pptx）。どれも引数を取らず、stdin の入力を読んで stdout に JSON を書く。
+# 種類を環境から推測しないため、bin ごとに分ける
+[[bin]]
+name = "extract-docx"
+path = "src/bin/extract-docx.rs"
+
+[[bin]]
+name = "extract-xlsx"
+path = "src/bin/extract-xlsx.rs"
+
+[[bin]]
+name = "extract-pptx"
+path = "src/bin/extract-pptx.rs"
+
+[lints]
+workspace = true

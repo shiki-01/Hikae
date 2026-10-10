@@ -18,7 +18,7 @@ use core_llm::{
     SystemInfo,
 };
 use core_ops::{ChangedKind, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES};
-use core_preview::{office_kind, OfficeKind};
+use core_preview::{office_kind, ExtensionHost, OfficeKind};
 use core_store::{
     now_rfc3339, AiRunner, AiScope, AppSettings, LlmModelRecord, MemoSuggestion, SettingsPatch,
     Store,
@@ -599,7 +599,8 @@ async fn suggest_for_project(
     } else {
         settings.ai_scope
     };
-    let input = run_blocking(move || collect_input(&repo, scope)).await?;
+    let extensions = state.extensions.clone();
+    let input = run_blocking(move || collect_input(&extensions, &repo, scope)).await?;
     if input.files.is_empty() {
         return Ok(None);
     }
@@ -642,7 +643,11 @@ fn store_message(store: &Arc<Mutex<Store>>, key: &str, model: &str, message: &st
 }
 
 /// 提案の入力（変更ファイルの一覧と、設定の範囲に応じた差分）を作る。読み取りのみ。
-fn collect_input(repo: &Path, scope: AiScope) -> Result<ChangeInput, AppError> {
+fn collect_input(
+    extensions: &ExtensionHost,
+    repo: &Path,
+    scope: AiScope,
+) -> Result<ChangeInput, AppError> {
     let ops = Ops::new(git_runner());
     let changes = ops.list_changes(repo).map_err(AppError::from_ops_error)?;
     let sources: Vec<SourceChange> = changes
@@ -653,7 +658,9 @@ fn collect_input(repo: &Path, scope: AiScope) -> Result<ChangeInput, AppError> {
             // 画像は本文を渡さず（段階 3 は未実装）、テキストと文書の差分だけを渡す
             let (amount, diff_text) = match scope {
                 AiScope::FileNames => (None, None),
-                AiScope::TextDiff | AiScope::WithImages => content_of(&ops, repo, &change.path),
+                AiScope::TextDiff | AiScope::WithImages => {
+                    content_of(&ops, extensions, repo, &change.path)
+                }
             };
             SourceChange {
                 kind: map_kind(change.kind),
@@ -677,9 +684,14 @@ fn map_kind(kind: ChangedKind) -> ChangeKind {
 }
 
 /// 1 ファイルの変更量と差分テキスト。docx・xlsx は文書の比較（`compare_office`）を、そのほかはテキストの差分を使う
-fn content_of(ops: &Ops, repo: &Path, path: &str) -> (Option<String>, Option<String>) {
+fn content_of(
+    ops: &Ops,
+    extensions: &ExtensionHost,
+    repo: &Path,
+    path: &str,
+) -> (Option<String>, Option<String>) {
     match office_kind(path) {
-        Some(OfficeKind::Docx | OfficeKind::Xlsx) => office_content(repo, path),
+        Some(OfficeKind::Docx | OfficeKind::Xlsx) => office_content(extensions, repo, path),
         Some(OfficeKind::Pptx) | None => text_content(ops, repo, path),
     }
 }
@@ -698,8 +710,12 @@ fn text_content(ops: &Ops, repo: &Path, path: &str) -> (Option<String>, Option<S
     }
 }
 
-fn office_content(repo: &Path, path: &str) -> (Option<String>, Option<String>) {
-    let Ok(diff) = office::compare(repo, "this", "work", path) else {
+fn office_content(
+    extensions: &ExtensionHost,
+    repo: &Path,
+    path: &str,
+) -> (Option<String>, Option<String>) {
+    let Ok(diff) = office::compare(extensions, repo, "this", "work", path) else {
         return (None, None);
     };
     match diff {

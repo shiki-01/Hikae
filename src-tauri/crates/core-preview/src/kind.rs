@@ -13,6 +13,17 @@ pub enum OfficeKind {
     Pptx,
 }
 
+impl OfficeKind {
+    /// 拡張子（`.` を除いた英小文字）。拡張ホストで抽出器を探すときの語
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Docx => "docx",
+            Self::Xlsx => "xlsx",
+            Self::Pptx => "pptx",
+        }
+    }
+}
+
 /// ファイル名（相対パスでもよい）の拡張子から種類を決める。大文字小文字は区別しない。
 /// 対応しない拡張子（`.doc`・`.docm`・`.xls` など）は None
 pub fn office_kind(file_name: &str) -> Option<OfficeKind> {

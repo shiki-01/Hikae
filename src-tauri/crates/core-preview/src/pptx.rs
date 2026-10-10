@@ -408,55 +408,7 @@ fn reference_text(reference: &BytesRef<'_>) -> Result<String, PreviewError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::zip_of;
-
-    /// 名前と中身の組から pptx 相当の zip を作る（メモリ上だけ）
-    fn pptx_of(parts: &[(&str, String)]) -> Vec<u8> {
-        let entries: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (*n, d.as_bytes())).collect();
-        zip_of(&entries, true)
-    }
-
-    /// スライドの部品の XML（本文を `p:spTree` の中に入れる）
-    fn slide(body: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>"#
-        )
-    }
-
-    /// 1 段落（`a:p`）の XML
-    fn para(text: &str) -> String {
-        format!(r#"<a:p><a:r><a:t>{text}</a:t></a:r></a:p>"#)
-    }
-
-    /// 関係の Id を順に並べた `presentation.xml`
-    fn presentation(rel_ids: &[&str]) -> String {
-        let items: String = rel_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| format!(r#"<p:sldId id="{}" r:id="{id}"/>"#, 256 + i))
-            .collect();
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>{items}</p:sldIdLst></p:presentation>"#
-        )
-    }
-
-    /// `(Id, Target)` の組から `presentation.xml.rels`
-    fn rels(pairs: &[(&str, &str)]) -> String {
-        let items: String = pairs
-            .iter()
-            .map(|(id, target)| {
-                format!(
-                    r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="{target}"/>"#
-                )
-            })
-            .collect();
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{items}</Relationships>"#
-        )
-    }
+    use crate::test_support::{pptx_of, pptx_para, pptx_presentation, pptx_rels, pptx_slide};
 
     /// 段落の文字だけを、表示順に並べたもの
     fn texts(slides: &[Slide]) -> Vec<Vec<String>> {
@@ -470,13 +422,13 @@ mod tests {
     #[test]
     fn slides_follow_the_slide_id_list_not_the_part_names() -> Result<(), PreviewError> {
         let zip = pptx_of(&[
-            ("ppt/presentation.xml", presentation(&["rId2", "rId1"])),
+            ("ppt/presentation.xml", pptx_presentation(&["rId2", "rId1"])),
             (
                 "ppt/_rels/presentation.xml.rels",
-                rels(&[("rId1", "slides/slide1.xml"), ("rId2", "slides/slide2.xml")]),
+                pptx_rels(&[("rId1", "slides/slide1.xml"), ("rId2", "slides/slide2.xml")]),
             ),
-            ("ppt/slides/slide1.xml", slide(&para("first"))),
-            ("ppt/slides/slide2.xml", slide(&para("second"))),
+            ("ppt/slides/slide1.xml", pptx_slide(&pptx_para("first"))),
+            ("ppt/slides/slide2.xml", pptx_slide(&pptx_para("second"))),
         ]);
         let slides = extract_pptx(&zip, &limits())?;
         assert_eq!(
@@ -490,12 +442,12 @@ mod tests {
     #[test]
     fn absolute_targets_are_resolved_from_the_package_root() -> Result<(), PreviewError> {
         let zip = pptx_of(&[
-            ("ppt/presentation.xml", presentation(&["rId1"])),
+            ("ppt/presentation.xml", pptx_presentation(&["rId1"])),
             (
                 "ppt/_rels/presentation.xml.rels",
-                rels(&[("rId1", "/ppt/slides/slide7.xml")]),
+                pptx_rels(&[("rId1", "/ppt/slides/slide7.xml")]),
             ),
-            ("ppt/slides/slide7.xml", slide(&para("seven"))),
+            ("ppt/slides/slide7.xml", pptx_slide(&pptx_para("seven"))),
         ]);
         assert_eq!(texts(&extract_pptx(&zip, &limits())?), vec![vec!["seven"]]);
         Ok(())
@@ -504,7 +456,7 @@ mod tests {
     #[test]
     fn break_is_a_space_and_tab_is_a_tab() -> Result<(), PreviewError> {
         let body = r#"<a:p><a:r><a:t>a</a:t></a:r><a:br/><a:r><a:t>b</a:t></a:r><a:r><a:t>c</a:t><a:tab/><a:t>d</a:t></a:r></a:p>"#;
-        let zip = pptx_of(&[("ppt/slides/slide1.xml", slide(body))]);
+        let zip = pptx_of(&[("ppt/slides/slide1.xml", pptx_slide(body))]);
         // `a:br` は空白 1 つ、`a:tab` はタブ 1 つ（間の `a:r` は連結するだけ）
         assert_eq!(
             texts(&extract_pptx(&zip, &limits())?),
@@ -517,12 +469,12 @@ mod tests {
     fn empty_and_blank_paragraphs_are_dropped_and_empty_slides_stay() -> Result<(), PreviewError> {
         let body = format!(
             "<a:p/>{}<a:p><a:r><a:t>   </a:t></a:r></a:p>{}",
-            para("kept"),
-            para("\u{3000}")
+            pptx_para("kept"),
+            pptx_para("\u{3000}")
         );
         let zip = pptx_of(&[
-            ("ppt/slides/slide1.xml", slide(&body)),
-            ("ppt/slides/slide2.xml", slide("")),
+            ("ppt/slides/slide1.xml", pptx_slide(&body)),
+            ("ppt/slides/slide2.xml", pptx_slide("")),
         ]);
         let slides = extract_pptx(&zip, &limits())?;
         assert_eq!(texts(&slides), vec![vec!["kept"], vec![]]);
@@ -534,12 +486,12 @@ mod tests {
     fn paragraphs_inside_tables_are_included_in_document_order() -> Result<(), PreviewError> {
         let table = format!(
             r#"<a:tbl><a:tr><a:tc><a:txBody><a:bodyPr/>{}</a:txBody></a:tc><a:tc><a:txBody><a:bodyPr/>{}</a:txBody></a:tc></a:tr></a:tbl>"#,
-            para("c1"),
-            para("c2")
+            pptx_para("c1"),
+            pptx_para("c2")
         );
         let zip = pptx_of(&[(
             "ppt/slides/slide1.xml",
-            slide(&format!("{}{}", para("before"), table)),
+            pptx_slide(&format!("{}{}", pptx_para("before"), table)),
         )]);
         assert_eq!(
             texts(&extract_pptx(&zip, &limits())?),
@@ -551,14 +503,20 @@ mod tests {
     #[test]
     fn notes_and_masters_are_not_included() -> Result<(), PreviewError> {
         let zip = pptx_of(&[
-            ("ppt/presentation.xml", presentation(&["rId1"])),
+            ("ppt/presentation.xml", pptx_presentation(&["rId1"])),
             (
                 "ppt/_rels/presentation.xml.rels",
-                rels(&[("rId1", "slides/slide1.xml")]),
+                pptx_rels(&[("rId1", "slides/slide1.xml")]),
             ),
-            ("ppt/slides/slide1.xml", slide(&para("body"))),
-            ("ppt/notesSlides/notesSlide1.xml", slide(&para("note"))),
-            ("ppt/slideMasters/slideMaster1.xml", slide(&para("master"))),
+            ("ppt/slides/slide1.xml", pptx_slide(&pptx_para("body"))),
+            (
+                "ppt/notesSlides/notesSlide1.xml",
+                pptx_slide(&pptx_para("note")),
+            ),
+            (
+                "ppt/slideMasters/slideMaster1.xml",
+                pptx_slide(&pptx_para("master")),
+            ),
         ]);
         assert_eq!(texts(&extract_pptx(&zip, &limits())?), vec![vec!["body"]]);
         Ok(())
@@ -568,9 +526,9 @@ mod tests {
     fn without_relationships_slides_follow_the_numeric_order_of_their_names(
     ) -> Result<(), PreviewError> {
         let zip = pptx_of(&[
-            ("ppt/slides/slide10.xml", slide(&para("ten"))),
-            ("ppt/slides/slide2.xml", slide(&para("two"))),
-            ("ppt/slides/slide1.xml", slide(&para("one"))),
+            ("ppt/slides/slide10.xml", pptx_slide(&pptx_para("ten"))),
+            ("ppt/slides/slide2.xml", pptx_slide(&pptx_para("two"))),
+            ("ppt/slides/slide1.xml", pptx_slide(&pptx_para("one"))),
         ]);
         assert_eq!(
             texts(&extract_pptx(&zip, &limits())?),
@@ -582,13 +540,13 @@ mod tests {
     #[test]
     fn an_unresolved_relationship_falls_back_to_the_numeric_order() -> Result<(), PreviewError> {
         let zip = pptx_of(&[
-            ("ppt/presentation.xml", presentation(&["rId9", "rId1"])),
+            ("ppt/presentation.xml", pptx_presentation(&["rId9", "rId1"])),
             (
                 "ppt/_rels/presentation.xml.rels",
-                rels(&[("rId1", "slides/slide1.xml")]),
+                pptx_rels(&[("rId1", "slides/slide1.xml")]),
             ),
-            ("ppt/slides/slide1.xml", slide(&para("one"))),
-            ("ppt/slides/slide2.xml", slide(&para("two"))),
+            ("ppt/slides/slide1.xml", pptx_slide(&pptx_para("one"))),
+            ("ppt/slides/slide2.xml", pptx_slide(&pptx_para("two"))),
         ]);
         assert_eq!(
             texts(&extract_pptx(&zip, &limits())?),
@@ -601,7 +559,7 @@ mod tests {
     fn text_is_unescaped() -> Result<(), PreviewError> {
         let zip = pptx_of(&[(
             "ppt/slides/slide1.xml",
-            slide(&para("A &amp; B &lt;x&gt; &#x41;")),
+            pptx_slide(&pptx_para("A &amp; B &lt;x&gt; &#x41;")),
         )]);
         assert_eq!(
             texts(&extract_pptx(&zip, &limits())?),
@@ -635,15 +593,18 @@ mod tests {
 
     #[test]
     fn broken_slide_xml_is_corrupt() {
-        let zip = pptx_of(&[("ppt/slides/slide1.xml", slide("<a:p><a:r><a:t>x</a:p>"))]);
+        let zip = pptx_of(&[(
+            "ppt/slides/slide1.xml",
+            pptx_slide("<a:p><a:r><a:t>x</a:p>"),
+        )]);
         assert_eq!(extract_pptx(&zip, &limits()), Err(PreviewError::Corrupt));
     }
 
     #[test]
     fn more_slides_than_the_limit_is_too_large() {
         let zip = pptx_of(&[
-            ("ppt/slides/slide1.xml", slide(&para("a"))),
-            ("ppt/slides/slide2.xml", slide(&para("b"))),
+            ("ppt/slides/slide1.xml", pptx_slide(&pptx_para("a"))),
+            ("ppt/slides/slide2.xml", pptx_slide(&pptx_para("b"))),
         ]);
         let limits = Limits {
             max_slides: 1,
@@ -656,7 +617,7 @@ mod tests {
     fn more_paragraphs_than_the_limit_is_too_large() {
         let zip = pptx_of(&[(
             "ppt/slides/slide1.xml",
-            slide(&format!("{}{}", para("a"), para("b"))),
+            pptx_slide(&format!("{}{}", pptx_para("a"), pptx_para("b"))),
         )]);
         let limits = Limits {
             max_paragraphs: 1,

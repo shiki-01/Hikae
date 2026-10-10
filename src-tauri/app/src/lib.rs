@@ -376,11 +376,18 @@ pub struct AppState {
     pub models_dir: PathBuf,
     /// モデル ID ごとの、ダウンロード・削除の直列化
     pub model_slots: Arc<ai::ModelSlots>,
+    /// 拡張ホスト（組み込みの Office 抽出器を含む。設計書 11 章）。起動時に登録し、以後は読み取りだけ
+    pub extensions: Arc<core_preview::ExtensionHost>,
 }
 
 impl AppState {
     /// 新規作成
-    pub fn new(store: Store, llm: core_llm::LlmService, models_dir: PathBuf) -> Self {
+    pub fn new(
+        store: Store,
+        llm: core_llm::LlmService,
+        models_dir: PathBuf,
+        extensions: core_preview::ExtensionHost,
+    ) -> Self {
         AppState {
             store: Arc::new(Mutex::new(store)),
             locks: Arc::new(ProjectLocks::new()),
@@ -391,6 +398,7 @@ impl AppState {
             llm: Arc::new(tokio::sync::RwLock::new(llm)),
             models_dir,
             model_slots: Arc::new(ai::ModelSlots::default()),
+            extensions: Arc::new(extensions),
         }
     }
 
@@ -2476,6 +2484,34 @@ async fn add_files(
     })
 }
 
+/// 拡張ホストを作り、同梱の拡張（`resources/extensions/<id>/`）を登録する（設計書 11 章）。
+/// 失敗は件数だけをログに出す（パス・内容は出さない）。登録できなかった拡張子は「対応しない形式」になる
+fn load_extensions(resource_dir: Option<&std::path::Path>) -> core_preview::ExtensionHost {
+    let mut host = core_preview::ExtensionHost::new();
+    let Some(root) = resource_dir.map(|dir| dir.join("extensions")) else {
+        eprintln!("拡張の登録をスキップしました（リソースフォルダが不明）");
+        return host;
+    };
+    let dirs: Vec<PathBuf> = match std::fs::read_dir(&root) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.is_dir())
+            .collect(),
+        Err(_) => {
+            eprintln!("拡張フォルダを開けませんでした");
+            Vec::new()
+        }
+    };
+    let results = host.register_dirs(&dirs);
+    let failed = results.iter().filter(|result| result.is_err()).count();
+    eprintln!(
+        "拡張を登録しました: {} 件（失敗 {} 件）",
+        results.len() - failed,
+        failed
+    );
+    host
+}
+
 /// 過去の版のファイルを書き出す一時フォルダ（`<temp>/hikae-preview`）。
 /// 配下は `<プロジェクト ID>/<短縮コミット>/<相対パス>`。古いものは起動時に削除する。
 fn preview_root() -> PathBuf {
@@ -3552,7 +3588,9 @@ pub fn run() {
                     )))
                 })?;
 
-            let state = AppState::new(store, llm, models_dir);
+            // 拡張ホスト。同梱の拡張（resources/extensions/<id>/）を登録する。失敗してもアプリは起動を続ける
+            let extensions = load_extensions(resource_dir.as_deref());
+            let state = AppState::new(store, llm, models_dir, extensions);
             app.manage(state);
 
             let mut notified = std::collections::HashSet::new();

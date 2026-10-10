@@ -12,8 +12,8 @@
 use crate::{git_runner, load_project, run_blocking, version, AppError, AppState};
 use core_ops::{OfficeFile, Ops, OpsError};
 use core_preview::{
-    diff_paragraphs, diff_sheets, extract_docx, extract_xlsx, office_kind, Limits, OfficeKind,
-    ParagraphDiff, PreviewError, Sheet,
+    diff_paragraphs, diff_sheets, office_kind, ExtensionHost, Limits, OfficeKind, ParagraphDiff,
+    PreviewError, Sheet,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -97,9 +97,10 @@ pub async fn compare_office(
     path: String,
 ) -> Result<OfficeDiff, AppError> {
     let store = state.store.clone();
+    let extensions = state.extensions.clone();
     run_blocking(move || {
         let project = load_project(&store, &id)?;
-        compare(&project.path, &from, &to, &path)
+        compare(&extensions, &project.path, &from, &to, &path)
     })
     .await
 }
@@ -114,8 +115,9 @@ enum Side {
     TooLarge,
 }
 
-/// 比較の本体（同期処理。呼び出し側が別スレッドで実行する）
+/// 比較の本体（同期処理。呼び出し側が別スレッドで実行する）。抽出は拡張ホスト（組み込みの抽出器）で行う
 pub(crate) fn compare(
+    extensions: &ExtensionHost,
     repo: &Path,
     from: &str,
     to: &str,
@@ -141,8 +143,8 @@ pub(crate) fn compare(
     }
 
     let result = match kind {
-        OfficeKind::Docx => compare_docx(&old, &new, &limits),
-        OfficeKind::Xlsx => compare_xlsx(&old, &new, &limits),
+        OfficeKind::Docx => compare_docx(extensions, &old, &new),
+        OfficeKind::Xlsx => compare_xlsx(extensions, &old, &new),
         OfficeKind::Pptx => return Ok(unavailable(OfficeUnavailableReason::UnsupportedFormat)),
     };
     Ok(match result {
@@ -172,9 +174,13 @@ fn read_side(
 }
 
 /// 段落の差分（docx）。抽出の失敗は `PreviewError` のまま返す
-fn compare_docx(old: &Side, new: &Side, limits: &Limits) -> Result<OfficeDiff, PreviewError> {
-    let old_paragraphs = paragraphs_of(old, limits)?;
-    let new_paragraphs = paragraphs_of(new, limits)?;
+fn compare_docx(
+    extensions: &ExtensionHost,
+    old: &Side,
+    new: &Side,
+) -> Result<OfficeDiff, PreviewError> {
+    let old_paragraphs = paragraphs_of(extensions, old)?;
+    let new_paragraphs = paragraphs_of(extensions, new)?;
     let rows: Vec<ParagraphRow> = diff_paragraphs(&old_paragraphs, &new_paragraphs)
         .into_iter()
         .map(paragraph_row)
@@ -184,9 +190,13 @@ fn compare_docx(old: &Side, new: &Side, limits: &Limits) -> Result<OfficeDiff, P
 }
 
 /// シートの差分（xlsx）。抽出の失敗は `PreviewError` のまま返す
-fn compare_xlsx(old: &Side, new: &Side, limits: &Limits) -> Result<OfficeDiff, PreviewError> {
-    let old_sheets = sheets_of(old, limits)?;
-    let new_sheets = sheets_of(new, limits)?;
+fn compare_xlsx(
+    extensions: &ExtensionHost,
+    old: &Side,
+    new: &Side,
+) -> Result<OfficeDiff, PreviewError> {
+    let old_sheets = sheets_of(extensions, old)?;
+    let new_sheets = sheets_of(extensions, new)?;
     let diff = diff_sheets(&old_sheets, &new_sheets);
     let cells: Vec<CellRow> = diff
         .cells
@@ -210,18 +220,18 @@ fn compare_xlsx(old: &Side, new: &Side, limits: &Limits) -> Result<OfficeDiff, P
 }
 
 /// 段落の列。その時点に無ければ空
-fn paragraphs_of(side: &Side, limits: &Limits) -> Result<Vec<String>, PreviewError> {
+fn paragraphs_of(extensions: &ExtensionHost, side: &Side) -> Result<Vec<String>, PreviewError> {
     match side {
         Side::Absent | Side::TooLarge => Ok(Vec::new()),
-        Side::Present(bytes) => extract_docx(bytes, limits),
+        Side::Present(bytes) => extensions.docx_paragraphs(bytes),
     }
 }
 
 /// シートの列。その時点に無ければ空
-fn sheets_of(side: &Side, limits: &Limits) -> Result<Vec<Sheet>, PreviewError> {
+fn sheets_of(extensions: &ExtensionHost, side: &Side) -> Result<Vec<Sheet>, PreviewError> {
     match side {
         Side::Absent | Side::TooLarge => Ok(Vec::new()),
-        Side::Present(bytes) => extract_xlsx(bytes, limits),
+        Side::Present(bytes) => extensions.xlsx_sheets(bytes),
     }
 }
 
