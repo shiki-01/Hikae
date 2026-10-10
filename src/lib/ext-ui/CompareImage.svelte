@@ -1,24 +1,27 @@
 <script lang="ts">
+	// 画像の比較（並べる・重ねる・差分強調）。表示拡張（iframe）の中で描く（設計書 3.3 S4、11.7）。
+	// 画像の中身はホストが app-blob から読んで渡す（iframe は読まない）。
 	import { t } from '#lib/i18n/index.js';
 	import SegmentedControl from '#lib/components/SegmentedControl.svelte';
-	import { diffPixels, parseHexColor, renderDiff, type PixelDiff, type Pixels } from './image-diff';
-	import { blobUrl, isWindowsPlatform, revForPoint } from './image-source';
+	import {
+		diffPixels,
+		parseHexColor,
+		renderDiff,
+		type PixelDiff,
+		type Pixels
+	} from '#lib/features/compare/image-diff.js';
+	import type { CompareSide } from '#lib/features/extensions/renderer-protocol.js';
 
 	interface Props {
-		projectId: string;
-		path: string;
-		/** 比べる元の時点 ID（「いま」は current） */
-		from: string;
-		/** 比べる先の時点 ID（「いま」は current） */
-		to: string;
-		leftLabel: string;
-		rightLabel: string;
+		left: CompareSide;
+		right: CompareSide;
 	}
 
-	let { projectId, path, from, to, leftLabel, rightLabel }: Props = $props();
+	let { left, right }: Props = $props();
 
 	type Mode = 'side' | 'overlay' | 'diff';
 	type Size = { width: number; height: number };
+	/** 片側の読み込みの状態（ファイルが無い・読めないを分ける） */
 	type Load =
 		{ kind: 'loading' } | { kind: 'ok'; size: Size } | { kind: 'absent' } | { kind: 'error' };
 
@@ -27,14 +30,7 @@
 	const SLIDER_HEIGHT = 48;
 	const GAP = 16;
 
-	const windows = isWindowsPlatform();
-	// 対象が変わるときは呼び出し側が本コンポーネントを作り直す（`{#key}`）
-	const fromUrl = $derived(blobUrl(projectId, revForPoint(from), path, windows));
-	const toUrl = $derived(blobUrl(projectId, revForPoint(to), path, windows));
-
 	let mode = $state<Mode>('side');
-	let fromLoad = $state<Load>({ kind: 'loading' });
-	let toLoad = $state<Load>({ kind: 'loading' });
 	let position = $state(50);
 	let boxWidth = $state(0);
 	let boxHeight = $state(0);
@@ -42,27 +38,56 @@
 	// 画素を読むための非表示の画像（読み込み状態の判定もこれで行う）
 	let fromDecoder = $state<HTMLImageElement>();
 	let toDecoder = $state<HTMLImageElement>();
+	let fromSize = $state<Size | null>(null);
+	let toSize = $state<Size | null>(null);
+	let fromFailed = $state(false);
+	let toFailed = $state(false);
 
-	/** 差分強調の結果。画素の配列は再描画のため別に持つ */
-	type Diffed =
-		| { kind: 'idle' }
-		| { kind: 'ready'; diff: PixelDiff; fromSize: Size; toSize: Size }
-		| { kind: 'blocked' };
-	let diffed = $state<Diffed>({ kind: 'idle' });
-	let diffRgba = $state.raw<Uint8ClampedArray | null>(null);
-	let diffCanvas = $state<HTMLCanvasElement>();
+	// 中身（バイト列）を blob URL にする。描き終えたら解放する
+	let fromUrl = $state<string | null>(null);
+	let toUrl = $state<string | null>(null);
+	$effect(() => {
+		const content = left.content;
+		if (content?.kind !== 'bytes') {
+			fromUrl = null;
+			return;
+		}
+		const url = URL.createObjectURL(new Blob([content.data], { type: content.mime }));
+		fromUrl = url;
+		return () => URL.revokeObjectURL(url);
+	});
+	$effect(() => {
+		const content = right.content;
+		if (content?.kind !== 'bytes') {
+			toUrl = null;
+			return;
+		}
+		const url = URL.createObjectURL(new Blob([content.data], { type: content.mime }));
+		toUrl = url;
+		return () => URL.revokeObjectURL(url);
+	});
 
-	const fromSize = $derived(fromLoad.kind === 'ok' ? fromLoad.size : null);
-	const toSize = $derived(toLoad.kind === 'ok' ? toLoad.size : null);
-	const bothOk = $derived(fromSize !== null && toSize !== null);
+	/** 片側の状態。ファイルが無い・読めないはホストが決めた状態を使い、画像の読み込みは img の結果で決める */
+	function loadOf(side: CompareSide, size: Size | null, failed: boolean): Load {
+		if (side.file.state === 'missing') return { kind: 'absent' };
+		if (side.file.state === 'unavailable' || failed) return { kind: 'error' };
+		if (size) return { kind: 'ok', size };
+		return { kind: 'loading' };
+	}
+
+	const fromLoad = $derived(loadOf(left, fromSize, fromFailed));
+	const toLoad = $derived(loadOf(right, toSize, toFailed));
+	const bothOk = $derived(fromLoad.kind === 'ok' && toLoad.kind === 'ok');
+	const fromOk = $derived(fromLoad.kind === 'ok' ? fromLoad.size : null);
+	const toOk = $derived(toLoad.kind === 'ok' ? toLoad.size : null);
 	/** 両者の最大（重ねる・差分強調の枠。片方だけのときはそれ） */
 	const union = $derived<Size | null>(
-		fromSize && toSize
+		fromOk && toOk
 			? {
-					width: Math.max(fromSize.width, toSize.width),
-					height: Math.max(fromSize.height, toSize.height)
+					width: Math.max(fromOk.width, toOk.width),
+					height: Math.max(fromOk.height, toOk.height)
 				}
-			: (fromSize ?? toSize)
+			: (fromOk ?? toOk)
 	);
 
 	/** 枠に収めるための縮尺。大きい画像だけを縮め、小さい画像は拡大しない */
@@ -83,35 +108,16 @@
 		return `width:${size.width * scale}px;height:${size.height * scale}px`;
 	}
 
-	/** 画像の読み込み失敗を、「ファイルなし」（404）と「読めない」に分ける */
-	async function probe(url: string): Promise<Load> {
-		try {
-			const response = await fetch(url, { cache: 'no-store' });
-			const status = response.status;
-			// 本文は読まない
-			await response.body?.cancel();
-			return status === 404 ? { kind: 'absent' } : { kind: 'error' };
-		} catch {
-			return { kind: 'error' };
-		}
-	}
+	/** 差分強調の結果。画素の配列は再描画のため別に持つ */
+	type Diffed =
+		| { kind: 'idle' }
+		| { kind: 'ready'; diff: PixelDiff; fromSize: Size; toSize: Size }
+		| { kind: 'blocked' };
+	let diffed = $state<Diffed>({ kind: 'idle' });
+	let diffRgba = $state.raw<Uint8ClampedArray | null>(null);
+	let diffCanvas = $state<HTMLCanvasElement>();
 
-	function onLoaded(side: 'from' | 'to', img: HTMLImageElement) {
-		const load: Load = {
-			kind: 'ok',
-			size: { width: img.naturalWidth, height: img.naturalHeight }
-		};
-		if (side === 'from') fromLoad = load;
-		else toLoad = load;
-	}
-
-	async function onFailed(side: 'from' | 'to', url: string) {
-		const load = await probe(url);
-		if (side === 'from') fromLoad = load;
-		else toLoad = load;
-	}
-
-	/** 画像の画素を読む。汚染された画像（別オリジンで CORS が無い）は例外になる */
+	/** 画像の画素を読む。汚染された画像は例外になる */
 	function readPixels(img: HTMLImageElement): Pixels {
 		const canvas = document.createElement('canvas');
 		canvas.width = img.naturalWidth;
@@ -126,13 +132,13 @@
 	// 差分強調に切り替えたとき、両方の画素を一度だけ比べる
 	$effect(() => {
 		if (mode !== 'diff' || !bothOk || diffed.kind !== 'idle') return;
-		if (!fromDecoder || !toDecoder || !fromSize || !toSize) return;
+		if (!fromDecoder || !toDecoder || !fromOk || !toOk) return;
 		try {
 			const a = readPixels(fromDecoder);
 			const b = readPixels(toDecoder);
 			const diff = diffPixels(a, b);
 			diffRgba = renderDiff(diff, a, highlightColor());
-			diffed = { kind: 'ready', diff, fromSize, toSize };
+			diffed = { kind: 'ready', diff, fromSize: fromOk, toSize: toOk };
 		} catch {
 			diffed = { kind: 'blocked' };
 		}
@@ -194,24 +200,25 @@
 	}
 </script>
 
-<!-- 画素を読むための非表示の画像。crossorigin は canvas で画素を読むための前提 -->
+<!-- 画素を読むための非表示の画像（読み込みの成否と寸法もこれで決める） -->
 <img
 	bind:this={fromDecoder}
 	src={fromUrl}
-	crossorigin="anonymous"
 	alt=""
 	hidden
-	onload={() => fromDecoder && onLoaded('from', fromDecoder)}
-	onerror={() => onFailed('from', fromUrl)}
+	onload={() =>
+		fromDecoder &&
+		(fromSize = { width: fromDecoder.naturalWidth, height: fromDecoder.naturalHeight })}
+	onerror={() => (fromFailed = true)}
 />
 <img
 	bind:this={toDecoder}
 	src={toUrl}
-	crossorigin="anonymous"
 	alt=""
 	hidden
-	onload={() => toDecoder && onLoaded('to', toDecoder)}
-	onerror={() => onFailed('to', toUrl)}
+	onload={() =>
+		toDecoder && (toSize = { width: toDecoder.naturalWidth, height: toDecoder.naturalHeight })}
+	onerror={() => (toFailed = true)}
 />
 
 <div class="flex flex-direction:column flex:1 min-h:0 overflow:hidden">
@@ -234,16 +241,11 @@
 	>
 		{#if mode === 'side'}
 			<div class="flex gap:4 w:100% h:100% align-items:flex-start justify-content:center">
-				{#each [{ label: leftLabel, load: fromLoad, url: fromUrl, size: fromSize }, { label: rightLabel, load: toLoad, url: toUrl, size: toSize }] as side, index (index)}
+				{#each [{ label: left.label, load: fromLoad, url: fromUrl, size: fromOk }, { label: right.label, load: toLoad, url: toUrl, size: toOk }] as side, index (index)}
 					<figure class="m:0 flex flex-direction:column align-items:center min-w:0 flex:1">
 						<figcaption class="type-small fg:fg-muted white-space:nowrap">{side.label}</figcaption>
-						{#if side.load.kind === 'ok'}
-							<img
-								src={side.url}
-								crossorigin="anonymous"
-								alt={side.label}
-								style={sizeStyle(side.size, sideScale)}
-							/>
+						{#if side.load.kind === 'ok' && side.url}
+							<img src={side.url} alt={side.label} style={sizeStyle(side.size, sideScale)} />
 						{:else}
 							<p class="m:0 type-small fg:fg-muted text-align:center">
 								{statusText(side.load)}
@@ -265,22 +267,20 @@
 					{t('compare.image.one_side_missing')}
 				{/if}
 			</p>
-		{:else if mode === 'overlay'}
+		{:else if mode === 'overlay' && fromUrl && toUrl}
 			<div class="flex flex-direction:column align-items:center gap:2 w:100% h:100%">
 				<div class="position:relative flex-shrink:0" style={sizeStyle(union, stageScale)}>
 					<img
 						class="position:absolute left:0 top:0"
 						src={toUrl}
-						crossorigin="anonymous"
-						alt={rightLabel}
-						style={sizeStyle(toSize, stageScale)}
+						alt={right.label}
+						style={sizeStyle(toOk, stageScale)}
 					/>
 					<img
 						class="position:absolute left:0 top:0"
 						src={fromUrl}
-						crossorigin="anonymous"
-						alt={leftLabel}
-						style="{sizeStyle(fromSize, stageScale)};clip-path:inset(0 {(union?.width ?? 0) *
+						alt={left.label}
+						style="{sizeStyle(fromOk, stageScale)};clip-path:inset(0 {(union?.width ?? 0) *
 							stageScale *
 							(1 - position / 100)}px 0 0)"
 					/>
@@ -291,7 +291,7 @@
 					></div>
 				</div>
 				<div class="flex align-items:center gap:3 w:100% px:4" style="height:{SLIDER_HEIGHT}px">
-					<span class="type-small fg:fg-muted">{leftLabel}</span>
+					<span class="type-small fg:fg-muted">{left.label}</span>
 					<input
 						class="flex:1"
 						type="range"
@@ -301,7 +301,7 @@
 						bind:value={position}
 						aria-label={t('compare.image.slider')}
 					/>
-					<span class="type-small fg:fg-muted">{rightLabel}</span>
+					<span class="type-small fg:fg-muted">{right.label}</span>
 				</div>
 			</div>
 		{:else if diffed.kind === 'ready'}

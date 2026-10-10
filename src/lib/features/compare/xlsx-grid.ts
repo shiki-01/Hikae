@@ -1,4 +1,4 @@
-// xlsx のシートの表示（SheetGrid）と、変更の重ね方（XlsxDiff）の純関数。DOM に依存しない。
+// xlsx のシートの表示（SheetGrid）と、変更の重ね方（比較の表示拡張の RenderCompare）の純関数。DOM に依存しない。
 // 行・列は 0 始まりで扱い、表示の英字・行番号は 1 始まりに直す。
 
 import type { CellChange, PreviewSheet } from '#lib/api/types.js';

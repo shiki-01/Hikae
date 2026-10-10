@@ -32,6 +32,24 @@ export function rendererFor(
 	return find(ext) ?? find(FALLBACK_FILE_TYPE);
 }
 
+/**
+ * 比較（compare）に使う表示を決める。拡張子の宣言が 1 つでもあれば、その中から compare を選ぶ（無ければ null）。
+ * `*` には落とさない。pdf・pptx のように compare を宣言しない形式は、ホストが view を 2 つ並べる（設計書 11.2）。
+ * 宣言の無い拡張子だけ、`*` の compare を使う
+ */
+export function compareRendererFor(
+	renderers: readonly RendererInfo[],
+	ext: string
+): RendererInfo | null {
+	const own = renderers.filter((r) => r.fileTypes.includes(ext));
+	if (own.length > 0) return own.find((r) => r.modes.includes('compare')) ?? null;
+	return (
+		renderers.find(
+			(r) => r.fileTypes.includes(FALLBACK_FILE_TYPE) && r.modes.includes('compare')
+		) ?? null
+	);
+}
+
 /** `ext://` の URL（Windows の WebView は `http://ext.localhost/` に変換して読む）。`entryUrlPath` はセグメントごとに扱う */
 export function extUrl(entryUrlPath: string, windows: boolean): string {
 	const base = windows ? 'http://ext.localhost' : 'ext://localhost';

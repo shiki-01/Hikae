@@ -1089,7 +1089,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - `output` は `paragraphs`・`cells`・`pages` のいずれか。抽出器の出力の形が宣言と違えば失敗（`ExtractorFailed`）
 - 未知のキーは無視する
 - `renderers`（表示。第 2 段階で実装）: `fileTypes` は `.` で始まる拡張子の並び、または `["*"]` だけ（全部の拡張子。最も低い優先度）。`*` を他と並べることは拒否する（`InvalidFileType`）。`modes` は必須で、`view`・`compare` の空でない・重複のない並び（それ以外は `InvalidMode`）。`entry` は抽出器と同じ相対パスの検査に加え、登録時に実体（拡張フォルダの中。リンクを含む）があることを確かめる（`EntryMissing`）。同じ拡張子・同じ方法を 2 つの宣言が扱うと拒否する（`*` も同じ扱い。`FileTypeConflict`）
-- 表示の選択（`renderer_for`）は、同じ拡張子の宣言を `*` より優先する。`compare` は第 3 段階で使う（今は検証と登録まで）
+- 表示の選択（`renderer_for`）は、同じ拡張子の宣言を `*` より優先する。`compare` は第 3 段階で使う（11.5）。比較の選択（ホスト側の `compareRendererFor`）は、拡張子の宣言が 1 つでもあればその中の `compare` だけを使い、`*` には落とさない（compare を宣言しない pdf・pptx を、`*` の比較で描かないため）。`renderer_for` の `*` への落とし方とは異なる。`renderer_for` はアプリからは呼ばれない（テストのみ）。規則を揃えるかは未決（13 章に持ち越し）
 
 ### 11.3 段階的な公開
 
@@ -1117,9 +1117,19 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 
 **出力の形式**: 成功は stdout の JSON（`output` で形式を示す）。失敗は終了コード 1 と `{"error": "<語彙>"}`。語彙は `too-large`・`unsupported-format`・`encrypted`・`corrupt` の 4 つ。zip ではない入力と、対応しない内容は、画面の分類と同じく `unsupported-format` にまとめる。
 
-**表示（第 2 段階、view のみ。2026-10-11）**: 組み込みの表示（画像、pdf、docx、xlsx、pptx、テキストとその他）は、組み込みの拡張 `hikae.builtin.preview`（`contributes.renderers`）の表示拡張として描く。ホストは拡張子で入口を選び（`list_renderers`）、`sandbox="allow-scripts"` の iframe を `ext://` から開いて、`postMessage` で内容を渡す（6 章・7 章 の節）。表示拡張の UI は `extensions-ui/hikae.builtin.preview/` を `vite.ext.config.ts` でビルドし、`scripts/build-extensions.mjs` が拡張フォルダの `ui/` に置く（出力は `.gitignore`）。比較（`compare`）の表示は、第 3 段階で同じ境界に載せる。
+**表示（第 2 段階、view のみ。2026-10-11）**: 組み込みの表示（画像、pdf、docx、xlsx、pptx、テキストとその他）は、組み込みの拡張 `hikae.builtin.preview`（`contributes.renderers`）の表示拡張として描く。ホストは拡張子で入口を選び（`list_renderers`）、`sandbox="allow-scripts"` の iframe を `ext://` から開いて、`postMessage` で内容を渡す（6 章・7 章 の節）。表示拡張の UI は `extensions-ui/hikae.builtin.preview/` を `vite.ext.config.ts` でビルドし、`scripts/build-extensions.mjs` が拡張フォルダの `ui/` に置く（出力は `.gitignore`）。比較（`compare`）の表示は、第 3 段階で同じ境界に載せた（次項）。
 
-**未実装（次の段階）**: 比較（`compare`）の表示拡張（第 3 段階）、拡張の一覧の画面、利用者フォルダの追加（Phase 3 の開発者モード）。
+**比較（`compare`、第 3 段階。2026-10-11）**: 組み込みの比較は、表示拡張の `compare` で描く。対象は画像（並べる・重ねる・差分強調）、docx（段落差分）、xlsx（シートとセルの変更の強調、シートの追加・削除のバッジ、変更一覧）、テキスト（行差分の左右・統合、差分箇所の前へ・次へ）。マニフェストの `modes` は、画像・docx・xlsx・`*` が `["view", "compare"]`、pdf・pptx は `["view"]`。
+
+- ホストの振り分け（`FileDiffPane`）: pdf・pptx、compare に使える表示が無い、表示の一覧の取得に失敗した、テキストとして比べられない（情報のみ）ものは、過去と今を並べる（view を 2 つ）。それ以外は表示拡張の `compare` で描く
+- 差分の計算（行・段落・セル）は引き続きホスト（Rust）が行い、iframe は描画だけを行う。画像の中身は、ホストが app-blob から読んで渡す（iframe は読まない）。ファイルが無い側は `state: "missing"`、画像を読めない側は `state: "unavailable"`（理由 `failed`）で渡す
+- 拡張の失敗（5 秒の ready の待ち、`error`）は、E20 を出す。比較では並べる表示へ自動で切り替えない（同じ拡張で描くため意味が薄い）
+- 前へ・次へ用の箇所の数は、ホストが従来どおり `countBlocks` で計算する（iframe から `blocks` を受けない）。行差分の表示方法（並べる・統合）と箇所は、`options` で送り、表示は作り直さない
+- ホストの部品: `features/extensions/CompareFrame.svelte`（データの取得と送信）、`features/compare/FileDiffPane.svelte`（振り分け）、`features/compare/CompareView.svelte`（ヘッダー・時点の選択・前へ/次へ・閉じる）。表示拡張の部品（`src/lib/ext-ui/`）: `RenderCompare.svelte`（種類ごとの描画）、`CompareImage.svelte`、`DiffView.svelte`、`SheetGrid.svelte`
+- 移行: `ImageCompare`・`OfficeCompare`・`XlsxDiff` を削除し、描画は `src/lib/ext-ui` に一本化した。`components/DiffView.svelte` は `ext-ui/DiffView.svelte` へ移動し、表の描画だけにした（注記・ファイル情報は `RenderCompare` が描く）。未使用になった i18n キーを削除した
+- 残り（第 3 段階の範囲外）: `core-preview` のネイティブの `extract_*` は、WASM 抽出器のソースと同値性テストの基準として残す（アプリからは呼ばない）
+
+**未実装（次の段階）**: 拡張の一覧の画面、利用者フォルダの追加（Phase 3 の開発者モード）。
 
 ### 11.6 `ext://` の配信
 
@@ -1143,6 +1153,15 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - 内容の描画は、表示拡張の中で既存の表示部品（pdf.js の表示、シートの表、テキスト・段落・スライドの一覧）で行う。ホストは描かない。画像と pdf の中身は、ホストが `app-blob` から読んで渡す（iframe は `connect-src 'none'` のため読まない）
 - pdf.js のワーカーは作らず、同じスレッドで処理する（pdf.js の `globalThis.pdfjsWorker`）。opaque origin の文書から作る blob URL のワーカーは Chromium が拒否するため（headless Chrome で確認）
 - 既知の制限: pdf.js は CMap や標準フォントを外部から取得する。`connect-src 'none'` のため取得できず、埋め込みのない CJK フォントの PDF は文字が正しく出ない可能性がある（未確認）
+
+**比較（第 3 段階。v は 1 のまま、新しい `mode` と種類のメッセージとして追加した。版の不一致は従来どおり無視する）**:
+
+- ホスト → iframe: `{ v: 1, type: "render", id, mode: "compare", left: CompareSide, right: CompareSide, diff?: DiffPayload, options: { viewMode: "split" | "unified", activeBlock: number | null } }`。`left` が過去、`right` が今。`diff` が無いときは画像の比較（左右の `content` の `bytes` を描く）
+- `CompareSide` は `{ label: string, file: RenderFile, content? }`。`label` は時点の表示名、`file` は表示と同じ（`state` は `ok`・`missing`・`unavailable`）。`content` は画像の `bytes` と xlsx の `cells`（シート）だけ
+- `DiffPayload` は次のいずれか: `{ kind: "lines", rows }`（テキストの行差分）、`{ kind: "paragraphs", rows, truncated }`（docx の段落差分。省略行を含む）、`{ kind: "cells", addedSheets, removedSheets, cells, truncated }`（xlsx のセルの変更と、シートの追加・削除）、`{ kind: "identical" }`、`{ kind: "new_empty" }`、`{ kind: "too_large", sizeBytes }`、`{ kind: "unavailable", reason, info? }`（比べられなかった。`reason` は `too_large`・`unsupported_format`・`corrupt`・`binary` のいずれか。`info` は `{ fileKind, sizeBytes, modifiedAt }`、更新日時はミリ秒で無ければ null）
+- ホスト → iframe（同じ `id`）: `{ v: 1, type: "options", id, options }`。表示は作り直さず、行差分の表示方法と強調する箇所だけを変える
+- iframe → ホスト: 既存の `ready`・`error`・`open` のみ。`blocks` は設けない（前へ・次へ用の箇所の数は、ホストが `countBlocks` で計算する。同じ計算を iframe とホストの両方に持たないため）
+- 送るのは表示の対象（名前・拡張子・状態・内容・差分）と表示の選択だけ。パス・プロジェクト ID・時点 ID・トークン・設定は送らない。iframe の属性と受け取る側の検査は、表示と同じ（`parseRenderMessage` が compare の形と差分の種類を、`parseOptionsMessage` が選択の形を確かめる）
 
 ## 12. 開発ロードマップ
 

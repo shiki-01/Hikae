@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { FileDiff } from '#lib/api/types.js';
-import { diffBodyOf, previewKindOf } from './preview-kind';
+import { compareRouteOf, previewKindOf, type CompareRouteInput } from './preview-kind';
 
 describe('previewKindOf', () => {
 	it('拡張子で種類を決める（大文字小文字は区別しない）', () => {
@@ -25,25 +25,47 @@ describe('previewKindOf', () => {
 	});
 });
 
-describe('diffBodyOf', () => {
+describe('compareRouteOf', () => {
 	const text: FileDiff = { kind: 'text', rows: [] };
 	const info: FileDiff = { kind: 'info', fileKind: 'unknown', sizeBytes: 10, modifiedAt: null };
+	const base: CompareRouteInput = {
+		kind: 'other',
+		renderers: 'ready',
+		hasCompareRenderer: true,
+		text: { pending: false, diff: text }
+	};
 
-	it('画像・docx・xlsx は、それぞれの比較で描く', () => {
-		expect(diffBodyOf('image', undefined)).toBe('image');
-		expect(diffBodyOf('docx', undefined)).toBe('docx');
-		expect(diffBodyOf('xlsx', undefined)).toBe('xlsx');
+	it('pdf と pptx は compare を宣言しないため、拡張があっても並べて比べる', () => {
+		expect(compareRouteOf({ ...base, kind: 'pdf' })).toBe('side');
+		expect(compareRouteOf({ ...base, kind: 'pptx' })).toBe('side');
 	});
 
-	it('pdf と pptx は、テキストの差分の結果に関わらず過去と今を並べる', () => {
-		expect(diffBodyOf('pdf', undefined)).toBe('side_by_side');
-		expect(diffBodyOf('pptx', text)).toBe('side_by_side');
+	it('compare に使える表示が無いときは並べて比べる（一覧の取得の失敗も同じ）', () => {
+		expect(compareRouteOf({ ...base, kind: 'image', hasCompareRenderer: false })).toBe('side');
+		expect(compareRouteOf({ ...base, renderers: 'failed' })).toBe('side');
 	});
 
-	it('その他は、結果が無いうちは保留し、情報のみなら並べ、テキストなら行差分にする', () => {
-		expect(diffBodyOf('other', undefined)).toBe('pending');
-		expect(diffBodyOf('other', info)).toBe('side_by_side');
-		expect(diffBodyOf('other', text)).toBe('text');
-		expect(diffBodyOf('other', { kind: 'too_large', sizeBytes: 2_000_000 })).toBe('text');
+	it('一覧の取得の途中は保留する', () => {
+		expect(compareRouteOf({ ...base, kind: 'docx', renderers: 'pending' })).toBe('pending');
+	});
+
+	it('画像・docx・xlsx は、拡張で描く', () => {
+		expect(
+			compareRouteOf({ ...base, kind: 'image', text: { pending: true, diff: undefined } })
+		).toBe('frame');
+		expect(compareRouteOf({ ...base, kind: 'docx' })).toBe('frame');
+		expect(compareRouteOf({ ...base, kind: 'xlsx' })).toBe('frame');
+	});
+
+	it('その他は、結果が無いうちは保留し、情報のみなら並べ、テキストなら拡張で描く', () => {
+		expect(compareRouteOf({ ...base, text: { pending: true, diff: undefined } })).toBe('pending');
+		expect(compareRouteOf({ ...base, text: { pending: false, diff: info } })).toBe('side');
+		expect(compareRouteOf(base)).toBe('frame');
+		expect(
+			compareRouteOf({
+				...base,
+				text: { pending: false, diff: { kind: 'too_large', sizeBytes: 2_000_000 } }
+			})
+		).toBe('frame');
 	});
 });

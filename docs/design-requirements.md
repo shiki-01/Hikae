@@ -116,8 +116,8 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | SaveBar | メモ欄、AI 提案チップ、保存ボタン | 変更なし（無効）、入力可、AI 生成中、AI 提案あり、保存中。AI の提案は押したときだけメモ欄に入る | MVP（AI の提案は Phase 2 で実装済み） |
 | TimelineItem | 点、日時、メモ、クラウド境界線 | 保存ポイント / 自動保存（折りたたみ・展開）/ いま / 選択中 / 「ここまでクラウド」線 | MVP |
 | FileActionRow | ファイル名＋「見比べる」「元に戻す」「開く▾」 | 時点表示用 / 現在用 / 現在用・新規ファイル（「元に戻す」が「元に戻す（作成しない）」になる）/ 変更なし（「すべてのファイル」で選んだ変更の無いファイル。「開く▾」のみ） | MVP |
-| DiffView | 左右2カラム、行番号、追加・削除行 | テキスト / docx 段落 / xlsx セル（「Sheet1!B3: 120 → 150」）/ 差分なし / 大きすぎて省略 / 新規ファイル（全行が追加。行番号は 1 から）/ 空の新規ファイル（「空の新しいファイルです」）/ ファイル情報（バイナリ・リンク・変更の無いファイル。種類・サイズ・更新日時。更新日時が不明なら行ごと省く）。新規ファイルの本文は 1MB まで、超えたら「大きすぎて省略」 | MVP（docx・xlsx は Phase 2 で実装済み。`OfficeCompare.svelte`） |
-| ImageCompare | 並べる / 重ねる（スライダー）/ 差分強調 | 読込中、サイズ違いの画像 | Phase 2 |
+| DiffView | 左右2カラム、行番号、追加・削除行 | テキスト / docx 段落 / xlsx セル（「Sheet1!B3: 120 → 150」）/ 差分なし / 大きすぎて省略 / 新規ファイル（全行が追加。行番号は 1 から）/ 空の新規ファイル（「空の新しいファイルです」）/ ファイル情報（バイナリ・リンク・変更の無いファイル。種類・サイズ・更新日時。更新日時が不明なら行ごと省く）。新規ファイルの本文は 1MB まで、超えたら「大きすぎて省略」 | MVP（docx・xlsx は Phase 2 で実装。第 3 段階で表示拡張の中へ移し、`src/lib/ext-ui/DiffView.svelte` の表の描画だけにした。注記・ファイル情報は `RenderCompare.svelte` が描く） |
+| ImageCompare | 並べる / 重ねる（スライダー）/ 差分強調 | 読込中、サイズ違いの画像、片側のみ（ファイルが無い） | Phase 2（第 3 段階で表示拡張の中へ移動。`src/lib/ext-ui/CompareImage.svelte`） |
 | ConflictItem | ファイル名、2版の情報（日時・PC 名）、2択ラジオ、「別名で残す」チェック、見比べる | 未選択、選択済み、片方削除型（残す / 削除を受け入れる） | MVP |
 | ImpactList | 影響ファイル一覧（いまの内容 → 戻した後） | 変更 / 取り除かれる / 復活する | MVP |
 | OwnerPicker | 保存先（個人 / Org）のアバター付き選択 | 選択可、作成権限なし（灰色＋理由） | MVP |
@@ -197,7 +197,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 ### S4 比較ビュー
 
 - 右ペインを全幅に広げるオーバーレイ（左ペインを隠す）。上部に時点選択 Select × 2 と入れ替えボタン、表示モード切替
-- 本体は DiffView または ImageCompare。差分箇所への移動ボタン（前へ / 次へ）を右上に置く
+- 本体は DiffView または ImageCompare（表示拡張の `compare` で描く。テキストの行差分・画像・docx・xlsx）。比べる表示が無いもの（pdf・pptx、テキストとして比べられないもの）は、過去と今を並べる。差分箇所への移動ボタン（前へ / 次へ）を右上に置く
 - 閉じるボタンと Esc で元のタブへ戻る
 
 ### S5 設定（S6〜S8 を含む）
@@ -311,7 +311,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 
 - **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
 - **3.2 Hikae 固有の部品 14 種のうち 11 種が実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、DiffView、ConflictItem、ImpactList、OwnerPicker。MVP の 27 種はすべて実装済み
-- **Phase 2 の AI（ModelCard、S7、保存欄の提案）は実装済み**（2026-10-10。ビルド・型・単体テストまで確認。Tauri の実機での見た目、実ネットワークでのダウンロード、llama-server の実起動、Ollama の実機は未確認）。ImageCompare は実装済み（`features/compare/ImageCompare.svelte`）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
+- **Phase 2 の AI（ModelCard、S7、保存欄の提案）は実装済み**（2026-10-10。ビルド・型・単体テストまで確認。Tauri の実機での見た目、実ネットワークでのダウンロード、llama-server の実起動、Ollama の実機は未確認）。ImageCompare は実装済み（第 3 段階で `src/lib/ext-ui/CompareImage.svelte` に移し、表示拡張の中で描く）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
 - 一覧にない部品として、一覧系のローディング用に Skeleton（5章）と、変更の種類を示す小さな ChangeBadge（「すべてのファイル」のツリー用）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
 - StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」「GitHub に接続していない」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、未接続、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
 
@@ -323,7 +323,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | S1 プロジェクト一覧 | `features/projects/ProjectsScreen.svelte`（`/`） | 実装済み。要対応のカードを先頭に寄せる |
 | S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
 | S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、履歴の各項目の `cloudSynced`（バックエンドの `cloud_synced`）から出す。保存先に接続していない、まだ何も上げていないときは出ない（design.md 4.6、12章） |
-| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）、画像比較、docx・xlsx の抽出差分（`OfficeCompare.svelte`） |
+| S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）、画像比較、docx・xlsx の差分（第 3 段階で表示拡張の `compare` に移行。本体は `features/extensions/CompareFrame.svelte`） |
 | S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」の 4 タブ。詳細設定は空。S6〜S8 は未実装（`features/ai` と `features/extensions` は空） |
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |

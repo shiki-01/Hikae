@@ -29,27 +29,32 @@ export interface DiffStatus {
 	total: number;
 }
 
-/** 変更差分の本体の種類。`pending` は、テキストかどうかの判定の結果がまだ無いこと */
-export type DiffBody = 'image' | 'docx' | 'xlsx' | 'side_by_side' | 'text' | 'pending';
+/** 比較の表示の振り分け。frame は拡張（compare）で描く、side は過去と今を並べる、pending は判定の途中 */
+export type CompareRoute = 'pending' | 'frame' | 'side';
+
+export interface CompareRouteInput {
+	kind: PreviewKind;
+	/** 表示の一覧の状態（起動中は 1 回取る） */
+	renderers: 'pending' | 'failed' | 'ready';
+	/** 比較に使える表示があるか（compareRendererFor の結果） */
+	hasCompareRenderer: boolean;
+	/** テキストの行差分の状態（kind が other のときだけ使う）。info はテキストとして比べられないもの */
+	text: { pending: boolean; diff: FileDiff | undefined };
+}
 
 /**
- * 変更差分の本体をどれで描くかを決める。
- * pdf・pptx・内容を表示できないその他のファイルは、過去と今を並べて見せる（side_by_side）。
- * その他のファイルは、行差分の結果が「情報のみ」（info）のときだけ side_by_side にし、テキストなら text にする。
+ * 比較の表示を決める（設計書 11.2）。
+ * - pdf・pptx は compare を宣言しないため、過去と今を並べる（side）
+ * - compare に使える表示が無い・一覧の取得に失敗したときも side
+ * - その他のファイルは、行差分の結果が情報のみ（info）なら side、テキストなら拡張で描く（frame）
  */
-export function diffBodyOf(kind: PreviewKind, textDiff: FileDiff | undefined): DiffBody {
-	switch (kind) {
-		case 'image':
-			return 'image';
-		case 'docx':
-			return 'docx';
-		case 'xlsx':
-			return 'xlsx';
-		case 'pdf':
-		case 'pptx':
-			return 'side_by_side';
-		case 'other':
-			if (textDiff === undefined) return 'pending';
-			return textDiff.kind === 'info' ? 'side_by_side' : 'text';
+export function compareRouteOf(input: CompareRouteInput): CompareRoute {
+	if (input.kind === 'pdf' || input.kind === 'pptx') return 'side';
+	if (input.renderers === 'pending') return 'pending';
+	if (input.renderers === 'failed' || !input.hasCompareRenderer) return 'side';
+	if (input.kind === 'other') {
+		if (input.text.pending) return 'pending';
+		if (input.text.diff?.kind === 'info') return 'side';
 	}
+	return 'frame';
 }

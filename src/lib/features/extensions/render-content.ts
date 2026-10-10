@@ -2,7 +2,7 @@
 
 import type { FilePreview } from '#lib/api/types.js';
 import { extOf, fileNameOf } from './renderer-select';
-import type { RenderContent, RenderMessage } from './renderer-protocol';
+import type { RenderContent, ViewRenderMessage } from './renderer-protocol';
 import { RENDERER_PROTOCOL_VERSION } from './renderer-protocol';
 
 /** 表示の準備の結果（`bytes` は画像・pdf の中身だけ） */
@@ -66,11 +66,11 @@ export function buildRenderMessage(
 	id: number,
 	path: string,
 	outcome: RenderOutcome
-): { message: RenderMessage; transfer: ArrayBuffer[] } {
+): { message: ViewRenderMessage; transfer: ArrayBuffer[] } {
 	const name = fileNameOf(path);
 	const ext = extOf(path);
 	const transfer: ArrayBuffer[] = [];
-	let message: RenderMessage;
+	let message: ViewRenderMessage;
 	if (outcome.state === 'ok') {
 		let content = outcome.content;
 		if (content.kind === 'bytes') {

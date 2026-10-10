@@ -4,7 +4,7 @@
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
-	import SheetGrid from '#lib/features/compare/SheetGrid.svelte';
+	import SheetGrid from './SheetGrid.svelte';
 	import { plainSheetView } from '#lib/features/compare/xlsx-grid.js';
 	import { isTruncatedPreview, unavailableMessageKey } from '#lib/features/compare/preview-view.js';
 	import type { PreviewUnavailableReason } from '#lib/api/types.js';

@@ -1,49 +1,28 @@
 <script lang="ts">
+	// テキストの行差分の表（並べる・重ねる）。表示拡張（iframe）の中で描く（設計書 11.7）。
+	// 差分の計算はホストが行い、ここでは受け取った行を描くだけ。
 	import { t } from '#lib/i18n/index.js';
-	import { formatBytes, formatDateTime } from '#lib/i18n/format.js';
-	import type { DiffRow, FileDiff } from '#lib/api/types.js';
-	import Button from './Button.svelte';
-	import Spinner from './Spinner.svelte';
-	import { annotateBlocks, pairRows } from './diff-rows';
+	import type { DiffRow } from '#lib/api/types.js';
+	import { annotateBlocks, pairRows } from '#lib/components/diff-rows.js';
 
 	interface Props {
-		diff: FileDiff | null;
-		loading?: boolean;
+		rows: DiffRow[];
 		mode?: 'split' | 'unified';
+		/** 強調する箇所の番号（この箇所へスクロールする） */
 		activeBlock?: number | null;
 		leftLabel?: string;
 		rightLabel?: string;
-		emptyText?: string;
-		/** ファイル情報の見出し。変更の無いファイルでは「変更はありません」にする */
-		infoText?: string;
-		onopen?: () => void;
-		class?: string;
 	}
 
 	let {
-		diff,
-		loading = false,
+		rows,
 		mode = 'split',
 		activeBlock = null,
 		leftLabel = '',
-		rightLabel = '',
-		emptyText = t('diff.select_file'),
-		infoText = t('diff.no_preview'),
-		onopen,
-		class: className = ''
+		rightLabel = ''
 	}: Props = $props();
 
 	let scroller = $state<HTMLDivElement>();
-	let spinnerVisible = $state(false);
-
-	$effect(() => {
-		if (!loading) {
-			spinnerVisible = false;
-			return;
-		}
-		const timer = setTimeout(() => (spinnerVisible = true), 300);
-		return () => clearTimeout(timer);
-	});
 
 	$effect(() => {
 		if (activeBlock === null || !scroller) return;
@@ -52,7 +31,6 @@
 			?.scrollIntoView({ block: 'center', behavior: 'auto' });
 	});
 
-	const rows = $derived(diff?.kind === 'text' ? diff.rows : []);
 	const split = $derived(pairRows(rows));
 	const unified = $derived(annotateBlocks(rows));
 	const splitBlocks = $derived(split.map((s) => s.block));
@@ -88,54 +66,10 @@
 
 <div
 	bind:this={scroller}
-	class={`flex:1 min-h:0 min-w:0 overflow:auto bg:bg ${className}`}
+	class="flex:1 min-h:0 min-w:0 overflow:auto bg:bg"
 	data-testid="diff-view"
 >
-	{#if loading && spinnerVisible}
-		<div class="flex align-items:center justify-content:center h:100%"><Spinner /></div>
-	{:else if loading}
-		<div class="h:100%"></div>
-	{:else if !diff}
-		<div class="flex align-items:center justify-content:center h:100% p:6">
-			<p class="m:0 type-body fg:fg-muted">{emptyText}</p>
-		</div>
-	{:else if diff.kind === 'identical'}
-		<div class="flex align-items:center justify-content:center h:100% p:6">
-			<p class="m:0 type-body fg:fg-muted">{t('diff.identical')}</p>
-		</div>
-	{:else if diff.kind === 'new_empty'}
-		<div class="flex align-items:center justify-content:center h:100% p:6">
-			<p class="m:0 type-body fg:fg-muted">{t('diff.new_empty')}</p>
-		</div>
-	{:else if diff.kind === 'too_large'}
-		<div
-			class="flex flex-direction:column gap:3 align-items:center justify-content:center h:100% p:6"
-		>
-			<p class="m:0 type-body">{t('diff.too_large', { size: formatBytes(diff.sizeBytes) })}</p>
-			{#if onopen}
-				<Button variant="secondary" onclick={onopen}>{t('file_action.open_default')}</Button>
-			{/if}
-		</div>
-	{:else if diff.kind === 'info'}
-		<div
-			class="flex flex-direction:column gap:4 align-items:center justify-content:center h:100% p:6"
-		>
-			<p class="m:0 type-body fg:fg-muted">{infoText}</p>
-			<dl class="m:0 grid grid-template-columns:auto|auto gap:2 type-body">
-				<dt class="fg:fg-muted">{t('diff.file_type')}</dt>
-				<dd class="m:0">{t(`file_kind.${diff.fileKind}`)}</dd>
-				<dt class="fg:fg-muted">{t('diff.file_size')}</dt>
-				<dd class="m:0">{formatBytes(diff.sizeBytes)}</dd>
-				{#if diff.modifiedAt}
-					<dt class="fg:fg-muted">{t('diff.modified_at')}</dt>
-					<dd class="m:0">{formatDateTime(diff.modifiedAt)}</dd>
-				{/if}
-			</dl>
-			{#if onopen}
-				<Button variant="secondary" onclick={onopen}>{t('file_action.open_default')}</Button>
-			{/if}
-		</div>
-	{:else if mode === 'split'}
+	{#if mode === 'split'}
 		<table class="w:100% border-collapse:collapse table-layout:fixed" aria-label={t('diff.table')}>
 			<colgroup>
 				<col class="w:48px" />

@@ -10,7 +10,7 @@
 		type CellTone,
 		type GridCell,
 		type XlsxSheetView
-	} from './xlsx-grid';
+	} from '#lib/features/compare/xlsx-grid.js';
 
 	interface Props {
 		/** 表示するシート（タブの順） */

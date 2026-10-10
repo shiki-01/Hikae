@@ -2,6 +2,7 @@
 // 文言は i18n のキーと引数で返し、組み立ては呼び出し側（t）が行う。
 
 import type { MessageKey } from '#lib/i18n/index.js';
+
 import type { CellChange, OfficeDiff } from '#lib/api/types.js';
 
 /** 比べる対象の Office 文書の種類 */
@@ -81,17 +82,4 @@ export function hasOfficeChanges(diff: OfficeDiff): boolean {
 		case 'unavailable':
 			return false;
 	}
-}
-
-/** 抽出できなかった理由ごとの文言のキー */
-const UNAVAILABLE_KEYS: Record<'too_large' | 'unsupported_format' | 'corrupt', MessageKey> = {
-	too_large: 'compare.office.unavailable.too_large',
-	unsupported_format: 'compare.office.unavailable.unsupported_format',
-	corrupt: 'compare.office.unavailable.corrupt'
-};
-
-export function unavailableMessageKey(
-	reason: 'too_large' | 'unsupported_format' | 'corrupt'
-): MessageKey {
-	return UNAVAILABLE_KEYS[reason];
 }

@@ -1,13 +1,13 @@
 <script lang="ts">
+	// 変更差分（比較）の本体の振り分け。描き方は表示拡張（compare）か、過去と今を並べる（SideBySide）かのどちらか。
+	// 差分の計算はホスト（Rust）、描画は拡張（設計書 11.2・11.7）。
 	import { untrack } from 'svelte';
-	import { t } from '#lib/i18n/index.js';
-	import DiffView from '#lib/components/DiffView.svelte';
-	import { countBlocks } from '#lib/components/diff-rows.js';
-	import ImageCompare from './ImageCompare.svelte';
-	import OfficeCompare from './OfficeCompare.svelte';
+	import Spinner from '#lib/components/Spinner.svelte';
+	import CompareFrame from '#lib/features/extensions/CompareFrame.svelte';
+	import { useRenderers } from '#lib/features/extensions/queries.js';
+	import { compareRendererFor, extOf } from '#lib/features/extensions/renderer-select.js';
 	import SideBySide from './SideBySide.svelte';
-	import XlsxDiff from './XlsxDiff.svelte';
-	import { diffBodyOf, previewKindOf, type DiffStatus } from './preview-kind';
+	import { compareRouteOf, previewKindOf, type DiffStatus } from './preview-kind';
 	import { useCompare } from './queries';
 
 	interface Props {
@@ -42,52 +42,59 @@
 	}: Props = $props();
 
 	const kind = $derived(previewKindOf(path));
-	// 行差分は、その他のファイル（種類が決まっていないもの）だけで使う。結果の種類で表示を決める
+	const renderers = useRenderers();
+	const renderer = $derived(
+		renderers.data ? compareRendererFor(renderers.data, extOf(path)) : null
+	);
+	// テキストの行差分は、情報のみ（並べる）かの判定に使う。拡張で描くときは CompareFrame と同じ問い合わせを使う
 	const text = useCompare(
 		() => projectId,
 		() => path,
 		() => from,
 		() => to,
-		() => kind === 'other'
+		() => kind === 'other' && renderer !== null
 	);
-	const body = $derived(diffBodyOf(kind, text.data));
-	const blockTotal = $derived(text.data?.kind === 'text' ? countBlocks(text.data.rows) : 0);
+	const route = $derived(
+		compareRouteOf({
+			kind,
+			renderers: renderers.isPending ? 'pending' : renderers.isError ? 'failed' : 'ready',
+			hasCompareRenderer: renderer !== null,
+			text: { pending: text.isPending, diff: text.data }
+		})
+	);
 
+	// 並べて比べるときと判定の途中は、行差分の操作を出さない（拡張で描くときは CompareFrame が知らせる）
 	$effect(() => {
-		// 親の関数（onstatus）の変化では再実行しない（親の更新がまた知らせを呼ぶ循環を避ける）
-		const status: DiffStatus = {
-			textual: body === 'text',
-			ready: body !== 'pending',
-			total: blockTotal
-		};
+		if (route === 'frame') return;
+		const status: DiffStatus = { textual: false, ready: route === 'side', total: 0 };
 		untrack(() => onstatus?.(status));
 	});
 </script>
 
-{#if body === 'image'}
-	<!-- 時点や対象が変わったら作り直す（画像の読み込み状態を持つため） -->
-	{#key `${path}|${from}|${to}`}
-		<ImageCompare {projectId} {path} {from} {to} leftLabel={fromLabel} rightLabel={toLabel} />
-	{/key}
-{:else if body === 'docx'}
-	<OfficeCompare {projectId} {path} {from} {to} {onopen} />
-{:else if body === 'xlsx'}
-	{#key `${path}|${from}|${to}`}
-		<XlsxDiff {projectId} {path} {from} {to} {onopen} />
-	{/key}
-{:else if body === 'side_by_side'}
+{#if route === 'pending'}
+	<div class="flex align-items:center justify-content:center flex:1 min-h:0">
+		<Spinner />
+	</div>
+{:else if route === 'side'}
+	<!-- 時点やファイルが変わったら作り直す（表示の失敗の状態を持つため） -->
 	{#key `${path}|${from}|${to}`}
 		<SideBySide {projectId} {path} {from} {to} {fromLabel} {toLabel} {onopen} />
 	{/key}
-{:else}
-	<DiffView
-		diff={text.data ?? null}
-		loading={text.isPending}
-		{mode}
-		{activeBlock}
-		leftLabel={fromLabel}
-		rightLabel={toLabel}
-		emptyText={text.isError ? t('compare.office.failed') : undefined}
-		{onopen}
-	/>
+{:else if renderer}
+	<!-- 時点やファイルが変わったら作り直す（iframe の表示の番号と状態を持つため） -->
+	{#key `${path}|${from}|${to}`}
+		<CompareFrame
+			{projectId}
+			{path}
+			{from}
+			{to}
+			{fromLabel}
+			{toLabel}
+			{renderer}
+			{mode}
+			{activeBlock}
+			{onstatus}
+			{onopen}
+		/>
+	{/key}
 {/if}

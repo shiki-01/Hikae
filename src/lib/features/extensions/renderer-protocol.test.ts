@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseRenderMessage, parseRendererEvent } from './renderer-protocol';
+import { parseOptionsMessage, parseRenderMessage, parseRendererEvent } from './renderer-protocol';
 
 describe('parseRendererEvent（iframe → ホスト）', () => {
 	it('既知の種類で、型の合うものだけを受理する', () => {
@@ -72,5 +72,76 @@ describe('parseRenderMessage（ホスト → iframe）', () => {
 
 	it('ready など別の種類は受理しない', () => {
 		expect(parseRenderMessage({ v: 1, type: 'ready' })).toBeNull();
+	});
+});
+
+describe('parseRenderMessage（比較の表示）', () => {
+	const options = { viewMode: 'split', activeBlock: 0 };
+	const side = (label: string, state = 'ok') => ({
+		label,
+		file: { name: 'a.txt', ext: 'txt', state }
+	});
+	const base = {
+		v: 1,
+		type: 'render',
+		id: 4,
+		mode: 'compare',
+		left: side('過去'),
+		right: side('今'),
+		options
+	};
+
+	it('2 時点の形が合うものを受理する（差分の有無は問わない）', () => {
+		expect(parseRenderMessage(base)).toEqual(base);
+		const diff = { kind: 'lines', rows: [] };
+		expect(parseRenderMessage({ ...base, diff })).toEqual({ ...base, diff });
+		expect(
+			parseRenderMessage({ ...base, diff: { kind: 'unavailable', reason: 'binary' } })
+		).not.toBeNull();
+	});
+
+	it('差分の種類が未知、options が無い・形が違うものは拒否する', () => {
+		expect(parseRenderMessage({ ...base, diff: { kind: 'html' } })).toBeNull();
+		expect(parseRenderMessage({ ...base, options: undefined })).toBeNull();
+		expect(
+			parseRenderMessage({ ...base, options: { viewMode: 'grid', activeBlock: null } })
+		).toBeNull();
+		expect(
+			parseRenderMessage({ ...base, options: { viewMode: 'split', activeBlock: -1 } })
+		).toBeNull();
+		expect(parseRenderMessage({ ...base, left: undefined })).toBeNull();
+		expect(parseRenderMessage({ ...base, right: { label: '今' } })).toBeNull();
+	});
+
+	it('状態が未知の側は拒否する', () => {
+		expect(parseRenderMessage({ ...base, left: side('過去', 'broken') })).toBeNull();
+	});
+});
+
+describe('parseOptionsMessage（ホスト → iframe の表示の切り替え）', () => {
+	it('表示方法と箇所の形が合うものを受理する', () => {
+		const message = {
+			v: 1,
+			type: 'options',
+			id: 4,
+			options: { viewMode: 'unified', activeBlock: null }
+		};
+		expect(parseOptionsMessage(message)).toEqual(message);
+	});
+
+	it('版・種類・番号・形が合わないものは無視する', () => {
+		const options = { viewMode: 'split', activeBlock: 2 };
+		expect(parseOptionsMessage({ v: 2, type: 'options', id: 4, options })).toBeNull();
+		expect(parseOptionsMessage({ v: 1, type: 'render', id: 4, options })).toBeNull();
+		expect(parseOptionsMessage({ v: 1, type: 'options', id: '4', options })).toBeNull();
+		expect(
+			parseOptionsMessage({
+				v: 1,
+				type: 'options',
+				id: 4,
+				options: { viewMode: 'split', activeBlock: '2' }
+			})
+		).toBeNull();
+		expect(parseOptionsMessage(null)).toBeNull();
 	});
 });

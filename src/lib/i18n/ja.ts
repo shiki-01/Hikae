@@ -244,9 +244,7 @@ const messages = {
 	'timeline.restore_all': 'この時点の状態にまるごと戻す',
 	'timeline.empty_message': '保存するたびにここに並びます',
 
-	'diff.select_file': 'ファイルを選んでください',
 	'diff.identical': 'この2つの時点で内容は同じです',
-	'diff.no_preview': 'このファイルは内容を表示できません',
 	'diff.too_large': 'ファイルが大きいため（{size}）、内容の表示を省略しました',
 	'diff.new_empty': '空の新しいファイルです。内容を書き込むと、ここに表示されます',
 	'diff.table': '変更内容の比較',
@@ -300,9 +298,6 @@ const messages = {
 	'compare.office.cell_changed': '{ref}: {before} → {after}',
 	'compare.office.cell_added': '{ref}: 追加: {value}',
 	'compare.office.cell_removed': '{ref}: 削除: {value}',
-	'compare.office.unavailable.too_large': 'ファイルが大きいため、内容を比べられませんでした。',
-	'compare.office.unavailable.unsupported_format': 'この形式の内容は比べられませんでした。',
-	'compare.office.unavailable.corrupt': 'ファイルが壊れているため、内容を比べられませんでした。',
 	'compare.office.unavailable.safe':
 		'ファイルは変更されていません。ファイルの情報を下に表示します。',
 	'compare.office.failed': '内容を読み込めませんでした。ファイルは変更されていません。',

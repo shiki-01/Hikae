@@ -5,8 +5,7 @@ import {
 	describeCellChange,
 	groupCellChanges,
 	hasOfficeChanges,
-	officeKindOf,
-	unavailableMessageKey
+	officeKindOf
 } from './office-diff';
 
 describe('officeKindOf', () => {
@@ -115,13 +114,5 @@ describe('hasOfficeChanges', () => {
 
 	it('抽出できなかったものは、違いの有無を判定しない（false）', () => {
 		expect(hasOfficeChanges({ kind: 'unavailable', reason: 'corrupt' })).toBe(false);
-	});
-});
-
-describe('unavailableMessageKey', () => {
-	it('理由ごとに、定義済みの文言のキーを返す', () => {
-		for (const reason of ['too_large', 'unsupported_format', 'corrupt'] as const) {
-			expect(t(unavailableMessageKey(reason)).length).toBeGreaterThan(0);
-		}
 	});
 });

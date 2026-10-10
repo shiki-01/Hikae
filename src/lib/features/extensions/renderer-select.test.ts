@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { RendererInfo } from '#lib/api/types.js';
-import { extOf, extUrl, fileNameOf, rendererFor } from './renderer-select';
+import { compareRendererFor, extOf, extUrl, fileNameOf, rendererFor } from './renderer-select';
 
 const renderers: RendererInfo[] = [
 	{
@@ -55,6 +55,42 @@ describe('rendererFor', () => {
 
 	it('宣言が無ければ null', () => {
 		expect(rendererFor([], 'png')).toBeNull();
+	});
+});
+
+describe('compareRendererFor', () => {
+	const viewOnlyPdf: RendererInfo = {
+		extensionId: 'hikae.builtin.preview',
+		entryUrlPath: 'hikae.builtin.preview/ui/index.html',
+		fileTypes: ['pdf'],
+		modes: ['view']
+	};
+	const withCompare: RendererInfo = {
+		extensionId: 'hikae.builtin.preview',
+		entryUrlPath: 'hikae.builtin.preview/ui/index.html',
+		fileTypes: ['png'],
+		modes: ['view', 'compare']
+	};
+	const fallback: RendererInfo = {
+		extensionId: 'hikae.builtin.preview',
+		entryUrlPath: 'hikae.builtin.preview/ui/index.html',
+		fileTypes: ['*'],
+		modes: ['view', 'compare']
+	};
+	const all = [viewOnlyPdf, withCompare, fallback];
+
+	it('compare を宣言する拡張子の表示を選ぶ', () => {
+		expect(compareRendererFor(all, 'png')).toBe(withCompare);
+	});
+
+	it('拡張子の宣言が compare を持たないときは、`*` に落とさず null（pdf は並べて比べる）', () => {
+		expect(compareRendererFor(all, 'pdf')).toBeNull();
+	});
+
+	it('宣言の無い拡張子は `*` の compare を使う。`*` が view だけなら null', () => {
+		expect(compareRendererFor(all, 'txt')).toBe(fallback);
+		expect(compareRendererFor([viewOnlyPdf], 'txt')).toBeNull();
+		expect(compareRendererFor([], 'txt')).toBeNull();
 	});
 });
 
