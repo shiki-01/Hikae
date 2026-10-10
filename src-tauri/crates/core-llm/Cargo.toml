@@ -7,7 +7,26 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 他の core-* には依存しない（設計書 8.3）。core-preview は設計どおり宣言だけ残す
 core-preview = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# core-github と同じ版・TLS（rustls）に揃える
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# サイドカーの起動・待機・監視、ダウンロードの非同期処理に必要な機能だけを有効にする
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs", "io-util", "net", "process"] }
+tokio-util = { version = "0.7" }
+# モデルファイルの SHA-256 検証
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+# テスト用の偽 llama-server。実機の llama-server の代わりに、サイドカー制御のテストで起動する
+[[bin]]
+name = "fake-llama-server"
+path = "src/bin/fake_llama_server.rs"
 
 [lints]
 workspace = true

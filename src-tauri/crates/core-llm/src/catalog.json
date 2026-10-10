@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "gemma-4-e2b-it-q4_k_m",
+      "display_name": "Gemma 4 E2B it（Q4_K_M）",
+      "stage": 2,
+      "file_name": "gemma-4-E2B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+      "size_bytes": 3106738272,
+      "license_name": "Apache License 2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_total_memory_bytes": 7516192768,
+      "recommended": true
+    },
+    {
+      "id": "qwen3-4b-instruct-2507-q4_k_m",
+      "display_name": "Qwen3-4B-Instruct-2507（Q4_K_M）",
+      "stage": 2,
+      "file_name": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+      "size_bytes": 2497281120,
+      "license_name": "Apache License 2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_total_memory_bytes": 7516192768,
+      "recommended": false
+    }
+  ]
+}
