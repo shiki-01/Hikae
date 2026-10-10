@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "img-src 'self' app-blob: http://app-blob.localhost https://avatars.githubusercontent.com"
+      "csp": "img-src 'self' app-blob: http://app-blob.localhost https://avatars.githubusercontent.com; frame-src ext: http://ext.localhost"
     }
   },
   "bundle": {

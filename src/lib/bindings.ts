@@ -210,6 +210,8 @@ export const commands = {
 	compareOffice: (id: string, from: string, to: string, path: string) => typedError<OfficeDiff, AppError>(__TAURI_INVOKE("compare_office", { id, from, to, path })),
 	/**  指定の時点のファイルの内容を返す（読み取りのみ） */
 	previewFile: (id: string, rev: string, path: string) => typedError<FilePreview, AppError>(__TAURI_INVOKE("preview_file", { id, rev, path })),
+	/**  表示拡張の一覧（読み取りのみ。登録の順）。画面は拡張子と方法から、iframe の入口を選ぶ（設計書 11 章） */
+	listRenderers: () => __TAURI_INVOKE<RendererView[]>("list_renderers"),
 	/**
 	 *  中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
 	 * 
@@ -1132,6 +1134,17 @@ export type RemoteRequest = {
 	 *  空でない保存先、書き込めない保存先には接続しない（バックエンドが改めて確かめる）
 	 */
 	adopt_existing: boolean,
+};
+
+/**  表示拡張 1 件（画面が iframe を作るための情報。パスは拡張フォルダからの相対） */
+export type RendererView = {
+	extensionId: string,
+	/**  `ext://localhost/` の後ろに続くパス（`<拡張 ID>/<入口>`）。URL にする前に、セグメントごとにエンコードする */
+	entryUrlPath: string,
+	/**  拡張子（`.` を除いた英小文字）。全部の拡張子を表すときは `*` の 1 件だけ */
+	fileTypes: string[],
+	/**  対応する方法（`view` / `compare`） */
+	modes: string[],
 };
 
 /**  全体を元に戻した結果 */

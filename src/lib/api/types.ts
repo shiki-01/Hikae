@@ -219,6 +219,18 @@ export type FilePreview =
 	| { kind: 'unavailable'; reason: PreviewUnavailableReason }
 	| { kind: 'not_found' };
 
+/**
+ * 表示拡張（renderer）の 1 件。`entryUrlPath` は `ext://localhost/` の後ろに続くパス（`<拡張 ID>/<入口>`）。
+ * `fileTypes` は拡張子（`.` を除いた英小文字）。全部の拡張子は `*`（最も低い優先度）
+ */
+export interface RendererInfo {
+	extensionId: string;
+	entryUrlPath: string;
+	fileTypes: string[];
+	/** `view` / `compare` */
+	modes: string[];
+}
+
 export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 
 export interface ConflictFile {
@@ -688,6 +700,8 @@ export interface ProjectApi {
 	compareOffice(projectId: string, path: string, fromId: string, toId: string): Promise<OfficeDiff>;
 	/** 指定の時点（`current`・`work`・`this`・`cloud`・短縮 ID）のファイルの内容を返す（読み取りのみ） */
 	previewFile(projectId: string, rev: string, path: string): Promise<FilePreview>;
+	/** 登録済みの表示拡張（iframe の入口）の一覧。読み取りのみ（設計書 11 章） */
+	listRenderers(): Promise<RendererInfo[]>;
 	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */
 	listProjectTree(projectId: string): Promise<ProjectTree>;
 

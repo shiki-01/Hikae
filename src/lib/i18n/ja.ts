@@ -328,6 +328,10 @@ const messages = {
 	'preview.unavailable.corrupt': 'ファイルを読み取れませんでした。',
 	'preview.unavailable.binary': 'この種類のファイルは中身を表示できません。',
 	'preview.unavailable.safe': 'ファイルは変更されていません。',
+	// 表示拡張（iframe）の失敗（設計書 5章 E20 の文言。拡張の名前は出さない）
+	'preview.extension.failed':
+		'この種類のファイルは、拡張機能で表示できませんでした。ファイルには影響しません。既定のアプリで開けます。',
+	'preview.extension.open': 'ファイルを開く',
 	'grid.tabs': 'シートの一覧',
 	'grid.table': 'シート「{name}」の内容',
 	'grid.badge_added': '追加',

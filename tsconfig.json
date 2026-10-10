@@ -1,7 +1,22 @@
 {
 	"extends": "$app/tsconfig",
 	"compilerOptions": {
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true
 	},
+	"include": [
+		".svelte-kit/ambient.d.ts",
+		".svelte-kit/env.d.ts",
+		".svelte-kit/non-ambient.d.ts",
+		".svelte-kit/types/**/$types.d.ts",
+		"vite.config.ts",
+		"vite.shared.ts",
+		"vite.ext.config.ts",
+		"vitest.config.ts",
+		"src/**/*.js",
+		"src/**/*.ts",
+		"src/**/*.svelte",
+		"extensions-ui/**/*.ts"
+	],
 	"exclude": ["build", "src-tauri", "scripts", "node_modules"]
 }

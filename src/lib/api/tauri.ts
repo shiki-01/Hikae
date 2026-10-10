@@ -78,6 +78,7 @@ import type {
 	RemoteOutcome,
 	RestoreResult,
 	RestoreScope,
+	RendererInfo,
 	SaveOutcome,
 	SavePoint,
 	SizeChoice
@@ -333,6 +334,10 @@ export const tauriApi: ProjectApi = {
 
 	async previewFile(projectId: string, rev: string, path: string): Promise<FilePreview> {
 		return mapFilePreview(await unwrap(commands.previewFile(projectId, rev, path)));
+	},
+	async listRenderers(): Promise<RendererInfo[]> {
+		// 読み取りのみ。失敗しない（拡張が登録できなかったときは空の一覧）
+		return await commands.listRenderers();
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

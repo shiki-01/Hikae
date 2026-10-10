@@ -5,6 +5,7 @@
 // - .wasm はリポジトリに入れない（.gitignore）。extension.json は手で書いてリポジトリに入れる
 // - wasm32-wasip1 の標準ライブラリは src-tauri/rust-toolchain.toml の targets により rustup が取得する
 // - CARGO_TARGET_DIR が設定されていれば、その下の成果物を使う
+// - 表示拡張（hikae.builtin.preview）の UI を vite.ext.config.ts でビルドし、ui/ に置く（wasm の後）
 //
 // 使い方: node scripts/build-extensions.mjs
 
@@ -20,6 +21,8 @@ const BINS = ['extract-docx', 'extract-xlsx', 'extract-pptx'];
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tauriDir = join(root, 'src-tauri');
 const extDir = join(tauriDir, 'app', 'resources', 'extensions', 'hikae.builtin.office');
+// 表示拡張（hikae.builtin.preview）の UI の出力先（vite.ext.config.ts の outDir と同じ）
+const uiDir = join(tauriDir, 'app', 'resources', 'extensions', 'hikae.builtin.preview', 'ui');
 
 function log(message) {
 	console.log(`[build-extensions] ${message}`);
@@ -72,3 +75,19 @@ for (const bin of BINS) {
 	const size = (await stat(dest)).size;
 	log(`${bin}.wasm を配置しました（${(size / 1024).toFixed(0)} KiB）`);
 }
+
+// 表示拡張（iframe の UI）。vite.ext.config.ts で extensions-ui/hikae.builtin.preview をビルドし、
+// 拡張フォルダの ui/ に置く（設計書 11 章）。manifest の renderers の入口（ui/index.html）が無いと登録されない
+log('表示拡張の UI をビルドします');
+try {
+	const { build } = await import('vite');
+	await build({ configFile: join(root, 'vite.ext.config.ts'), logLevel: 'warn' });
+} catch {
+	fail('表示拡張の UI のビルドに失敗しました（pnpm install の後に実行してください）');
+}
+try {
+	await stat(join(uiDir, 'index.html'));
+} catch {
+	fail('表示拡張の UI（ui/index.html）が生成されていません');
+}
+log('表示拡張の UI を配置しました');

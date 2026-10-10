@@ -45,3 +45,6 @@ $RECYCLE.BIN/
 
 # 組み込みの拡張の wasm（scripts/build-extensions.mjs が生成する。バイナリはコミットしない。extension.json は入れる）
 /src-tauri/app/resources/extensions/*/*.wasm
+
+# 表示拡張（iframe の UI）のビルド出力（scripts/build-extensions.mjs が vite.ext.config.ts で生成する）
+/src-tauri/app/resources/extensions/*/ui/

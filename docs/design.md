@@ -489,7 +489,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E17 | git 実行ファイルが見つからない・動かない | 起動時の起動確認（バージョンは調べず、「古い」の検出は実装しない。5.2） | アプリの構成ファイルが不足しています。再インストールしてください。（実装の文言は 5.2） | ダウンロードページ（実装は「もう一度確認する」） |
 | E18 | ファイル名の問題（Windows で使えない文字、大文字小文字のみの違い） | 取り込み時のパス検査 | 別の PC で作られた「Aux.txt」は、Windows では扱えない名前のため取り込めません。 | 詳細 |
 | E19 | LLM モデルの DL 失敗・メモリ不足 | DL エラー、推論プロセスの異常終了 | AI によるメモの提案を使えませんでした。通常の提案に切り替えます。 | 閉じる / AI 設定 |
-| E20 | 拡張機能のエラー | 拡張ホストの例外・タイムアウト | 「（拡張機能名）」でこのファイルを表示できませんでした。通常の表示に切り替えます。 | 閉じる / 拡張機能を無効にする |
+| E20 | 拡張機能のエラー | 表示拡張が 5 秒以内に準備できない、または失敗を通知した（11.7） | この種類のファイルは、拡張機能で表示できませんでした。ファイルには影響しません。既定のアプリで開けます。 | ファイルを開く（既定のアプリ） |
 
 - E03・E04 は自動再試行し、成功時は控えめなトーストのみ表示する。実装の再試行間隔は 5.1 に記す（当初案の「30秒、2分、10分」とは異なる）
 - E10 の復旧は「作業フォルダを `<名前>_退避_<日時>` に移動 → `git clone` → 退避した中の未保存変更をコピーし直す」の順で行い、退避フォルダは自動削除しない
@@ -541,7 +541,8 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E14 | `index_locked` / `index_lock_stale`。状態を変える操作の前の検査と、git の標準エラー出力。二重起動は `tauri-plugin-single-instance` で防ぐ。5.2 |
 | E17 | `app_health`（起動直後の画面）と `git_unavailable`（実行中に git を起動できなくなったとき）。5.2 |
 | E18 | `unsupported_file_names`。取り込みの fetch 後・merge 前（Windows のみ）。自動の取り込みでは `NeedsAttention`（理由 `unsupported-file-names`）。5.2 |
-| E19、E20 | Phase 2 / Phase 3 の機能のため未実装 |
+| E19 | Phase 2 の機能のため未実装 |
+| E20 | 表示拡張の失敗は実装済み（第 2 段階）。拡張の一覧の画面の失敗は Phase 3 の機能のため未実装 |
 
 **次の行動ボタンと自動回復（実装）**: 実際のエラーはバックエンドのコードで届くため、ボタンの種類は `error-view.ts` の対応表（コード → 種類）で決める。対応表に無いコードは「閉じる」だけ。
 
@@ -1086,7 +1087,9 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - `entry` は `/` 区切りの相対パスだけ。空の要素、`.`、`..`、先頭の `/`、`\`、`:` を含むものは拒否する。登録時には、実体が拡張フォルダの中にあることも確かめる（リンクで外へ出るものは拒否）
 - マニフェストは 64 KiB まで、wasm は 1 ファイル 32 MiB まで
 - `output` は `paragraphs`・`cells`・`pages` のいずれか。抽出器の出力の形が宣言と違えば失敗（`ExtractorFailed`）
-- 未知のキーは無視する。`renderers` は検証だけ行い、使うのは第 2 段階
+- 未知のキーは無視する
+- `renderers`（表示。第 2 段階で実装）: `fileTypes` は `.` で始まる拡張子の並び、または `["*"]` だけ（全部の拡張子。最も低い優先度）。`*` を他と並べることは拒否する（`InvalidFileType`）。`modes` は必須で、`view`・`compare` の空でない・重複のない並び（それ以外は `InvalidMode`）。`entry` は抽出器と同じ相対パスの検査に加え、登録時に実体（拡張フォルダの中。リンクを含む）があることを確かめる（`EntryMissing`）。同じ拡張子・同じ方法を 2 つの宣言が扱うと拒否する（`*` も同じ扱い。`FileTypeConflict`）
+- 表示の選択（`renderer_for`）は、同じ拡張子の宣言を `*` より優先する。`compare` は第 3 段階で使う（今は検証と登録まで）
 
 ### 11.3 段階的な公開
 
@@ -1114,7 +1117,34 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 
 **出力の形式**: 成功は stdout の JSON（`output` で形式を示す）。失敗は終了コード 1 と `{"error": "<語彙>"}`。語彙は `too-large`・`unsupported-format`・`encrypted`・`corrupt` の 4 つ。zip ではない入力と、対応しない内容は、画面の分類と同じく `unsupported-format` にまとめる。
 
-**未実装（次の段階）**: 表示拡張（`contributes.renderers` の実行と iframe、CSP）、拡張の一覧の画面、利用者フォルダの追加（Phase 3 の開発者モード）。
+**表示（第 2 段階、view のみ。2026-10-11）**: 組み込みの表示（画像、pdf、docx、xlsx、pptx、テキストとその他）は、組み込みの拡張 `hikae.builtin.preview`（`contributes.renderers`）の表示拡張として描く。ホストは拡張子で入口を選び（`list_renderers`）、`sandbox="allow-scripts"` の iframe を `ext://` から開いて、`postMessage` で内容を渡す（6 章・7 章 の節）。表示拡張の UI は `extensions-ui/hikae.builtin.preview/` を `vite.ext.config.ts` でビルドし、`scripts/build-extensions.mjs` が拡張フォルダの `ui/` に置く（出力は `.gitignore`）。比較（`compare`）の表示は、第 3 段階で同じ境界に載せる。
+
+**未実装（次の段階）**: 比較（`compare`）の表示拡張（第 3 段階）、拡張の一覧の画面、利用者フォルダの追加（Phase 3 の開発者モード）。
+
+### 11.6 `ext://` の配信
+
+- URL は `ext://localhost/<拡張 ID>/<URL エンコードした相対パス>`。Windows の WebView は `http://ext.localhost/...` として読むため、両方のホストを受け付ける
+- 配信するのは、登録済みの拡張のフォルダの中の、許可リストの拡張子の通常のファイルだけ。読み取りのみで、作業フォルダ・リポジトリ・設定には触れない
+- パスの解決は `core-preview` の純関数で行う。(1) パーセントデコード（`%` の後ろが 16 進 2 桁でないもの、デコード後が UTF-8 でないものは拒否）、(2) 字句の検査（`..`・`.`・空の要素・先頭の `/`・`\`・`:`・NUL・1,024 バイト超を拒否。デコード後の `%2e%2e` や `%2f` も同じ扱い）、(3) 実体（シンボリックリンクを含む）が拡張フォルダの中にあることを要素単位で確かめる（外へ出るものは拒否）。無い・通常のファイルでないものは 404
+- 許可リスト（拡張子 → Content-Type）: `html`、`js`、`mjs`、`css`、`json`、`woff2`、`png`、`svg`、`txt`。それ以外（`wasm` を含む）は 403。大きさの上限は 16 MiB（超えると 413）。登録されていない拡張は 404。GET 以外は 405。形式が無い要求は 400
+- 応答ヘッダ（すべての応答に付ける）: `Content-Type`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-cache`、`Access-Control-Allow-Origin: *`（opaque origin の iframe から module script を読むため）、`Content-Security-Policy: default-src 'none'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; frame-src 'none'; worker-src blob:; base-uri 'none'; form-action 'none'`
+- アプリ側の CSP（`tauri.conf.json`）: `img-src 'self' app-blob: http://app-blob.localhost https://avatars.githubusercontent.com; frame-src ext: http://ext.localhost`
+- エラーは本文の無い応答だけ。パス・内容をログにも応答にも出さない
+
+### 11.7 表示拡張との通信（プロトコル v1）
+
+- iframe の属性: `sandbox="allow-scripts"`（`allow-same-origin`・`allow-popups`・`allow-forms`・`allow-top-navigation` は付けない）、`referrerpolicy="no-referrer"`、`title`（支援技術向けの名前）、`loading="eager"`
+- 入口は、`list_renderers` の結果から拡張子（同じ拡張子の宣言を優先し、無ければ `*`）と方法（`view`）で選ぶ
+- 手順: iframe を作る → 拡張が `ready` を送る（1 回）→ ホストが内容の揃った `render` を送る → 拡張が描く。`ready` が 5 秒（`RENDERER_READY_TIMEOUT_MS`）以内に来ない、または送った表示の番号（`id`）と同じ `error` を受けたら、拡張の失敗として E20 を出し、iframe を外す。`open` は「ファイルを開く」の要求で、ホストは既定のアプリで開く
+- ホスト → iframe: `{ v: 1, type: "render", id: number, mode: "view", file: { name: string, ext: string, state: "ok" | "missing" | "unavailable", reason?: string }, content?: Content }`。`content` は `state` が `ok` のときだけ。`Content` は `{ kind: "bytes", mime: string, data: ArrayBuffer }`（画像・pdf。Transferable）、`{ kind: "text", text, truncated }`、`{ kind: "paragraphs", paragraphs, truncated }`（docx）、`{ kind: "cells", sheets }`（xlsx。シートの形は `PreviewSheet`）、`{ kind: "pages", pages, truncated }`（pptx。`pages` は `{ index, paragraphs }` の並び）
+- iframe → ホスト: `{ v: 1, type: "ready" }`、`{ v: 1, type: "error", id: number, code: "render-failed" | "unsupported" }`、`{ v: 1, type: "open" }`
+- 受け取る側の検査: `event.source` が iframe の窓と一致すること（opaque origin のため origin は `"null"` になり確かめられない）、`v === 1`、`type` が既知、フィールドの型が合うこと。合わないものは無視する。純関数 `parseRendererEvent`（`src/lib/features/extensions/renderer-protocol.ts`）で検査し、テストで確かめる
+- ホストが送るのは表示の対象だけ（ファイル名・拡張子・内容・状態）。プロジェクトの ID・パス・時点・トークン・設定は送らない。`postMessage` の送信先は `"*"`（opaque origin のため）
+- 内容の描画は、表示拡張の中で既存の表示部品（pdf.js の表示、シートの表、テキスト・段落・スライドの一覧）で行う。ホストは描かない。画像と pdf の中身は、ホストが `app-blob` から読んで渡す（iframe は `connect-src 'none'` のため読まない）
+- pdf.js のワーカーは作らず、同じスレッドで処理する（pdf.js の `globalThis.pdfjsWorker`）。opaque origin の文書から作る blob URL のワーカーは Chromium が拒否するため（headless Chrome で確認）
+- 既知の制限: pdf.js は CMap や標準フォントを外部から取得する。`connect-src 'none'` のため取得できず、埋め込みのない CJK フォントの PDF は文字が正しく出ない可能性がある（未確認）
+
+## 12. 開発ロードマップ
 
 **計測**（Windows、2026-10-10）: wasm の大きさ（release。`opt-level = "s"`、LTO、strip）は docx 363 KiB、xlsx 505 KiB、pptx 389 KiB。wasm の作成（release）は約 16 秒。`Cargo.lock` には 79 件の crate が加わった（うち `wat` とその依存は開発専用）。wasmtime 系の crate を作り直すのに debug で約 41 秒。app の debug 実行ファイルは 37.9 MB から 68.3 MB になった（比較元は別のビルドで、条件は完全には揃っていない参考値）。app の release の大きさは未計測。起動時の登録（3 つの wasm のコンパイル）は、release で 0.79 秒、debug で 1.0 秒。debug では cranelift の crate を `[profile.dev.package]` で最適化しており、最適化しないと約 23 秒かかった。release のテスト用ビルド（LTO、wasmtime を含む初回）は約 10 分 37 秒。
 

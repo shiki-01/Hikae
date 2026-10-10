@@ -6,6 +6,7 @@
 // 抽出器はファイルシステム・ネットワーク・環境変数・引数・時計に触れられない（host で何も与えない）。
 // 入力は stdin のバイト列、出力は stdout の JSON。
 
+pub mod asset;
 pub mod output;
 
 #[cfg(feature = "host")]

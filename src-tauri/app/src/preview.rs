@@ -113,6 +113,36 @@ pub async fn preview_file(
     .await
 }
 
+/// 表示拡張の一覧（読み取りのみ。登録の順）。画面は拡張子と方法から、iframe の入口を選ぶ（設計書 11 章）
+#[tauri::command]
+#[specta::specta]
+pub fn list_renderers(state: tauri::State<'_, AppState>) -> Vec<RendererView> {
+    state
+        .extensions
+        .renderers()
+        .iter()
+        .map(|r| RendererView {
+            extension_id: r.extension_id.clone(),
+            entry_url_path: format!("{}/{}", r.extension_id, r.entry),
+            file_types: r.file_types.clone(),
+            modes: r.modes.iter().map(|m| m.as_str().to_string()).collect(),
+        })
+        .collect()
+}
+
+/// 表示拡張 1 件（画面が iframe を作るための情報。パスは拡張フォルダからの相対）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererView {
+    pub extension_id: String,
+    /// `ext://localhost/` の後ろに続くパス（`<拡張 ID>/<入口>`）。URL にする前に、セグメントごとにエンコードする
+    pub entry_url_path: String,
+    /// 拡張子（`.` を除いた英小文字）。全部の拡張子を表すときは `*` の 1 件だけ
+    pub file_types: Vec<String>,
+    /// 対応する方法（`view` / `compare`）
+    pub modes: Vec<String>,
+}
+
 /// 種類ごとの読み取り方
 enum Kind {
     /// 抽出する Office 文書

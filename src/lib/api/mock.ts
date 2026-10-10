@@ -15,6 +15,7 @@ import type {
 	FilePreview,
 	PreviewSheet,
 	PreviewSlide,
+	RendererInfo,
 	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
@@ -1051,6 +1052,12 @@ export const mockApi: ProjectApi = {
 			],
 			truncated: 0
 		};
+	},
+
+	/** ブラウザ（モック）では拡張（ext://）が配信されないため、表示の入口は無い（画面は拡張の失敗の表示になる） */
+	async listRenderers(): Promise<RendererInfo[]> {
+		await sleep(WAIT_SHORT);
+		return [];
 	},
 
 	async previewFile(projectId: string, rev: string, path: string): Promise<FilePreview> {

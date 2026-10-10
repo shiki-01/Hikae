@@ -8,11 +8,13 @@
 // - 権限: 抽出器に与えるのは stdin・stdout・stderr だけ（runtime.rs）
 
 mod manifest;
+#[cfg(test)]
+mod renderer_tests;
 mod runtime;
 #[cfg(test)]
 mod tests;
 
-pub use manifest::ManifestError;
+pub use manifest::{ManifestError, RenderMode};
 
 use crate::extension::{decode_output, DecodeError, ExtractOutput, OutputKind};
 use crate::{OfficeKind, PreviewError, Sheet, Slide};
@@ -120,6 +122,19 @@ pub struct ExtractorRef {
     index: usize,
 }
 
+/// 登録済みの表示（renderer）の宣言。拡張の入口（iframe に読ませる HTML）を指す
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererInfo {
+    /// 登録した拡張の ID
+    pub extension_id: String,
+    /// 拡張フォルダ内の相対パス（例: `ui/index.html`）
+    pub entry: String,
+    /// 拡張子（`.` を除いた英小文字）。全部の拡張子を表す場合は `*` の 1 件だけ
+    pub file_types: Vec<String>,
+    /// 対応する表示の方法
+    pub modes: Vec<RenderMode>,
+}
+
 /// 登録済みの拡張（コンパイル済み）
 struct LoadedExtension {
     info: ExtensionInfo,
@@ -127,6 +142,8 @@ struct LoadedExtension {
     /// この拡張の実行を 1 つずつにする（epoch による中断を、別の実行に効かせないため）
     gate: Mutex<()>,
     extractors: Vec<LoadedExtractor>,
+    /// 拡張フォルダの実体（正規化済み）。`ext://` の配信で使う。メモリだけで登録したものは None
+    root: Option<PathBuf>,
 }
 
 /// 登録済みの抽出器（コンパイル済み）
@@ -141,6 +158,8 @@ pub struct ExtensionHost {
     extensions: Vec<Arc<LoadedExtension>>,
     /// 拡張子（`.` を除いた英小文字）→ 抽出器
     by_file_type: HashMap<String, ExtractorRef>,
+    /// 登録済みの表示の宣言（登録の順）
+    renderers: Vec<RendererInfo>,
 }
 
 impl Default for ExtensionHost {
@@ -161,20 +180,53 @@ impl ExtensionHost {
             limits,
             extensions: Vec::new(),
             by_file_type: HashMap::new(),
+            renderers: Vec::new(),
         }
     }
 
-    /// 拡張フォルダを 1 つ登録する（`extension.json` と、宣言された wasm を読む）。
+    /// 拡張フォルダを 1 つ登録する（`extension.json` と、宣言された wasm・表示の入口を確かめる）。
     /// 失敗した拡張は登録されず、ほかの拡張には影響しない
     pub fn register_dir(&mut self, dir: &Path) -> Result<ExtensionId, ManifestError> {
         let bytes = read_limited(&dir.join(MANIFEST_FILE), MANIFEST_MAX_BYTES)?;
         let manifest = manifest::parse(&bytes)?;
+        let root = dir.canonicalize().map_err(|_| ManifestError::Unreadable)?;
+        for renderer in &manifest.renderers {
+            check_entry(&root, &renderer.entry)?;
+        }
         let wasm = manifest
             .extractors
             .iter()
-            .map(|x| read_entry(dir, &x.entry))
+            .map(|x| read_entry(&root, &x.entry))
             .collect::<Result<Vec<_>, _>>()?;
-        self.register(manifest, wasm)
+        self.register_in(manifest, wasm, Some(root))
+    }
+
+    /// 登録済みの表示の宣言（登録の順）
+    pub fn renderers(&self) -> &[RendererInfo] {
+        &self.renderers
+    }
+
+    /// 拡張子と表示の方法から、表示を決める。同じ拡張子の宣言があればそれを、無ければ `*` を使う。
+    /// 拡張子は `.` の有無と大文字小文字を問わない
+    pub fn renderer_for(&self, file_type: &str, mode: RenderMode) -> Option<&RendererInfo> {
+        let key = file_type
+            .strip_prefix('.')
+            .unwrap_or(file_type)
+            .to_ascii_lowercase();
+        let find = |wanted: &str| {
+            self.renderers
+                .iter()
+                .find(|r| r.modes.contains(&mode) && r.file_types.iter().any(|t| t == wanted))
+        };
+        find(&key).or_else(|| find("*"))
+    }
+
+    /// 登録済みの拡張のフォルダ（正規化済み）。登録されていなければ None。`ext://` の配信の根
+    pub fn extension_root(&self, id: &str) -> Option<PathBuf> {
+        self.extensions
+            .iter()
+            .find(|e| e.info.id == id)
+            .and_then(|e| e.root.clone())
     }
 
     /// 拡張フォルダの一覧を順に登録する。結果は入力と同じ順
@@ -249,11 +301,23 @@ impl ExtensionHost {
         }
     }
 
-    /// 検証済みのマニフェストと、宣言の順の wasm を登録する（登録の共通部分）
+    /// 検証済みのマニフェストと、宣言の順の wasm をメモリだけから登録する（テスト用）
+    #[cfg(test)]
     pub(crate) fn register(
         &mut self,
         manifest: Manifest,
         wasm: Vec<Vec<u8>>,
+    ) -> Result<ExtensionId, ManifestError> {
+        self.register_in(manifest, wasm, None)
+    }
+
+    /// 検証済みのマニフェストと、宣言の順の wasm を登録する（登録の共通部分）。
+    /// `root` は拡張フォルダの実体（正規化済み）。失敗したときは何も変えない
+    pub(crate) fn register_in(
+        &mut self,
+        manifest: Manifest,
+        wasm: Vec<Vec<u8>>,
+        root: Option<PathBuf>,
     ) -> Result<ExtensionId, ManifestError> {
         if self.extensions.iter().any(|e| e.info.id == manifest.id) {
             return Err(ManifestError::DuplicateId);
@@ -265,6 +329,23 @@ impl ExtensionHost {
             .any(|t| self.by_file_type.contains_key(t));
         if claimed {
             return Err(ManifestError::FileTypeConflict);
+        }
+        // 表示は、同じ拡張子・同じ方法を 2 つの宣言が扱うと選べないため、重複を拒否する（`*` も同じ扱い）
+        let mut claims: Vec<(&str, RenderMode)> = Vec::new();
+        for decl in &manifest.renderers {
+            for file_type in &decl.file_types {
+                for &mode in &decl.modes {
+                    let taken = claims.contains(&(file_type.as_str(), mode))
+                        || self
+                            .renderers
+                            .iter()
+                            .any(|r| r.modes.contains(&mode) && r.file_types.contains(file_type));
+                    if taken {
+                        return Err(ManifestError::FileTypeConflict);
+                    }
+                    claims.push((file_type.as_str(), mode));
+                }
+            }
         }
         if wasm.len() != manifest.extractors.len() {
             return Err(ManifestError::ModuleInvalid);
@@ -284,14 +365,23 @@ impl ExtensionHost {
 
         let info = ExtensionInfo {
             id: manifest.id.clone(),
-            name: manifest.name,
+            name: manifest.name.clone(),
             version: manifest.version.to_string(),
         };
+        for decl in &manifest.renderers {
+            self.renderers.push(RendererInfo {
+                extension_id: manifest.id.clone(),
+                entry: decl.entry.clone(),
+                file_types: decl.file_types.clone(),
+                modes: decl.modes.clone(),
+            });
+        }
         let loaded = Arc::new(LoadedExtension {
             info,
             engine,
             gate: Mutex::new(()),
             extractors,
+            root,
         });
         for (index, decl) in manifest.extractors.iter().enumerate() {
             for file_type in &decl.file_types {
@@ -327,18 +417,22 @@ fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>, ManifestError> {
     Ok(bytes)
 }
 
-/// 拡張フォルダ内の entry を読む。実体が拡張フォルダの外（リンクを含む）にあれば読まない
-fn read_entry(dir: &Path, entry: &str) -> Result<Vec<u8>, ManifestError> {
-    let root = dir
-        .canonicalize()
-        .map_err(|_| ManifestError::EntryMissing)?;
+/// 拡張フォルダ内の entry の実体を確かめる（`root` は正規化済み）。
+/// 実体が拡張フォルダの外（リンクを含む）にあるもの、通常のファイルでないものは `EntryMissing`
+fn check_entry(root: &Path, entry: &str) -> Result<PathBuf, ManifestError> {
     let path = root
         .join(entry)
         .canonicalize()
         .map_err(|_| ManifestError::EntryMissing)?;
-    if !path.starts_with(&root) || !path.is_file() {
+    if !path.starts_with(root) || !path.is_file() {
         return Err(ManifestError::EntryMissing);
     }
+    Ok(path)
+}
+
+/// 拡張フォルダ内の entry（wasm）を読む。実体の確認は `check_entry` と同じ
+fn read_entry(root: &Path, entry: &str) -> Result<Vec<u8>, ManifestError> {
+    let path = check_entry(root, entry)?;
     read_limited(&path, WASM_MAX_BYTES).map_err(|err| match err {
         ManifestError::TooLarge => ManifestError::TooLarge,
         _ => ManifestError::EntryMissing,

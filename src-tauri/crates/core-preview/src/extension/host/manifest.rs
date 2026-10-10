@@ -46,6 +46,8 @@ pub enum ManifestError {
     InvalidEntry,
     /// `entry` のファイルが無い、または拡張フォルダの外を指している
     EntryMissing,
+    /// `modes` が空、または `view`・`compare` 以外を含む、または重複している
+    InvalidMode,
     /// 同じ `id` の拡張がすでに登録されている
     DuplicateId,
     /// 同じ拡張子を、別の抽出器がすでに扱っている
@@ -69,6 +71,7 @@ impl fmt::Display for ManifestError {
             Self::InvalidFileType => "file type is invalid",
             Self::InvalidEntry => "entry path is invalid",
             Self::EntryMissing => "entry file is missing",
+            Self::InvalidMode => "renderer mode is invalid",
             Self::DuplicateId => "extension id is already registered",
             Self::FileTypeConflict => "file type is already handled by another extractor",
             Self::ModuleInvalid => "extension module could not be loaded",
@@ -85,25 +88,38 @@ pub(crate) struct Manifest {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) version: semver::Version,
-    /// 表示の宣言（第 2 段階で使う。今回は読むだけ）
-    #[allow(
-        dead_code,
-        reason = "表示拡張（設計書 11.3 の第 2 段階）で使う。今回は検証だけ行う"
-    )]
+    /// 表示の宣言（拡張子 → iframe の入口）
     pub(crate) renderers: Vec<RendererDecl>,
     pub(crate) extractors: Vec<ExtractorDecl>,
 }
 
-/// 表示の宣言（検証のみ）
+/// 表示の方法（設計書 11.2 の `modes`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RenderMode {
+    /// 1 時点の表示
+    View,
+    /// 2 時点の比較表示（第 3 段階で使う。今は宣言の検証だけ）
+    Compare,
+}
+
+impl RenderMode {
+    /// マニフェスト・画面の表記（`view` / `compare`）
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Compare => "compare",
+        }
+    }
+}
+
+/// 表示の宣言
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    reason = "表示拡張（設計書 11.3 の第 2 段階）で使う。今回は検証だけ行う"
-)]
 pub(crate) struct RendererDecl {
-    /// 拡張子（`.` を除いた英小文字）
+    /// 拡張子（`.` を除いた英小文字）。全部の拡張子を表す `*` は、この 1 件だけで使う
     pub(crate) file_types: Vec<String>,
-    /// 拡張フォルダ内の相対パス
+    /// 対応する表示の方法（空は不可）
+    pub(crate) modes: Vec<RenderMode>,
+    /// 拡張フォルダ内の相対パス（iframe の入口。例: `ui/index.html`）
     pub(crate) entry: String,
 }
 
@@ -146,6 +162,7 @@ struct RawContributes {
 #[serde(rename_all = "camelCase")]
 struct RawRenderer {
     file_types: Vec<String>,
+    modes: Vec<String>,
     entry: String,
 }
 
@@ -185,7 +202,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Manifest, ManifestError> {
         .map(|r| {
             validate_entry(&r.entry)?;
             Ok(RendererDecl {
-                file_types: normalize_file_types(&r.file_types)?,
+                file_types: normalize_renderer_file_types(&r.file_types)?,
+                modes: parse_modes(&r.modes)?,
                 entry: r.entry,
             })
         })
@@ -269,6 +287,37 @@ fn normalize_file_types(types: &[String]) -> Result<Vec<String>, ManifestError> 
         .collect()
 }
 
+/// 表示の `fileTypes`。`["*"]`（全部の拡張子。最も低い優先度）だけを受け付け、`*` を他と並べることは拒否する
+fn normalize_renderer_file_types(types: &[String]) -> Result<Vec<String>, ManifestError> {
+    if types.len() == 1 && types[0] == "*" {
+        return Ok(vec!["*".to_owned()]);
+    }
+    if types.iter().any(|t| t == "*") {
+        return Err(ManifestError::InvalidFileType);
+    }
+    normalize_file_types(types)
+}
+
+/// `modes`（`view`・`compare` のみ。空と重複は拒否する）
+fn parse_modes(modes: &[String]) -> Result<Vec<RenderMode>, ManifestError> {
+    if modes.is_empty() {
+        return Err(ManifestError::InvalidMode);
+    }
+    let mut parsed: Vec<RenderMode> = Vec::with_capacity(modes.len());
+    for mode in modes {
+        let value = match mode.as_str() {
+            "view" => RenderMode::View,
+            "compare" => RenderMode::Compare,
+            _ => return Err(ManifestError::InvalidMode),
+        };
+        if parsed.contains(&value) {
+            return Err(ManifestError::InvalidMode);
+        }
+        parsed.push(value);
+    }
+    Ok(parsed)
+}
+
 /// `entry` の形式の検査（拡張フォルダ内の相対パスだけを通す）。ファイルの有無は登録時に確かめる
 pub(crate) fn validate_entry(entry: &str) -> Result<(), ManifestError> {
     if entry.is_empty() || entry.len() > ENTRY_MAX_LEN {
@@ -323,6 +372,74 @@ mod tests {
         assert_eq!(m.extractors[0].file_types, vec!["docx".to_owned()]);
         assert_eq!(m.extractors[0].output, OutputKind::Paragraphs);
         Ok(())
+    }
+
+    /// 表示の宣言 1 件を含むマニフェスト（`fileTypes`・`modes`・`entry` を差し替えて使う）
+    fn renderer_json(file_types: &str, modes: &str, entry: &str) -> String {
+        format!(
+            r#"{{"id":"test.renderer","name":"x","version":"1.0.0","apiVersion":"1",
+                "contributes":{{"renderers":[{{"fileTypes":{file_types},"modes":{modes},"entry":"{entry}"}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_renderer_with_only_the_star_file_type_is_accepted() -> Result<(), ManifestError> {
+        let m = parse(renderer_json(r#"["*"]"#, r#"["view"]"#, "ui/index.html").as_bytes())?;
+        assert_eq!(m.renderers[0].file_types, vec!["*".to_owned()]);
+        assert_eq!(m.renderers[0].modes, vec![RenderMode::View]);
+        let m = parse(
+            renderer_json(
+                r#"[".png", ".jpg"]"#,
+                r#"["view","compare"]"#,
+                "ui/index.html",
+            )
+            .as_bytes(),
+        )?;
+        assert_eq!(
+            m.renderers[0].file_types,
+            vec!["png".to_owned(), "jpg".to_owned()]
+        );
+        assert_eq!(
+            m.renderers[0].modes,
+            vec![RenderMode::View, RenderMode::Compare]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn star_is_only_accepted_alone() {
+        for types in [
+            r#"["*.png"]"#,
+            r#"["**"]"#,
+            r#"["*", ".png"]"#,
+            r#"["*", "*"]"#,
+            r#"[]"#,
+        ] {
+            assert_eq!(
+                parse(renderer_json(types, r#"["view"]"#, "ui/index.html").as_bytes()).err(),
+                Some(ManifestError::InvalidFileType),
+                "fileTypes {types} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn modes_must_be_non_empty_known_and_unique() {
+        for modes in [r#"[]"#, r#"["edit"]"#, r#"["view","view"]"#, r#"["VIEW"]"#] {
+            assert_eq!(
+                parse(renderer_json(r#"[".png"]"#, modes, "ui/index.html").as_bytes()).err(),
+                Some(ManifestError::InvalidMode),
+                "modes {modes} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_renderer_entry_with_traversal_is_rejected() {
+        assert_eq!(
+            parse(renderer_json(r#"["*"]"#, r#"["view"]"#, "../ui/index.html").as_bytes()).err(),
+            Some(ManifestError::InvalidEntry)
+        );
     }
 
     #[test]

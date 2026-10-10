@@ -22,10 +22,13 @@ mod xlsx;
 pub use diff::{cell_ref, diff_paragraphs, diff_sheets, CellChange, ParagraphDiff, SheetsDiff};
 pub use docx::extract_docx;
 pub use error::PreviewError;
+pub use extension::asset::{
+    asset_mime_of, decode_asset_path, resolve_asset, AssetError, ASSET_MAX_BYTES,
+};
 #[cfg(feature = "host")]
 pub use extension::host::{
     ExtensionHost, ExtensionId, ExtensionInfo, ExtractError, ExtractorRef, ManifestError,
-    RuntimeLimits,
+    RenderMode, RendererInfo, RuntimeLimits,
 };
 pub use extension::{ExtractOutput, OutputKind};
 pub use kind::{office_kind, OfficeKind};

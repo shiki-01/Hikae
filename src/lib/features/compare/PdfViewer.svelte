@@ -13,14 +13,14 @@
 	import { PDF_MAX_PAGES, pdfPageWindow } from './preview-view';
 
 	interface Props {
-		/** app-blob の URL（読み取りのみ） */
-		url: string;
+		/** pdf のバイト列（表示拡張がホストから受け取ったもの） */
+		data: ArrayBuffer;
 		/** 領域の名前（支援技術向け） */
 		label: string;
 		onopen?: () => void;
 	}
 
-	let { url, label, onopen }: Props = $props();
+	let { data, label, onopen }: Props = $props();
 
 	type Load =
 		| { kind: 'loading' }
@@ -41,9 +41,9 @@
 	const windowOf = $derived(pdfPageWindow(doc?.numPages ?? 0));
 	const pageNumbers = $derived(Array.from({ length: windowOf.shown }, (_, index) => index + 1));
 
-	// URL が変わったら読み直す。破棄・差し替えのときは、読み込み中の文書も破棄する
+	// データが変わったら読み直す。破棄・差し替えのときは、読み込み中の文書も破棄する
 	$effect(() => {
-		const target = url;
+		const target = data;
 		let cancelled = false;
 		let loaded: PDFDocumentProxy | null = null;
 		load = { kind: 'loading' };

@@ -31,6 +31,10 @@ export const keys = {
 	/** ファイルの内容の表示（プレビュー）。`['compare', id]` の接頭辞で、変更後に一緒に無効化される */
 	filePreview: (id: string, rev: string, path: string) =>
 		['compare', id, 'preview', rev, path] as const,
+	/** 表示拡張の一覧（起動中は変わらない） */
+	renderers: ['renderers'] as const,
+	/** 表示に使う画像・pdf の中身（app-blob の URL ごと） */
+	mediaBytes: (url: string) => ['media-bytes', url] as const,
 	impact: (id: string, target: string, scope: string) => ['impact', id, target, scope] as const,
 	conflicts: (id: string) => ['conflicts', id] as const,
 	/** 行ごとの解消で開く、競合中のファイルの全文 */
