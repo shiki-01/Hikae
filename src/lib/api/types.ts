@@ -146,11 +146,13 @@ export type ParagraphRow =
 	| { kind: 'del'; oldNo: number; text: string }
 	| { kind: 'omitted'; count: number };
 
-/** セルの差分 1 件（xlsx）。`before` が null なら追加、`after` が null なら削除 */
+/** セルの差分 1 件（xlsx）。`before` が null なら追加、`after` が null なら削除。`row`・`col` は 0 始まり */
 export interface CellChange {
 	sheet: string;
 	/** セル参照（A1 形式） */
 	cell: string;
+	row: number;
+	col: number;
 	before: string | null;
 	after: string | null;
 }
@@ -169,6 +171,41 @@ export type OfficeDiff =
 			truncated: number;
 	  }
 	| { kind: 'unavailable'; reason: OfficeUnavailableReason };
+
+/** 内容を表示できない理由（プレビュー）。画面はファイル情報の表示に切り替える */
+export type PreviewUnavailableReason = 'too_large' | 'unsupported_format' | 'corrupt' | 'binary';
+
+/** xlsx のシートの値のあるセル 1 件（行・列は 0 始まり） */
+export interface PreviewCell {
+	row: number;
+	col: number;
+	value: string;
+}
+
+/** xlsx のシート 1 枚。`cells` は値のあるセルだけ（行 → 列の順）。`rows`・`cols` は A1 から最後の値までの大きさ */
+export interface PreviewSheet {
+	name: string;
+	rows: number;
+	cols: number;
+	cells: PreviewCell[];
+	/** `cells` に入らず打ち切ったか（シート 1 枚あたりの上限） */
+	truncated: boolean;
+}
+
+/** pptx のスライド 1 枚。`index` は 1 始まりの表示順 */
+export interface PreviewSlide {
+	index: number;
+	paragraphs: string[];
+}
+
+/** ファイルの内容の表示（プレビュー）。`not_found` は、その版にファイルが無いこと */
+export type FilePreview =
+	| { kind: 'text'; content: string; truncated: boolean }
+	| { kind: 'docx'; paragraphs: string[]; truncated: boolean }
+	| { kind: 'xlsx'; sheets: PreviewSheet[] }
+	| { kind: 'pptx'; slides: PreviewSlide[]; truncated: boolean }
+	| { kind: 'unavailable'; reason: PreviewUnavailableReason }
+	| { kind: 'not_found' };
 
 export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 
@@ -541,6 +578,8 @@ export interface ProjectApi {
 	compare(projectId: string, path: string, fromId: string, toId: string): Promise<FileDiff>;
 	/** docx・xlsx の内容の比較。抽出できないものは `unavailable` で返す（エラーにはしない） */
 	compareOffice(projectId: string, path: string, fromId: string, toId: string): Promise<OfficeDiff>;
+	/** 指定の時点（`current`・`work`・`this`・`cloud`・短縮 ID）のファイルの内容を返す（読み取りのみ） */
+	previewFile(projectId: string, rev: string, path: string): Promise<FilePreview>;
 	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */
 	listProjectTree(projectId: string): Promise<ProjectTree>;
 

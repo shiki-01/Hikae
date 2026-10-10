@@ -22,6 +22,7 @@ mod new_file_diff;
 mod open_path;
 mod operations;
 mod pc_name;
+mod point;
 mod preview_file;
 mod project_tree;
 mod recover;
@@ -38,7 +39,7 @@ pub use add_files::{
     LARGE_FILE_WARN_BYTES,
 };
 pub use auto_snapshot::{AutoSnapshotOutcome, AutoSnapshotSkip};
-pub use blob::{Blob, OfficeFile, WORK_REV};
+pub use blob::{Blob, OfficeFile, TextFile, WORK_REV};
 pub use broad_folder::{check_project_folder, BroadFolderReason, BroadFolders};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
@@ -638,8 +639,8 @@ impl Ops {
         blob::read_blob(self.runner(), repo, rev, path, max_bytes)
     }
 
-    /// 指定時点（完全な OID）または作業フォルダ（`work`）の Office 文書（docx・xlsx）を読む（設計書 3.3 S4）。読み取りのみ。
-    /// 拡張子は docx と xlsx だけを受け付ける。`max_bytes` を超えるものは読まず `OfficeFile::TooLarge` を返す。
+    /// 指定時点（完全な OID）または作業フォルダ（`work`）の Office 文書（docx・xlsx・pptx）を読む（設計書 3.3 S4）。読み取りのみ。
+    /// 拡張子は docx・xlsx・pptx だけを受け付ける。`max_bytes` を超えるものは読まず `OfficeFile::TooLarge` を返す。
     /// 存在しないものは `Io(NotFound)`（比べる側が無いときの扱いは呼び出し側が決める）。
     pub fn read_office(
         &self,
@@ -649,6 +650,31 @@ impl Ops {
         max_bytes: u64,
     ) -> Result<OfficeFile, OpsError> {
         blob::read_office(self.runner(), repo, rev, path, max_bytes)
+    }
+    /// 指定時点（完全な OID）または作業フォルダ（`work`）のファイルを、テキストとして読む（読み取りのみ。プレビュー用）。
+    /// 拡張子は見ない。UTF-8 として有効で NUL を含まないものだけ `TextFile::Text`。大きすぎるものは読まず `TooLarge`。
+    /// 存在しないものは `Io(NotFound)`。
+    pub fn read_text_file(
+        &self,
+        repo: &Path,
+        rev: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<TextFile, OpsError> {
+        blob::read_text(self.runner(), repo, rev, path, max_bytes)
+    }
+    /// `read_text_file` の簡易版。テキストとして読めたときだけ `Some`（バイナリ・大きいもの・存在しないものは `None`）。
+    pub fn read_text(&self, repo: &Path, rev: &str, path: &str, max_bytes: u64) -> Option<String> {
+        match self.read_text_file(repo, rev, path, max_bytes) {
+            Ok(TextFile::Text(text)) => Some(text),
+            _ => None,
+        }
+    }
+    /// 画面の時点 ID（`current`・`work`・`this`・`cloud`・16 進の短縮 ID）を、読み取りに使う rev にする（読み取りのみ）。
+    /// 作業フォルダは `WORK_REV`。`this` は HEAD、`cloud` は MERGE_HEAD（競合の途中だけ存在する）。
+    /// 版が無い（HEAD・MERGE_HEAD が無い、ID が解決できない）ときは `Io(NotFound)`。形の不正な値は `InvalidInput`。
+    pub fn resolve_point(&self, repo: &Path, point: &str) -> Result<String, OpsError> {
+        point::resolve_point(self.runner(), repo, point)
     }
 
     /// 中断された操作（`operation`、開始は Unix 秒 `started_at_unix`）の直前に作られた復元点へ、

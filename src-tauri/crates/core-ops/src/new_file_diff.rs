@@ -50,7 +50,7 @@ pub(crate) fn diff_file(
     to: &str,
     path: Option<&str>,
 ) -> Result<FileDiffOutcome, OpsError> {
-    if let (true, Some(raw)) = (to == "current", path) {
+    if let (true, Some(raw)) = (crate::point::is_working_point(to), path) {
         // プロジェクト外・`..`・`.git` 配下などは、ここで拒否する
         let rel = normalize_project_path(raw)?;
         if is_new_file(runner, repo, from, &rel)? {
@@ -72,7 +72,7 @@ fn is_new_file(runner: &GitRunner, repo: &Path, from: &str, rel: &str) -> Result
         return Ok(false);
     }
     // 比べる時点に存在するファイルは、git が「削除された」差分を出す
-    if from != "current" {
+    if !crate::point::is_working_point(from) {
         let Ok(oid) = resolve_commit(runner, repo, from) else {
             return Ok(false);
         };

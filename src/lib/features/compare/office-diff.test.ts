@@ -32,6 +32,8 @@ describe('describeCellChange', () => {
 		const line = describeCellChange({
 			sheet: 'Sheet1',
 			cell: 'B3',
+			row: 2,
+			col: 1,
 			before: '120',
 			after: '150'
 		});
@@ -42,11 +44,20 @@ describe('describeCellChange', () => {
 		const added = describeCellChange({
 			sheet: 'Sheet2',
 			cell: 'C5',
+			row: 4,
+			col: 2,
 			before: null,
 			after: '新しい値'
 		});
 		expect(t(added.key, added.params)).toBe('Sheet2!C5: 追加: 新しい値');
-		const removed = describeCellChange({ sheet: 'Sheet1', cell: 'A1', before: '旧', after: null });
+		const removed = describeCellChange({
+			sheet: 'Sheet1',
+			cell: 'A1',
+			row: 0,
+			col: 0,
+			before: '旧',
+			after: null
+		});
 		expect(t(removed.key, removed.params)).toBe('Sheet1!A1: 削除: 旧');
 	});
 });
@@ -54,9 +65,9 @@ describe('describeCellChange', () => {
 describe('groupCellChanges', () => {
 	it('シートの出現順を保ち、同じシートの行を 1 つにまとめる', () => {
 		const groups = groupCellChanges([
-			{ sheet: 'B', cell: 'A1', before: '1', after: '2' },
-			{ sheet: 'A', cell: 'A2', before: null, after: 'x' },
-			{ sheet: 'B', cell: 'C1', before: 'y', after: null }
+			{ sheet: 'B', cell: 'A1', row: 0, col: 0, before: '1', after: '2' },
+			{ sheet: 'A', cell: 'A2', row: 1, col: 0, before: null, after: 'x' },
+			{ sheet: 'B', cell: 'C1', row: 0, col: 2, before: 'y', after: null }
 		]);
 		expect(groups.map((g) => g.sheet)).toEqual(['B', 'A']);
 		expect(groups[0].changes.map((c) => c.cell)).toEqual(['A1', 'C1']);
@@ -97,7 +108,7 @@ describe('hasOfficeChanges', () => {
 		expect(
 			hasOfficeChanges({
 				...empty,
-				cells: [{ sheet: 'Sheet1', cell: 'B3', before: '1', after: '2' }]
+				cells: [{ sheet: 'Sheet1', cell: 'B3', row: 2, col: 1, before: '1', after: '2' }]
 			})
 		).toBe(true);
 	});

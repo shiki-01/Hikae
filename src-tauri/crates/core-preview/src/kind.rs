@@ -9,6 +9,8 @@ pub enum OfficeKind {
     Docx,
     /// Excel ブック（シート別のセル値を比べる）
     Xlsx,
+    /// PowerPoint プレゼンテーション（プレビューでスライドごとのテキストを出す。比較には使わない）
+    Pptx,
 }
 
 /// ファイル名（相対パスでもよい）の拡張子から種類を決める。大文字小文字は区別しない。
@@ -21,6 +23,7 @@ pub fn office_kind(file_name: &str) -> Option<OfficeKind> {
     match ext.as_str() {
         "docx" => Some(OfficeKind::Docx),
         "xlsx" => Some(OfficeKind::Xlsx),
+        "pptx" => Some(OfficeKind::Pptx),
         _ => None,
     }
 }
@@ -36,6 +39,8 @@ mod tests {
         assert_eq!(office_kind("old.doc"), None);
         assert_eq!(office_kind("macro.docm"), None);
         assert_eq!(office_kind("data.xls"), None);
+        assert_eq!(office_kind("deck.PPTX"), Some(OfficeKind::Pptx));
+        assert_eq!(office_kind("old.ppt"), None);
         assert_eq!(office_kind("noext"), None);
         assert_eq!(office_kind(".docx"), None);
     }

@@ -150,6 +150,10 @@ pub struct CellChange {
     pub sheet: String,
     /// セル参照（A1 形式）
     pub cell: String,
+    /// 行（0 始まり。`cell` と同じ位置。画面がグリッドに重ねるときに使う）
+    pub row: u32,
+    /// 列（0 始まり）
+    pub col: u32,
     /// 古い版の値
     pub before: Option<String>,
     /// 新しい版の値
@@ -215,6 +219,8 @@ fn diff_cells(
             out.push(CellChange {
                 sheet: sheet.to_owned(),
                 cell: cell_ref(key.0, key.1),
+                row: key.0,
+                col: key.1,
                 before,
                 after,
             });
@@ -364,18 +370,24 @@ mod tests {
                 CellChange {
                     sheet: "Sheet1".to_owned(),
                     cell: "C1".to_owned(),
+                    row: 0,
+                    col: 2,
                     before: None,
                     after: Some("new".to_owned()),
                 },
                 CellChange {
                     sheet: "Sheet1".to_owned(),
                     cell: "B3".to_owned(),
+                    row: 2,
+                    col: 1,
                     before: Some("120".to_owned()),
                     after: Some("150".to_owned()),
                 },
                 CellChange {
                     sheet: "Sheet1".to_owned(),
                     cell: "A6".to_owned(),
+                    row: 5,
+                    col: 0,
                     before: Some("gone".to_owned()),
                     after: None,
                 },

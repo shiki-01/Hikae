@@ -3,12 +3,12 @@
 //
 // URL 形式: `app-blob://localhost/<プロジェクト ID>/<rev>/<URL エンコードしたパス>`
 // - Windows では WebView が `http://app-blob.localhost/...` に変換するため、両方の形を受け付ける
-// - `rev` は `work`（作業フォルダ）か、画面が持つ短縮 ID（16 進 4〜64 桁）。短縮 ID は完全な OID に解決してから読む
+// - `rev` は画面の時点 ID（`work`・`current`・`this`・`cloud`・16 進の短縮 ID）。解決は `version` に集約している
 // - 応答には内容の mime・`nosniff`・canvas で画素を読むための CORS・`no-store` を付ける
 // - 失敗は 4xx / 5xx と空のボディだけを返す。パスやトークンはログにも応答にも出さない
 
-use crate::AppState;
-use core_ops::{Blob, Ops, OpsError, WORK_REV};
+use crate::{version, AppState};
+use core_ops::{Blob, Ops, OpsError};
 use tauri::http::{Method, Request, Response, StatusCode, Uri};
 use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
@@ -17,9 +17,6 @@ pub const SCHEME: &str = "app-blob";
 
 /// 読み取る上限（設計書 9.3）。これを超える画像は読まずに拒否する
 const MAX_BYTES: u64 = 50 * 1024 * 1024;
-
-/// 短縮 ID を完全な OID に解決するときの最小の桁数（git の既定の短縮形と同じ）
-const MIN_SHORT_REV_LEN: usize = 4;
 
 /// プロトコルの要求を処理する。重い読み取りは別スレッドで行い、UI スレッドを塞がない
 pub fn handle<R: Runtime>(
@@ -85,16 +82,12 @@ fn build_response(
     };
     let ops = Ops::new(crate::git_runner());
 
-    let rev = if target.rev == WORK_REV {
-        WORK_REV.to_string()
-    } else if is_short_hex(&target.rev) {
-        match ops.full_commit_id(&project_path, &target.rev) {
-            Ok(oid) => oid,
-            // 存在しない版は「ファイルなし」と同じ扱い
-            Err(_) => return empty(StatusCode::NOT_FOUND),
-        }
-    } else {
-        return empty(StatusCode::BAD_REQUEST);
+    let rev = match version::resolve_rev(&ops, &project_path, &target.rev) {
+        Ok(Some(rev)) => rev,
+        // 存在しない版は「ファイルなし」と同じ扱い。形の不正な値は要求の誤り
+        Ok(None) => return empty(StatusCode::NOT_FOUND),
+        Err(OpsError::InvalidInput(_)) => return empty(StatusCode::BAD_REQUEST),
+        Err(_) => return empty(StatusCode::NOT_FOUND),
     };
 
     match ops.read_blob(&project_path, &rev, &target.relative_path, MAX_BYTES) {
@@ -110,11 +103,6 @@ fn project_path(
 ) -> Option<std::path::PathBuf> {
     let guard = store.lock().ok()?;
     guard.get_project(project_id).ok().map(|p| p.path)
-}
-
-/// 16 進の短縮 ID か（完全な OID も含む。解決は git に任せる）
-fn is_short_hex(rev: &str) -> bool {
-    rev.len() >= MIN_SHORT_REV_LEN && rev.len() <= 64 && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 読み取りの失敗を HTTP の状態へ写す。見つからない → 404、要求が不正 → 400、そのほか → 500

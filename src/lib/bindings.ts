@@ -193,6 +193,8 @@ export const commands = {
 	openFileAt: (id: string, commit: string, relativePath: string) => typedError<null, AppError>(__TAURI_INVOKE("open_file_at", { id, commit, relativePath })),
 	/**  2 つの時点の同じパスの Office 文書を比べる。`from`・`to` は画面の時点 ID */
 	compareOffice: (id: string, from: string, to: string, path: string) => typedError<OfficeDiff, AppError>(__TAURI_INVOKE("compare_office", { id, from, to, path })),
+	/**  指定の時点のファイルの内容を返す（読み取りのみ） */
+	previewFile: (id: string, rev: string, path: string) => typedError<FilePreview, AppError>(__TAURI_INVOKE("preview_file", { id, rev, path })),
 	/**
 	 *  中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
 	 * 
@@ -515,6 +517,9 @@ export type CellRow = {
 	sheet: string,
 	/**  セル参照（A1 形式） */
 	cell: string,
+	/**  行・列（0 始まり。`cell` と同じ位置。画面がグリッドに変更を重ねるときに使う） */
+	row: number,
+	col: number,
 	before: string | null,
 	after: string | null,
 };
@@ -624,6 +629,21 @@ export type FileEntry = {
 	/**  ファイルサイズ（バイト） */
 	size: number | null,
 };
+
+/**  ファイルの内容の表示 */
+export type FilePreview = 
+/**  UTF-8 のテキスト（1 MiB まで） */
+{ kind: "text"; content: string; truncated: boolean } | 
+/**  Word 文書の段落 */
+{ kind: "docx"; paragraphs: string[]; truncated: boolean } | 
+/**  Excel ブックのシート（シート数は上限まで） */
+{ kind: "xlsx"; sheets: XlsxSheet[] } | 
+/**  PowerPoint のスライド */
+{ kind: "pptx"; slides: PptxSlide[]; truncated: boolean } | 
+/**  内容を表示できない（画面はファイル情報を出す） */
+{ kind: "unavailable"; reason: PreviewUnavailableReason } | 
+/**  その版にファイルが無い */
+{ kind: "not-found" };
 
 /**
  *  プロジェクトのフォルダでファイルが変わった（ファイル監視。保存の対象になりうる変更だけ）。
@@ -842,6 +862,25 @@ export type PointChangeItem = {
 
 /**  保存時点で変更されたファイルの種類 */
 export type PointChangeKindData = "added" | "modified" | "deleted" | "renamed";
+
+/**  pptx のスライド 1 枚 */
+export type PptxSlide = {
+	/**  表示順（1 始まり） */
+	index: number,
+	/**  空でない段落（出現順） */
+	paragraphs: string[],
+};
+
+/**  抽出できなかった理由（画面は短い文言を出す） */
+export type PreviewUnavailableReason = 
+/**  上限（ファイルの大きさ・件数・段落など）を超えた */
+"too-large" | 
+/**  対応していない形式（拡張子と中身が合わない、旧形式、暗号化を含む） */
+"unsupported-format" | 
+/**  壊れている */
+"corrupt" | 
+/**  バイナリ（テキストとして表示できない） */
+"binary";
 
 /**  プロジェクトフォルダ内のファイル 1 件 */
 export type ProjectFileItem = {
@@ -1282,6 +1321,25 @@ export type TermDisplay =
 
 /**  自動保存をタイムラインに出すか */
 export type TimelineSnapshots = "collapsed" | "shown" | "hidden";
+
+/**  xlsx の値のあるセル 1 件（行・列は 0 始まり） */
+export type XlsxCell = {
+	row: number,
+	col: number,
+	value: string,
+};
+
+/**  xlsx のシート 1 枚。`cells` は値のあるセルだけ（行 → 列の順） */
+export type XlsxSheet = {
+	name: string,
+	/**  A1 から最後の値までの行数 */
+	rows: number,
+	/**  A1 から最後の値までの列数 */
+	cols: number,
+	cells: XlsxCell[],
+	/**  `cells` に入らず打ち切ったか（シート 1 枚あたりの上限） */
+	truncated: boolean,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

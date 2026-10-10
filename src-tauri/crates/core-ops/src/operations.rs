@@ -702,9 +702,9 @@ pub(crate) fn diff_with(
     {
         return Err(OpsError::Unexpected("invalid commit".to_string()));
     }
-    // 画面は「いま」の作業フォルダを `current` で指す。その場合は作業フォルダとの差分を取る
+    // 画面は「いま」の作業フォルダを `current` で指す（`work` も同じ）。その場合は作業フォルダとの差分を取る
     let mut cmd = vec!["diff", "--unified=3", from];
-    if to != "current" {
+    if !crate::point::is_working_point(to) {
         cmd.push(to);
     }
     if let Some(p) = path {

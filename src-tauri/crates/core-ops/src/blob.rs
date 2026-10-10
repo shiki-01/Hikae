@@ -2,7 +2,8 @@
 //
 // - `rev` は完全な OID（40 または 64 桁の 16 進）か、作業フォルダの現在のファイルを表す `work` だけを受け付ける
 // - パスは `normalize_project_path`（`export_file_at` と同じ字句検査）に加えて、制御文字を拒否する
-// - 許可するのは画像の拡張子だけ（svg は含めない）。mime は拡張子から決め、中身は推測しない
+// - 許可するのは画像の拡張子と pdf（svg は含めない）。mime は拡張子から決め、中身は推測しない
+// - `read_text` は拡張子を見ず、UTF-8 として有効で NUL を含まない小さいファイルだけを文字列として返す（プレビュー用）
 // - 作業フォルダ・インデックス・refs には一切書かない（復元点は不要。不変条件 3 の対象外）
 // - git は `ls-tree`・`cat-file` だけを使う（許可リストは変更しない）
 
@@ -31,6 +32,7 @@ fn mime_for_extension(ext: &str) -> Option<&'static str> {
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
         "bmp" => Some("image/bmp"),
+        "pdf" => Some("application/pdf"),
         _ => None,
     }
 }
@@ -81,10 +83,21 @@ fn extension_of(rel: &str) -> String {
         .unwrap_or_default()
 }
 
-/// 指定時点（完全な OID）または作業フォルダ（`work`）の画像ファイルを読む。
+/// テキストとして読んだ結果（プレビュー用）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextFile {
+    /// UTF-8 として有効で NUL を含まない内容
+    Text(String),
+    /// 上の条件に合わない（バイナリ、UTF-8 として無効）
+    Binary,
+    /// 上限（`max_bytes`）を超えたため、読まなかった
+    TooLarge,
+}
+
+/// 指定時点（完全な OID）または作業フォルダ（`work`）の画像（pdf を含む）ファイルを読む。
 ///
 /// - 存在しない（その時点に通常のファイルとして無い、作業フォルダに無い）場合は `Io(NotFound)`
-/// - 拡張子が画像でない、パスが不正、リンクで外へ出る、通常のファイルでない場合は `InvalidInput`
+/// - 拡張子が画像・pdf でない、パスが不正、リンクで外へ出る、通常のファイルでない場合は `InvalidInput`
 /// - `max_bytes` を超えるものは読まずに `InvalidInput` にする
 pub(crate) fn read_blob(
     runner: &GitRunner,
@@ -96,7 +109,7 @@ pub(crate) fn read_blob(
     let rel = validate_request(rev, path)?;
     let ext = extension_of(&rel);
     let mime = mime_for_extension(&ext)
-        .ok_or_else(|| OpsError::InvalidInput("file type is not an allowed image".to_string()))?;
+        .ok_or_else(|| OpsError::InvalidInput("file type is not an allowed blob".to_string()))?;
 
     match fetch(runner, repo, rev, &rel, max_bytes)? {
         Fetched::Bytes(bytes) => Ok(Blob { bytes, mime }),
@@ -104,10 +117,10 @@ pub(crate) fn read_blob(
     }
 }
 
-/// 指定時点（完全な OID）または作業フォルダ（`work`）の Office 文書（docx・xlsx）を読む（設計書 3.3 S4）。
+/// 指定時点（完全な OID）または作業フォルダ（`work`）の Office 文書（docx・xlsx・pptx）を読む（設計書 3.3 S4）。
 ///
 /// - 存在しない場合は `Io(NotFound)`。パスの検査・リンクの扱いは `read_blob` と同じ
-/// - 拡張子が docx・xlsx でない場合は `InvalidInput`（`.doc`・`.docm`・`.xls` を含む）
+/// - 拡張子が docx・xlsx・pptx でない場合は `InvalidInput`（`.doc`・`.docm`・`.xls`・`.ppt` を含む）
 /// - `max_bytes` を超えるものは読まずに `OfficeFile::TooLarge` を返す
 pub(crate) fn read_office(
     runner: &GitRunner,
@@ -118,7 +131,7 @@ pub(crate) fn read_office(
 ) -> Result<OfficeFile, OpsError> {
     let rel = validate_request(rev, path)?;
     let ext = extension_of(&rel);
-    if ext != "docx" && ext != "xlsx" {
+    if ext != "docx" && ext != "xlsx" && ext != "pptx" {
         return Err(OpsError::InvalidInput(
             "file type is not an allowed office document".to_string(),
         ));
@@ -126,6 +139,36 @@ pub(crate) fn read_office(
     match fetch(runner, repo, rev, &rel, max_bytes)? {
         Fetched::Bytes(bytes) => Ok(OfficeFile::Bytes(bytes)),
         Fetched::TooLarge => Ok(OfficeFile::TooLarge),
+    }
+}
+
+/// 指定時点（完全な OID）または作業フォルダ（`work`）のファイルを、テキストとして読む（プレビュー用）。
+///
+/// - 拡張子は見ない。存在しない場合は `Io(NotFound)`。パスの検査・リンクの扱いは `read_blob` と同じ
+/// - `max_bytes` を超えるものは読まずに `TextFile::TooLarge`
+/// - UTF-8 として有効で NUL を含まないものだけ `TextFile::Text`。それ以外は `TextFile::Binary`
+pub(crate) fn read_text(
+    runner: &GitRunner,
+    repo: &Path,
+    rev: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<TextFile, OpsError> {
+    let rel = validate_request(rev, path)?;
+    match fetch(runner, repo, rev, &rel, max_bytes)? {
+        Fetched::TooLarge => Ok(TextFile::TooLarge),
+        Fetched::Bytes(bytes) => Ok(classify_text(bytes)),
+    }
+}
+
+/// 内容がテキストか。NUL を含まず、UTF-8 として有効なら文字列にする
+fn classify_text(bytes: Vec<u8>) -> TextFile {
+    if bytes.contains(&0) {
+        return TextFile::Binary;
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => TextFile::Text(text),
+        Err(_) => TextFile::Binary,
     }
 }
 
@@ -240,6 +283,7 @@ mod tests {
         assert_eq!(mime_for_extension("gif"), Some("image/gif"));
         assert_eq!(mime_for_extension("webp"), Some("image/webp"));
         assert_eq!(mime_for_extension("bmp"), Some("image/bmp"));
+        assert_eq!(mime_for_extension("pdf"), Some("application/pdf"));
         assert_eq!(mime_for_extension("svg"), None);
         assert_eq!(mime_for_extension("txt"), None);
         assert_eq!(mime_for_extension(""), None);

@@ -1,4 +1,5 @@
 // ファイルプレビュー（設計書 3.3 S4 の docx / xlsx 比較、8.3）。docx の段落テキスト、xlsx のセルの値を取り出し、
+// pptx のスライドごとのテキストを取り出す（pptx は表示のみ。比較の対象ではない）。
 // 2 つの版の差分を作る。Tauri・core-git・他の core-* に依存しない純粋なライブラリ。
 //
 // - 入力は呼び出し側が読んだバイト列。ファイルシステムへは一切書かない（zip の中身はメモリ上でだけ読む）
@@ -12,6 +13,7 @@ mod docx;
 mod error;
 mod kind;
 mod limits;
+mod pptx;
 mod xlsx;
 
 pub use diff::{cell_ref, diff_paragraphs, diff_sheets, CellChange, ParagraphDiff, SheetsDiff};
@@ -19,6 +21,7 @@ pub use docx::extract_docx;
 pub use error::PreviewError;
 pub use kind::{office_kind, OfficeKind};
 pub use limits::Limits;
+pub use pptx::{extract_pptx, Slide};
 pub use xlsx::{extract_xlsx, Sheet};
 
 #[cfg(test)]

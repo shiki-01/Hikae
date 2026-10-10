@@ -32,8 +32,8 @@ describe('Office 文書の比較結果の変換', () => {
 			added_sheets: ['New'],
 			removed_sheets: [],
 			cells: [
-				{ sheet: 'Sheet1', cell: 'B3', before: '120', after: '150' },
-				{ sheet: 'Sheet1', cell: 'C5', before: null, after: 'x' }
+				{ sheet: 'Sheet1', cell: 'B3', row: 2, col: 1, before: '120', after: '150' },
+				{ sheet: 'Sheet1', cell: 'C5', row: 4, col: 2, before: null, after: 'x' }
 			],
 			truncated: 0
 		};
@@ -42,8 +42,8 @@ describe('Office 文書の比較結果の変換', () => {
 			addedSheets: ['New'],
 			removedSheets: [],
 			cells: [
-				{ sheet: 'Sheet1', cell: 'B3', before: '120', after: '150' },
-				{ sheet: 'Sheet1', cell: 'C5', before: null, after: 'x' }
+				{ sheet: 'Sheet1', cell: 'B3', row: 2, col: 1, before: '120', after: '150' },
+				{ sheet: 'Sheet1', cell: 'C5', row: 4, col: 2, before: null, after: 'x' }
 			],
 			truncated: 0
 		});

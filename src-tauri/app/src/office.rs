@@ -5,11 +5,12 @@
 // - 抽出できないもの（上限超え・対応しない形式・壊れている）はエラーにせず、`OfficeDiff::Unavailable` で
 //   理由を返す。画面はファイル情報の表示に切り替える
 // - 画面に返す行数は `ROWS_LIMIT` まで。超えた分は件数（`truncated`）だけ返す
-// - 時点は画面の ID（`current` = 作業フォルダ、それ以外は短縮 ID）。`work` も作業フォルダとして受け付ける
+// - 時点は画面の ID（`current`・`work`・`this`・`cloud`・短縮 ID）。解決は `version` に集約している
+// - pptx は表示（プレビュー）だけに使うため、比較では `unavailable` にする
 // - ファイルの内容・パスは、エラーにも `technical_info` にも出さない
 
-use crate::{git_runner, load_project, run_blocking, AppError, AppState};
-use core_ops::{OfficeFile, Ops, OpsError, WORK_REV};
+use crate::{git_runner, load_project, run_blocking, version, AppError, AppState};
+use core_ops::{OfficeFile, Ops, OpsError};
 use core_preview::{
     diff_paragraphs, diff_sheets, extract_docx, extract_xlsx, office_kind, Limits, OfficeKind,
     ParagraphDiff, PreviewError, Sheet,
@@ -19,9 +20,6 @@ use std::path::Path;
 
 /// 画面に返す行（段落・セル）の上限。超えた分は件数だけ返す
 const ROWS_LIMIT: usize = 1000;
-
-/// 「いま」を表す時点 ID（`diff` コマンドと同じ）
-const CURRENT_POINT: &str = "current";
 
 /// 抽出できなかった理由（設計書 5.1。画面は短い文言を出す）
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
@@ -59,6 +57,9 @@ pub struct CellRow {
     pub sheet: String,
     /// セル参照（A1 形式）
     pub cell: String,
+    /// 行・列（0 始まり。`cell` と同じ位置。画面がグリッドに変更を重ねるときに使う）
+    pub row: u32,
+    pub col: u32,
     pub before: Option<String>,
     pub after: Option<String>,
 }
@@ -115,16 +116,21 @@ enum Side {
 
 /// 比較の本体（同期処理。呼び出し側が別スレッドで実行する）
 fn compare(repo: &Path, from: &str, to: &str, path: &str) -> Result<OfficeDiff, AppError> {
-    let Some(kind) = office_kind(path) else {
-        return Ok(unavailable(OfficeUnavailableReason::UnsupportedFormat));
+    let kind = match office_kind(path) {
+        // pptx は比較の対象にしない（表示はプレビューで行う）
+        Some(OfficeKind::Pptx) | None => {
+            return Ok(unavailable(OfficeUnavailableReason::UnsupportedFormat))
+        }
+        Some(kind) => kind,
     };
     let ops = Ops::new(git_runner());
     let limits = Limits::default();
 
-    let old_rev = resolve_point(&ops, repo, from)?;
-    let new_rev = resolve_point(&ops, repo, to)?;
-    let old = read_side(&ops, repo, &old_rev, path, limits.max_input_bytes)?;
-    let new = read_side(&ops, repo, &new_rev, path, limits.max_input_bytes)?;
+    // 版が無い側（クラウドの版が無い、ID が解決できない）は、ファイルが無い側として空に比べる
+    let old_rev = version::resolve_rev(&ops, repo, from).map_err(AppError::from_ops_error)?;
+    let new_rev = version::resolve_rev(&ops, repo, to).map_err(AppError::from_ops_error)?;
+    let old = read_side(&ops, repo, old_rev.as_deref(), path, limits.max_input_bytes)?;
+    let new = read_side(&ops, repo, new_rev.as_deref(), path, limits.max_input_bytes)?;
     if matches!(old, Side::TooLarge) || matches!(new, Side::TooLarge) {
         return Ok(unavailable(OfficeUnavailableReason::TooLarge));
     }
@@ -132,6 +138,7 @@ fn compare(repo: &Path, from: &str, to: &str, path: &str) -> Result<OfficeDiff, 
     let result = match kind {
         OfficeKind::Docx => compare_docx(&old, &new, &limits),
         OfficeKind::Xlsx => compare_xlsx(&old, &new, &limits),
+        OfficeKind::Pptx => return Ok(unavailable(OfficeUnavailableReason::UnsupportedFormat)),
     };
     Ok(match result {
         Ok(diff) => diff,
@@ -139,23 +146,18 @@ fn compare(repo: &Path, from: &str, to: &str, path: &str) -> Result<OfficeDiff, 
     })
 }
 
-/// 画面の時点 ID を、読むときの rev にする（`current` と `work` は作業フォルダ。それ以外は完全な OID）
-fn resolve_point(ops: &Ops, repo: &Path, point: &str) -> Result<String, AppError> {
-    if point == CURRENT_POINT || point == WORK_REV {
-        return Ok(WORK_REV.to_string());
-    }
-    ops.full_commit_id(repo, point)
-        .map_err(AppError::from_ops_error)
-}
-
-/// 1 つの時点のファイルを読む。存在しないものは `Absent`、それ以外の失敗はエラーにする
+/// 1 つの時点のファイルを読む。版が無い（`rev` が None）ものと、ファイルが無いものは `Absent`、
+/// それ以外の失敗はエラーにする
 fn read_side(
     ops: &Ops,
     repo: &Path,
-    rev: &str,
+    rev: Option<&str>,
     path: &str,
     max_bytes: u64,
 ) -> Result<Side, AppError> {
+    let Some(rev) = rev else {
+        return Ok(Side::Absent);
+    };
     match ops.read_office(repo, rev, path, max_bytes) {
         Ok(OfficeFile::Bytes(bytes)) => Ok(Side::Present(bytes)),
         Ok(OfficeFile::TooLarge) => Ok(Side::TooLarge),
@@ -187,6 +189,8 @@ fn compare_xlsx(old: &Side, new: &Side, limits: &Limits) -> Result<OfficeDiff, P
         .map(|c| CellRow {
             sheet: c.sheet,
             cell: c.cell,
+            row: c.row,
+            col: c.col,
             before: c.before,
             after: c.after,
         })

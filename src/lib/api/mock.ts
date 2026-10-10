@@ -6,6 +6,7 @@ import { officeKindOf } from '#lib/features/compare/office-diff.js';
 import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
 	OfficeDiff,
+	FilePreview,
 	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
@@ -953,12 +954,31 @@ export const mockApi: ProjectApi = {
 			addedSheets: [],
 			removedSheets: [],
 			cells: [
-				{ sheet: 'Sheet1', cell: 'B3', before: '120', after: '150' },
-				{ sheet: 'Sheet1', cell: 'C5', before: null, after: t('mock.office.value') },
-				{ sheet: 'Sheet2', cell: 'A1', before: t('mock.office.value'), after: null }
+				{ sheet: 'Sheet1', cell: 'B3', row: 2, col: 1, before: '120', after: '150' },
+				{
+					sheet: 'Sheet1',
+					cell: 'C5',
+					row: 4,
+					col: 2,
+					before: null,
+					after: t('mock.office.value')
+				},
+				{ sheet: 'Sheet2', cell: 'A1', row: 0, col: 0, before: t('mock.office.value'), after: null }
 			],
 			truncated: 0
 		};
+	},
+
+	async previewFile(_projectId: string, _rev: string, path: string): Promise<FilePreview> {
+		await sleep(WAIT_SHORT);
+		if (officeKindOf(path) === 'docx') {
+			return {
+				kind: 'docx',
+				paragraphs: [t('mock.office.title'), t('mock.office.after')],
+				truncated: false
+			};
+		}
+		return { kind: 'text', content: t('mock.office.title'), truncated: false };
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

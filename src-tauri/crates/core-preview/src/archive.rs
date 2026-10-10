@@ -47,6 +47,11 @@ impl<'a> Archive<'a> {
         self.names.len()
     }
 
+    /// エントリの名前（`ZipArchive` のインデックスの順）
+    pub(crate) fn names(&self) -> &[String] {
+        &self.names
+    }
+
     /// 名前が完全に一致するエントリのインデックス
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
         self.names.iter().position(|n| n == name)

@@ -21,6 +21,8 @@ import type {
 	DiffResult,
 	OfficeDiff as BackendOfficeDiff,
 	OfficeUnavailableReason as BackendOfficeUnavailableReason,
+	FilePreview as BackendFilePreview,
+	PreviewUnavailableReason as BackendPreviewUnavailableReason,
 	ParagraphRow as BackendParagraphRow,
 	FileEntry as BackendFileEntry,
 	HistoryItem,
@@ -75,6 +77,8 @@ import type {
 	ImpactItem,
 	OfficeDiff,
 	OfficeUnavailableReason,
+	FilePreview,
+	PreviewUnavailableReason,
 	ParagraphRow,
 	Owner,
 	PointFile,
@@ -257,6 +261,8 @@ export function mapOfficeDiff(result: BackendOfficeDiff): OfficeDiff {
 				cells: result.cells.map((cell) => ({
 					sheet: cell.sheet,
 					cell: cell.cell,
+					row: cell.row,
+					col: cell.col,
 					before: cell.before,
 					after: cell.after
 				})),
@@ -288,6 +294,53 @@ function mapOfficeReason(reason: BackendOfficeUnavailableReason): OfficeUnavaila
 			return 'unsupported_format';
 		case 'corrupt':
 			return 'corrupt';
+	}
+}
+
+/** プレビューの結果を画面の形にする（キーは snake_case、値の変換は OfficeDiff と同じ規則） */
+export function mapFilePreview(result: BackendFilePreview): FilePreview {
+	switch (result.kind) {
+		case 'text':
+			return { kind: 'text', content: result.content, truncated: result.truncated };
+		case 'docx':
+			return { kind: 'docx', paragraphs: result.paragraphs, truncated: result.truncated };
+		case 'xlsx':
+			return {
+				kind: 'xlsx',
+				sheets: result.sheets.map((sheet) => ({
+					name: sheet.name,
+					rows: sheet.rows,
+					cols: sheet.cols,
+					cells: sheet.cells.map((cell) => ({ row: cell.row, col: cell.col, value: cell.value })),
+					truncated: sheet.truncated
+				}))
+			};
+		case 'pptx':
+			return {
+				kind: 'pptx',
+				slides: result.slides.map((slide) => ({
+					index: slide.index,
+					paragraphs: slide.paragraphs
+				})),
+				truncated: result.truncated
+			};
+		case 'unavailable':
+			return { kind: 'unavailable', reason: mapPreviewReason(result.reason) };
+		case 'not-found':
+			return { kind: 'not_found' };
+	}
+}
+
+function mapPreviewReason(reason: BackendPreviewUnavailableReason): PreviewUnavailableReason {
+	switch (reason) {
+		case 'too-large':
+			return 'too_large';
+		case 'unsupported-format':
+			return 'unsupported_format';
+		case 'corrupt':
+			return 'corrupt';
+		case 'binary':
+			return 'binary';
 	}
 }
 

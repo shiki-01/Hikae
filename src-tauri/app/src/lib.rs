@@ -25,8 +25,10 @@ mod maintenance;
 mod office;
 mod ops_runner;
 mod os_trash;
+mod preview;
 mod remote;
 mod scheduler;
+mod version;
 mod watch;
 
 use events::{OpTrigger, StatusChanged};
@@ -1595,6 +1597,10 @@ async fn diff(
 
         let runner = crate::git_runner();
         let ops = Ops::new(runner);
+
+        // 画面の時点 ID（this・cloud を含む）を版に解決してから比べる。版が無ければエラーにする
+        let from = version::require_rev(&ops, &project.path, &from)?;
+        let to = version::require_rev(&ops, &project.path, &to)?;
 
         // 「いま」と比べるときに対象が新規（未追跡）ファイルなら、作業フォルダのファイルを読んで
         // 全行を追加として返す（`git diff` は未追跡ファイルを出力しないため）
@@ -3390,6 +3396,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             list_point_changes,
             open_file_at,
             office::compare_office,
+            preview::preview_file,
             recover_interrupted,
             github::get_session,
             github::start_login,

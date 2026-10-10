@@ -13,8 +13,10 @@ pub struct Limits {
     pub max_entries: usize,
     /// xlsx の値のあるセル数（シートをまたいだ合計。空セルは数えない）
     pub max_cells: usize,
-    /// docx の段落数（空の段落を含む）
+    /// docx の段落数（空の段落を含む）。pptx では、空でない段落の合計
     pub max_paragraphs: usize,
+    /// pptx のスライド数（プレゼンテーションに並ぶスライドの数）
+    pub max_slides: usize,
     /// xlsx のシート 1 枚の、セル参照の矩形（最小の行・列から最大の行・列まで）の面積。
     /// calamine は矩形の全体の領域を確保するため、遠くのセルを 1 つ書くだけで大きな確保になる。それを防ぐ
     pub max_sheet_area: u64,
@@ -28,6 +30,7 @@ impl Default for Limits {
             max_entries: 10_000,
             max_cells: 200_000,
             max_paragraphs: 100_000,
+            max_slides: 1_000,
             max_sheet_area: 1_000_000,
         }
     }
