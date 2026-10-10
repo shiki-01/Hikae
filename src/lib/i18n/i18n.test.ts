@@ -53,7 +53,14 @@ describe('i18n', () => {
 			'ref',
 			'before',
 			'after',
-			'value'
+			'value',
+			// AI（ローカル LLM）の表示
+			'memory',
+			'disk',
+			'needed',
+			'have',
+			'received',
+			'stage'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

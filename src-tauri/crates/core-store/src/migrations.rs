@@ -25,6 +25,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 6 {
         migrate_to_v6(conn)?;
     }
+    if current_version < 7 {
+        migrate_to_v7(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -266,6 +269,31 @@ fn migrate_to_v6(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v7: 生成済みメモのキャッシュ（設計書 10.4）を、入力ハッシュをキーにした形に作り直す。
+/// 旧 `message_cache`（ツリーの OID 単位）は読み書きする処理が無かったため、行は無い前提で作り直す。
+/// 古い順に 500 件まで残すため、作成時刻の列を持つ。`llm_models` は変更しない。
+fn migrate_to_v7(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        BEGIN;
+
+        DROP TABLE IF EXISTS message_cache;
+
+        CREATE TABLE message_cache (
+            input_hash TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        PRAGMA user_version = 7;
+        COMMIT;
+        "#,
+    )?;
+
+    Ok(())
+}
+
 /// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
 /// 壊れた JSON、null、選択肢にない値は取り込まない。
 fn legacy_overrides(config: &str) -> Vec<(String, String)> {
@@ -319,7 +347,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         let (outcome, finished, backup): (String, Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT outcome, finished_at, backup_ref FROM journal WHERE id = 1",
@@ -373,7 +401,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",
@@ -412,7 +440,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         let (path, dismissed): (String, i64) = conn
             .query_row(
                 "SELECT path, dismissed FROM skip_worktree WHERE project_id = 'p1'",

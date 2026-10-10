@@ -27,7 +27,12 @@ const current: AppSettings = {
 	snapshotSizeCapX: 2,
 	autoSaveAfterRestore: true,
 	largeFileWarnMb: 50,
-	showSnapshotsInTimeline: 'collapsed'
+	showSnapshotsInTimeline: 'collapsed',
+	memoSuggestion: 'rules',
+	aiRunner: 'builtin',
+	aiModel: '',
+	aiScope: 'text-diff',
+	aiOllamaUrl: 'http://localhost:11434'
 };
 
 describe('設定項目の定義', () => {

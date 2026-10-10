@@ -760,7 +760,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブに項目があり（ほかに「保存しないファイル」「AI」「拡張機能」「詳細設定」のタブがあるが、「今後のバージョンで利用できます」などの案内だけを出す）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`）。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブに項目があり（ほかに「保存しないファイル」「拡張機能」「詳細設定」のタブがあるが、「今後のバージョンで利用できます」などの案内だけを出す。「AI」のタブは Phase 2 で実装済み（S7。内容は 10.5））、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
@@ -775,8 +775,10 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `auto_save_after_restore` | 反映済み（2026-10-09）。元に戻した後に続けて保存するかに使う（プロジェクト別の上書きを含む。4.2）。画面の「一般」に「元に戻した後に自動で保存」として置く |
 | `auto_snapshot_enabled`、`auto_snapshot_delay_secs` | 反映済み（2026-10-08 に Phase 1 へ前倒し）。ファイル監視による自動保存の有無と静止時間に使う（6.2）。変更は次の巡回を待たずに反映される。プロジェクト別の上書きに従う |
 | `snapshot_size_cap_x` | 反映済み（自動保存の容量上限。6.2）。間引きの容量上限に使う。画面の「自動保存」タブに「自動保存の容量上限」として置く（上限なし / 1 / 2 / 5 倍）。プロジェクト別の上書きは対象外（全体の設定だけ） |
-| `memo_suggestion`、`open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。メモの提案は常にルールベース。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
-| `ai_runner`、`ai_model`、`ai_scope`、`ai_model_source`、`ai_custom_gguf_path` | 保存のみ（Phase 2） |
+| `memo_suggestion` | 反映済み（Phase 2）。`ai` のとき保存欄に AI の提案を出す（10.4）。プロジェクト別に上書きできる。AI タブの「保存メモを AI で提案する」に対応 |
+| `open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
+| `ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url` | 反映済み（Phase 2）。提案の実行方式（内蔵 / Ollama）、使うモデル（内蔵はカタログの ID、Ollama はモデル名）、AI に渡す範囲に使う（10.5）。`ai_scope` の `with-images` は段階 3 まで画像の本文を渡さず、テキストの差分は `text-diff` と同じに扱う |
+| `ai_model_source`、`ai_custom_gguf_path` | 保存のみ。カスタム GGUF は今回は実装せず、画面にも出さない |
 | `git_executable` | 保存のみ。git の探索は設定ではなく `GitRunner::bundled` が行う（`HIKAE_GIT_PATH` → 同梱 → PATH。8.2） |
 | `work_copy_enabled`、`extension_dev_mode`、`extension_index_urls`、`git_lfs` | 保存のみ（Phase 3 / 4） |
 
@@ -830,7 +832,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `tauri-specta` / `specta` 2.0.0-rc.25、`specta-typescript` 0.0.12 | `app`、`core-store` | `src/lib/bindings.ts` の生成 |
 | 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2` | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
 
-設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`wasmtime`、`llama-server` サイドカー（`core-llm` は雛形のみ）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
+設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`、`wasmtime`。`llama-server` サイドカーと `core-llm` のモデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続は Phase 2 で導入済み（10.5。Windows は同梱の取得と `--version` まで確認。macOS は未確認）。Phase 2 で追加した依存: `sysinfo` 0.39.6（`app`。総メモリと空き容量の取得。機能は `system`・`disk` のみ）、`tokio` 1（`app`。`time`・`sync`。生成の時間制限と、設定変更の共有ロック。`core-llm` と同じ版の系列）、`tokio-util` 0.7（`app`。ダウンロードの中断の `CancellationToken`。`core-llm` と同じ版）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
 
 **同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
 
@@ -905,7 +907,8 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 | SQLite `settings` / `project_settings` | アプリ全体の設定と、プロジェクト別の上書き（7.2） | キーと JSON 値。UI 言語は日本語のみで保存項目なし。ウィンドウ状態の保存は未実装 |
 | SQLite `projects` | 登録プロジェクト | id、パス（一意）、表示名、remote URL、所有者（個人のログイン名）、既定ブランチ、最終表示日時、最初の保存の OID（`initial_commit`）。`config`（旧形式の上書き JSON）は残るが未使用 |
 | SQLite `journal` | 操作ジャーナル | 6.3 |
-| SQLite `snapshots`、`skip_worktree`、`llm_models`、`message_cache`、`extensions` | 表は作成済みだが、**読み書きする処理は未実装**（Phase 2 以降の用途） | 当初案の項目のまま。スナップショットの一覧は、現状は ref から直接読んでいる（`for-each-ref`） |
+| SQLite `snapshots`、`skip_worktree`、`extensions` | 表は作成済みだが、**読み書きする処理は未実装**（Phase 2 以降の用途） | 当初案の項目のまま。スナップショットの一覧は、現状は ref から直接読んでいる（`for-each-ref`） |
+| SQLite `llm_models`、`message_cache` | 導入済みモデルの記録（ID、段階、`models_dir` からの相対パス、SHA-256、サイズ、導入日時）と、生成済みの提案のキャッシュ（入力ハッシュ → 文。500 件まで、作成の古いものから削除） | 導入の有無はファイルの有無で判定し、`llm_models` は記録として残す。キャッシュのキーは 10.4 の 5 |
 | `.git/hikae/tmp/` | スナップショット作成用の一時インデックス（処理後に削除） | 6.2 |
 | OS キーチェーン | GitHub トークン | — |
 
@@ -920,6 +923,8 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 | v3 | `projects` に `initial_commit` 列を追加。保存先 URL が無いプロジェクトでも、フォルダの付け替え（`relocate_project`）時に同じ履歴か照合できるようにする。プロジェクトの登録時と最初の保存の後に記録し、記録済みなら上書きしない |
 | v4 | 設定 `settings` とプロジェクト別の `project_settings`（外部キーあり）を作成。旧 `projects.config` の有効な上書きを `project_settings` へ移す |
 | v5 | `journal` を作り直し、`finished_at` を空にできる形にする（`running` / `interrupted` の追加に対応）。`idx_journal_outcome` を追加。既存の行は移す |
+| v6 | `skip_worktree` に `dismissed` 列を追加（4.8 の「今後の変更だけ無視する」の記録） |
+| v7 | `message_cache` を作り直す。キーは入力ハッシュ（`input_hash`）、作成時刻を持つ（10.4）。旧表は読み書きする処理が無かったため、行は移さない。`llm_models` は変更しない |
 
 ### 9.2 プロジェクトの状態
 
@@ -964,7 +969,8 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
   - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
   - 設定: `get_settings`、`update_settings`、`complete_onboarding`
   - 設計の `create_repo` は `add_project`（新規作成・既存フォルダの登録で `remote` を渡す）と `connect_remote`（あとから接続）で実装済み（4.6）。`open_with` に相当するものは未実装（4.7）
-- **イベント**（Rust → UI。名前は kebab-case）: `status-changed`、`files-changed`、`op-progress`、`op-finished`、`sync-state-changed`、`needs-attention`、`clone-progress`。`llm_download_progress` は未実装（Phase 2）
+- **AI（Phase 2）のコマンド**（`app/src/ai.rs`）: `ai_catalog`（カタログと導入状態・可否）、`ai_download_model`（バックグラウンド。即座に戻る）、`ai_cancel_download`、`ai_remove_model`、`ai_suggest_memo`（`Option<String>`。失敗はすべて `None`）、`ai_list_ollama_models`、`ai_check_endpoint`、`ai_test_generation`。設定は既存の `get_settings` / `update_settings` を使う
+- **イベント**（Rust → UI。名前は kebab-case）: `status-changed`、`files-changed`、`op-progress`、`op-finished`、`sync-state-changed`、`needs-attention`、`clone-progress`、`llm-download-progress`（受信済み・総量のバイト数）、`llm-download-finished`（`ready` / `failed` / `canceled`）
 - 状態を変える操作は `run_op`（直列キューの内側）で実行し、読み取りは `run_blocking` でキューを通さずに実行する
 - TanStack Query のキーは、実装では `['changes', projectId]`、`['history', projectId]`、`['compare', projectId, ...]` のように**種別を先頭**にしている（`src/lib/api/keys.ts`）。操作の完了後は `status-changed` を受けて、プロジェクトに関わるキーをまとめて無効化する
 - ブラウザ単体で動かすときは Tauri が無いため、画面は mock の API（`src/lib/api/mock.ts`）に切り替わる
@@ -1009,9 +1015,10 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 
 1. 保存欄には常にルールベースの文を先に入れる。LLM の結果は「✨ 提案」として横に並べ、採用はユーザーが押したときのみ。保存操作は LLM を待たない
 2. 入力の構造化: 変更ファイルを「種別・ファイル名・変更量」の表として渡し、差分本文はファイルごとに上限を設けて切り詰める（全体で約 2,000 トークン）
-3. 出力の制約: `llama-server` の JSON Schema 制約（Ollama は `format` 指定）で `{ "summary": "50字以内", "details": ["…"] }` の形を強制し、小型モデルの書式崩れを防ぐ
+3. 出力の形式: **plain の 1 文**を生成する（実装時点の決定。2026-10-10）。JSON Schema 制約（`{ "summary": …, "details": […] }`）は採用しない。評価（`docs/notes/phase2-llm-evaluation.md` の 4.2・7）で、schema モードは小型モデルが JSON を閉じずに途中で切れる例（`finish_reason=length`）が複数あり、plain の方が安定したため。代わりに、生成後の検証（`core-llm` の `clean_summary`）で、改行・複数文（「。」が 2 つ以上）・100 文字超・Git 用語を含むものを採用しない。画面に出す文は 1 文に限る
 4. タイムアウト（段階2で 30秒）・不正出力・プロセス異常終了時はルールベースのまま何も表示しない（E19 は設定画面でのみ表示）
-5. 同じ差分（ツリーの OID）に対する結果は `message_cache` から返す
+5. 同じ入力に対する結果は `message_cache` から返す。キーは「入力から組み立てたメッセージ（system と user の内容）＋モデル ID」の SHA-256（`core-llm` の `cache_key`）。**設計当初の「ツリーの OID」は使わない**。差分の構築が作業フォルダの未保存の内容（監視の結果や文書の抽出）に依存し、同じツリーでも入力が変わりうるため、入力そのものを基準にする。保持は 500 件まで（作成の古いものから削除）。検証で弾かれた結果（None）は保存せず、次回は再び生成する
+6. 入力の範囲: 変更一覧（最大 100 件）のうち、先頭の 30 件までを渡す。テキストは 1 ファイル 800 文字、全体 3,000 文字まで（`core-llm` の `prompt`）。docx は段落の差分、xlsx は「Sheet1!B4: 120000 → 135000」の形のセル差分を、既存の文書比較の抽出から作る。画像・PDF などは変更の事実（種別・名前）だけを渡す。「ファイル名まで」の設定では差分の本文を渡さない
 
 ### 10.5 モデル管理と実行
 
@@ -1019,7 +1026,18 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - **起動と解放**: 生成が必要になった時点で `llama-server` を起動し、5分間使わなければ終了してメモリを解放する
 - **GPU**: macOS は Metal、Windows は CPU 版を既定とし、Vulkan 版を詳細設定で選べるようにする（GPU ドライバ依存の不具合を既定値で踏まないため）
 - **Ollama への切替**（詳細設定）: 接続先 URL（初期値 `http://localhost:11434`）を指定し、Ollama 側のモデル一覧から選ぶ。通信は OpenAI 互換 API で共通化しているため、`core-llm` 内の分岐は接続先とモデル一覧の取得のみ
-- **プライバシー**: 内蔵・Ollama のいずれも PC 内で完結し、ファイル内容は外部へ送信しない。Ollama の接続先に外部ホストが指定された場合は警告を出す
+- **プライバシー**: 内蔵・Ollama のいずれも PC 内で完結し、ファイル内容は外部へ送信しない。Ollama の接続先に外部ホストが指定された場合は警告を出し、さらに「AI に渡す範囲」の設定にかかわらず差分の本文は送らず、ファイル名と変更の種類だけを渡す（`ai_suggest_memo` で強制。実装時の判断）
+- **実装（Phase 2。2026-10-10）**:
+  - 通信先は、モデルのダウンロード（許可リストのホストのみ。`huggingface.co`・`*.huggingface.co`・`*.hf.co` の https）、利用者が指定した Ollama の URL、127.0.0.1 の llama-server の 3 つだけ。リダイレクトは手動で追い、各ホップで同じ検査をする
+  - 導入: カタログ（`core-llm/src/catalog.json`。ID・取得元・SHA-256・サイズ・ライセンス・必要メモリ）から選ぶ。導入の可否は総メモリ（必要 7 GiB 以上）と、モデルを置くドライブの空き容量（サイズの 1.1 倍）で判定し、満たさない段階は理由つきで灰色にする。ダウンロードは `.part` への追記で再開し、完了後に SHA-256 を検証してから最終名へ rename する。検証に失敗したものは削除する。モデルは `<アプリのデータフォルダ>/models/<ID>/` に置き、導入の記録を `llm_models` に残す
+  - ダウンロードと削除は、モデル ID ごとに同時に 1 つだけ（`app` の `ModelSlots`）。ダウンロードは受け付けたらすぐ戻り、進捗は `llm-download-progress`、終了（導入・失敗・中止）は `llm-download-finished` で知らせる
+  - 生成: 内蔵は `llama-server`（`-m` で GGUF を指定し、127.0.0.1 の空きポートで起動）。起動は生成が必要になったときだけ行い、5 分使われなければ停止する。アプリ終了時にも停止する。Ollama は同じ OpenAI 互換 API（`/v1/chat/completions`）を使う
+  - 同梱: Windows は llama.cpp の公式リリース **b11540**（CPU 版、`llama-b11540-bin-win-cpu-x64.zip`、SHA-256 はスクリプトに固定）を `scripts/fetch-llama-windows.mjs` が `src-tauri/app/resources/llama/` へ展開する（コミットしない）。展開先には `llama-server.exe` と、そのフォルダの DLL だけを置き、展開後に `--version` で版を確かめる。`tauri.conf.json` の `bundle.resources` に `resources/llama` を加え、`beforeDevCommand` / `beforeBuildCommand` と CI から呼ぶ。出典表記は `NOTICE.txt`（MIT）
+  - macOS: 同梱の取得スクリプトは作っていない（**未確認**）。`HIKAE_LLAMA_SERVER_PATH` の環境変数と PATH の `llama-server` を探す。Windows の同梱分は `resources/llama/` を見る
+  - 提案の取得条件: 「AI を使う」（`memo_suggestion`）、モデルが選ばれている、内蔵は導入済み、変更がある。変更一覧が変わったら 1.5 秒待ってから取り直す。結果が無い（未導入・接続失敗・タイムアウト・検証不合格）ときは何も出さない。タイムアウトは提案全体で 150 秒（起動 120 秒＋生成 30 秒）
+  - 設定の「試す」は固定の入力で生成を試し、失敗の理由（未導入・起動失敗・タイムアウト・接続・応答の形式・検証で不採用）を返す。これだけがエラーの理由を画面に出す（E19）
+  - 読み取り専用: 提案の入力は `list_changes` と差分の読み取りだけで作る。作業フォルダ・インデックス・refs には書かない
+  - テスト: `core-store` の `message_cache`（再利用・500 件の剪定）と `llm_models`、`core-llm` の入力の組み立てとキー、`core-ops` の `memo_text_diff`（作業フォルダの変更の反映と、読み取りの前後で状態が変わらないこと）。モデルの実ダウンロード、llama-server の実起動、Ollama の実機は未確認
 
 ## 11. プレビュー拡張機能の設計
 
@@ -1182,7 +1200,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | 自動保存の保持期間と容量上限 | 期間のみ / 期間＋容量上限 | 期間＋容量上限（例: プロジェクトサイズの 2 倍）。上限超過時は古い順に間引く | Phase 2 着手前 |
 | 「元に戻した後に自動で保存」の既定 | オン / オフ | オン（7章） | Phase 1 のユーザーテスト後に再評価 |
 | アプリ名・用語の最終決定 | 「保存ポイント」等の候補 | 2章の対応表をユーザーテストで検証 | Phase 1 のユーザーテスト |
-| LLM の具体的なモデル | 実装時点の小型モデル | 日本語のメモ生成で 3〜4 候補を比較評価 | Phase 2 着手時 |
+| LLM の具体的なモデル | 実装時点の小型モデル | 日本語のメモ生成で 3〜4 候補を比較評価。**決定（2026-10-10）**: 既定は Gemma 4 E2B（段階 2、Q4_K_M。Apache-2.0）、任意の高品質版は Qwen3-4B-Instruct-2507（段階 2、Q4_K_M。Apache-2.0）。評価の根拠は `docs/notes/phase2-llm-evaluation.md` | Phase 2 着手時 |
 | 作業コピー（ブランチ）の見せ方 | 一覧切替 / 「別の案を試す」専用フロー | Phase 3 で再設計（MVP の利用状況を見て、そもそも必要かを含めて判断） | Phase 3 着手前 |
 | 拡張機能の配布元 | 自前の索引 / GitHub トピック検索 | 自前の索引（署名と審査の主体を明確にするため） | Phase 4 |
 | ライセンス | OSS / プロプライエタリ | アプリ本体のライセンスを配布の直前に決定（git 同梱の GPLv2 表示は必須） | 配布の直前（2026-10-09 に決定。12章） |

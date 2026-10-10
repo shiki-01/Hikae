@@ -115,7 +115,12 @@ enum Side {
 }
 
 /// 比較の本体（同期処理。呼び出し側が別スレッドで実行する）
-fn compare(repo: &Path, from: &str, to: &str, path: &str) -> Result<OfficeDiff, AppError> {
+pub(crate) fn compare(
+    repo: &Path,
+    from: &str,
+    to: &str,
+    path: &str,
+) -> Result<OfficeDiff, AppError> {
     let kind = match office_kind(path) {
         // pptx は比較の対象にしない（表示はプレビューで行う）
         Some(OfficeKind::Pptx) | None => {

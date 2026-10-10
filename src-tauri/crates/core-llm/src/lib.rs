@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod client;
 pub mod download;
 pub mod error;
+pub mod input;
 pub mod prompt;
 pub mod requirements;
 pub mod service;
@@ -19,6 +20,10 @@ pub use catalog::{Catalog, CatalogEntry, CatalogError};
 pub use client::{check_endpoint, list_ollama_models, Backend, ChatClient, Endpoint};
 pub use download::{installed, is_allowed_url, remove, DownloadError, Downloader, Installed};
 pub use error::LlmError;
+pub use input::{
+    cache_key, cell_amount, cell_line, change_input, paragraph_amount, signed_line, text_amount,
+    SourceChange,
+};
 pub use prompt::{build_messages, ChangeInput, ChangeKind, ChangedFile, Message, Role};
 pub use requirements::{required_disk_bytes, stage_availability, Availability, Reason, SystemInfo};
 pub use service::{LlmService, ServiceConfig};

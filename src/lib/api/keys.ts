@@ -11,6 +11,10 @@ export const keys = {
 	/** 「すべてのファイル」の一覧 */
 	projectTree: (id: string) => ['project-tree', id] as const,
 	memoSuggestion: (id: string) => ['memo-suggestion', id] as const,
+	/** AI（ローカル LLM）のモデル一覧。ダウンロードの終了で取り直す */
+	aiCatalog: ['ai-catalog'] as const,
+	/** 保存メモの AI 提案。変更一覧と設定（モデル・範囲）の組み合わせごとに別の結果 */
+	aiSuggestion: (id: string, key: string) => ['ai-suggestion', id, key] as const,
 	/** 保存しないファイル（`.gitignore`）のパターン一覧 */
 	ignoreRules: (id: string) => ['ignore-rules', id] as const,
 	/** 追跡中で、保存しないファイルに当たるファイル */

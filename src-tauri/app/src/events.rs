@@ -152,3 +152,31 @@ pub struct CloneProgress {
     pub project_id: String,
     pub phase: ClonePhase,
 }
+
+/// ローカル LLM のモデルのダウンロードの進捗（設計書 10.5）。受信済みと総量はバイト数
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct LlmDownloadProgress {
+    /// カタログのモデル ID
+    pub id: String,
+    pub received: f64,
+    pub total: f64,
+}
+
+/// ダウンロードの結果
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum LlmDownloadOutcome {
+    /// 導入できた（SHA-256 を検証済み）
+    Ready,
+    /// 失敗した。もう一度実行すると、途中から再開する
+    Failed,
+    /// 利用者が中止した。もう一度実行すると、途中から再開する
+    Canceled,
+}
+
+/// ローカル LLM のモデルのダウンロードが終わった（成功・失敗・中止）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct LlmDownloadFinished {
+    pub id: String,
+    pub outcome: LlmDownloadOutcome,
+}

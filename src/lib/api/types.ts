@@ -489,6 +489,90 @@ export type OpenAction = Exclude<OpenTarget, 'copy_path'>;
 export type ConflictMode = 'show-dialog' | 'notify-only';
 export type TimelineSnapshots = 'collapsed' | 'shown' | 'hidden';
 
+/** メモの提案の方式 */
+export type MemoSuggestionMode = 'rules' | 'ai';
+/** AI の実行方式 */
+export type AiRunnerMode = 'builtin' | 'ollama';
+/** AI に渡す範囲（段階 3 の画像は未実装のため、画面には「ファイル名まで」と「テキスト差分まで」だけを出す） */
+export type AiScopeMode = 'file-names' | 'text-diff' | 'with-images';
+
+/** 導入状態 */
+export type AiModelStatus = 'missing' | 'partial' | 'ready';
+
+/** 導入できない理由（PC の条件） */
+export type AiUnavailableReason =
+	{ kind: 'memory'; needed: number; have: number } | { kind: 'disk'; needed: number; have: number };
+
+/** カタログの 1 モデルと、この PC での状態 */
+export interface AiModel {
+	id: string;
+	displayName: string;
+	stage: number;
+	sizeBytes: number;
+	licenseName: string;
+	licenseUrl: string;
+	/** 必要メモリの目安（バイト） */
+	minMemoryBytes: number;
+	recommended: boolean;
+	status: AiModelStatus;
+	/** 途中まで取得したバイト数（`partial` のときだけ意味を持つ） */
+	partialBytes: number;
+	/** この PC で導入できるか */
+	available: boolean;
+	unavailableReason: AiUnavailableReason | null;
+	/** ダウンロード中か */
+	downloading: boolean;
+}
+
+/** PC の状態（導入の可否の判定に使う値） */
+export interface AiSystem {
+	totalMemoryBytes: number;
+	/** モデルを置くドライブの空き容量。判定できないときは 0 */
+	freeDiskBytes: number;
+}
+
+export interface AiCatalog {
+	system: AiSystem;
+	models: AiModel[];
+}
+
+/** ダウンロードの結果 */
+export type AiDownloadOutcome = 'ready' | 'failed' | 'canceled';
+
+/** ダウンロードの通知（進捗、または終了） */
+export type AiDownloadNotice =
+	| { kind: 'progress'; id: string; received: number; total: number }
+	| { kind: 'finished'; id: string; outcome: AiDownloadOutcome };
+
+/** 接続先の確認の結果 */
+export interface AiEndpointCheck {
+	/** 形式が正しく、Ollama が応答した */
+	ok: boolean;
+	/** ループバック以外のホストか（画面で警告する） */
+	externalHost: boolean;
+}
+
+/** 生成の試行が失敗した理由 */
+export type AiTestFailure =
+	| 'not-configured'
+	| 'not-installed'
+	| 'server-not-found'
+	| 'server-start-failed'
+	| 'server-start-timeout'
+	| 'timeout'
+	| 'network'
+	| 'bad-status'
+	| 'bad-response'
+	| 'invalid-endpoint'
+	| 'rejected'
+	| 'other';
+
+/** 生成の試行の結果 */
+export interface AiTestResult {
+	ok: boolean;
+	reason: AiTestFailure | null;
+}
+
 /** 画面から変更できる設定（一般・取り込み・アップロード・自動保存） */
 export interface AppSettings {
 	pullOnStartup: boolean;
@@ -511,6 +595,16 @@ export interface AppSettings {
 	/** 大きいファイルの警告閾値（MB） */
 	largeFileWarnMb: number;
 	showSnapshotsInTimeline: TimelineSnapshots;
+	/** メモの提案。`rules` はルールのみ、`ai` は AI を使う（プロジェクト別に上書きできる） */
+	memoSuggestion: MemoSuggestionMode;
+	/** AI の実行方式（内蔵、または Ollama） */
+	aiRunner: AiRunnerMode;
+	/** 使用するモデル（内蔵はカタログの ID、Ollama はモデル名）。空は未選択 */
+	aiModel: string;
+	/** AI に渡す範囲 */
+	aiScope: AiScopeMode;
+	/** Ollama の接続先 URL */
+	aiOllamaUrl: string;
 }
 
 export type SettingKey = keyof AppSettings;
@@ -678,4 +772,23 @@ export interface ProjectApi {
 	getSettings(projectId: string | null): Promise<SettingsView>;
 	/** `projectId` を指定すると、そのプロジェクトだけの上書きとして保存する */
 	updateSettings(projectId: string | null, patch: Partial<AppSettings>): Promise<SettingsView>;
+
+	/** AI のモデル一覧と、この PC での導入状態・可否 */
+	aiCatalog(): Promise<AiCatalog>;
+	/** ダウンロードを始める（バックグラウンド。進捗と終了は `onAiDownload` で受け取る） */
+	aiDownloadModel(id: string): Promise<void>;
+	/** 進行中のダウンロードを中止する（途中まで取得したファイルは残る） */
+	aiCancelDownload(id: string): Promise<void>;
+	/** モデルを削除する */
+	aiRemoveModel(id: string): Promise<void>;
+	/** 保存メモの提案を 1 文返す。提案が得られないときは null（エラーにはしない） */
+	aiSuggestMemo(projectId: string): Promise<string | null>;
+	/** Ollama に導入されているモデル名の一覧 */
+	aiListOllamaModels(url: string): Promise<string[]>;
+	/** 接続先の形式と到達性、外部ホストかどうか */
+	aiCheckEndpoint(url: string): Promise<AiEndpointCheck>;
+	/** 固定の入力で生成を試す（結果は保存しない） */
+	aiTestGeneration(): Promise<AiTestResult>;
+	/** ダウンロードの通知を購読する。戻り値は購読の解除 */
+	onAiDownload(listener: (notice: AiDownloadNotice) => void): () => void;
 }

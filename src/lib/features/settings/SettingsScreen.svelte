@@ -8,6 +8,7 @@
 	import Dialog from '#lib/components/Dialog.svelte';
 	import IconButton from '#lib/components/IconButton.svelte';
 	import Select from '#lib/components/Select.svelte';
+	import AiSection from '#lib/features/ai/AiSection.svelte';
 	import AccountSection from './AccountSection.svelte';
 	import IgnoreSection from './IgnoreSection.svelte';
 	import NumberSetting from './NumberSetting.svelte';
@@ -62,7 +63,6 @@
 
 	const notes: Record<string, MessageKey> = {
 		ignore: 'settings.note_ignore',
-		ai: 'settings.note_ai',
 		extensions: 'settings.note_extensions'
 	};
 
@@ -151,6 +151,8 @@
 						<summary class="type-body cursor:pointer">{t('settings.advanced_toggle')}</summary>
 						<p class="m:0 mt:3 type-body fg:fg-muted">{t('settings.advanced_empty')}</p>
 					</details>
+				{:else if id === 'ai'}
+					<AiSection />
 				{:else if id === 'ignore' && contextProjectId}
 					<IgnoreSection projectId={contextProjectId} />
 				{:else if notes[id]}

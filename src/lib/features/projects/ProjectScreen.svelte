@@ -30,6 +30,13 @@
 		type AddFilesSummary
 	} from '#lib/features/changes/add-files-result.js';
 	import { nextMemo } from '#lib/features/changes/memo.js';
+	import { useAiCatalog, useAiSuggestion } from '#lib/features/ai/queries.js';
+	import {
+		aiSuggestionReady,
+		changesKey,
+		shouldRequestSuggestion,
+		SUGGESTION_DEBOUNCE_MS
+	} from '#lib/features/ai/suggest.js';
 	import SizeCheckDialog from '#lib/features/changes/SizeCheckDialog.svelte';
 	import { choiceFor, type SizeAction } from '#lib/features/changes/size-check.js';
 	import { folderAtPoint, folderLabel } from '#lib/features/changes/drop-target.js';
@@ -167,6 +174,35 @@
 	);
 	const selectedPoint = $derived(history.find((p) => p.id === selectedPointId) ?? null);
 	const suggestion = $derived(changes.length > 0 ? (memoQuery.data ?? '') : '');
+
+	// AI の提案。変更一覧か設定（モデル・範囲）が変わったら、待ち時間のあとに取り直す
+	const aiCatalogQuery = useAiCatalog();
+	const aiSettings = $derived(settingsQuery.data?.settings);
+	const aiKey = $derived(
+		`${changesKey(changes)}|${aiSettings?.aiRunner}|${aiSettings?.aiModel}|${aiSettings?.aiScope}`
+	);
+	const aiReady = $derived(aiSuggestionReady(aiSettings, aiCatalogQuery.data));
+	let aiDebouncedKey = $state('');
+	$effect(() => {
+		const next = aiKey;
+		const timer = setTimeout(() => (aiDebouncedKey = next), SUGGESTION_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	});
+	const aiSuggestionQuery = useAiSuggestion(
+		() => projectId,
+		() => aiDebouncedKey,
+		() =>
+			shouldRequestSuggestion({
+				ready: aiReady,
+				projectId,
+				changeCount: changes.length,
+				debouncedKey: aiDebouncedKey
+			})
+	);
+	// 待ち時間の途中（変更が新しい）のときは、古い内容の提案を出さない
+	const aiUpToDate = $derived(aiDebouncedKey === aiKey);
+	const aiSuggestionText = $derived(aiUpToDate ? (aiSuggestionQuery.data ?? null) : null);
+	const aiSuggesting = $derived(aiUpToDate && aiReady && aiSuggestionQuery.isFetching);
 	const live = $derived(liveStateOf(projectId));
 	const baseId = $derived(latest?.id ?? 'current');
 
@@ -579,7 +615,10 @@
 			bind:memo
 			hasChanges={changes.length > 0}
 			saving={save.isPending}
+			suggestion={aiSuggestionText}
+			suggesting={aiSuggesting}
 			onsave={submitSave}
+			onusesuggestion={(text) => (memo = text)}
 		/>
 	{/if}
 </div>

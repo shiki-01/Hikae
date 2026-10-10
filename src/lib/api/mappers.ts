@@ -48,7 +48,14 @@ import type {
 	SettingsPatch_Deserialize,
 	SizeCheckResult,
 	SettingsView as BackendSettingsView,
-	SyncStatus
+	SyncStatus,
+	AiCatalog as BackendAiCatalog,
+	ModelView as BackendModelView,
+	UnavailableReason as BackendUnavailableReason,
+	EndpointCheck as BackendEndpointCheck,
+	GenerationTest as BackendGenerationTest,
+	LlmDownloadFinished as BackendDownloadFinished,
+	LlmDownloadProgress as BackendDownloadProgress
 } from '#lib/bindings.js';
 import { fileKindOf } from '#lib/utils/file-kind.js';
 import { AppError } from './errors';
@@ -98,6 +105,12 @@ import type {
 	SettingKey,
 	SettingsView,
 	Session,
+	AiCatalog,
+	AiDownloadNotice,
+	AiEndpointCheck,
+	AiModel,
+	AiTestResult,
+	AiUnavailableReason,
 	SizeCheck,
 	SizeChoice,
 	SkipReason
@@ -674,7 +687,12 @@ export const SETTING_BACKEND_KEYS = {
 	snapshotSizeCapX: 'snapshot_size_cap_x',
 	autoSaveAfterRestore: 'auto_save_after_restore',
 	largeFileWarnMb: 'large_file_warn_mb',
-	showSnapshotsInTimeline: 'show_snapshots_in_timeline'
+	showSnapshotsInTimeline: 'show_snapshots_in_timeline',
+	memoSuggestion: 'memo_suggestion',
+	aiRunner: 'ai_runner',
+	aiModel: 'ai_model',
+	aiScope: 'ai_scope',
+	aiOllamaUrl: 'ai_ollama_url'
 } as const satisfies Record<SettingKey, keyof BackendSettings>;
 
 export function mapSettings(settings: BackendSettings): AppSettings {
@@ -691,8 +709,76 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		snapshotSizeCapX: settings.snapshot_size_cap_x,
 		autoSaveAfterRestore: settings.auto_save_after_restore,
 		largeFileWarnMb: settings.large_file_warn_mb,
-		showSnapshotsInTimeline: settings.show_snapshots_in_timeline
+		showSnapshotsInTimeline: settings.show_snapshots_in_timeline,
+		memoSuggestion: settings.memo_suggestion,
+		aiRunner: settings.ai_runner,
+		aiModel: settings.ai_model,
+		aiScope: settings.ai_scope,
+		aiOllamaUrl: settings.ai_ollama_url
 	};
+}
+
+/** 導入できない理由を画面の形にする（数値が無いときは 0） */
+export function mapAiUnavailable(
+	reason: BackendUnavailableReason | null
+): AiUnavailableReason | null {
+	if (!reason) return null;
+	const needed = reason.needed ?? 0;
+	const have = reason.have ?? 0;
+	return reason.kind === 'not-enough-memory'
+		? { kind: 'memory', needed, have }
+		: { kind: 'disk', needed, have };
+}
+
+function mapAiModel(model: BackendModelView): AiModel {
+	return {
+		id: model.id,
+		displayName: model.display_name,
+		stage: model.stage,
+		sizeBytes: model.size_bytes ?? 0,
+		licenseName: model.license_name,
+		licenseUrl: model.license_url,
+		minMemoryBytes: model.min_memory_bytes ?? 0,
+		recommended: model.recommended,
+		status: model.status,
+		partialBytes: model.partial_bytes ?? 0,
+		available: model.available,
+		unavailableReason: mapAiUnavailable(model.unavailable_reason),
+		downloading: model.downloading
+	};
+}
+
+/** AI タブの一覧 */
+export function mapAiCatalog(catalog: BackendAiCatalog): AiCatalog {
+	return {
+		system: {
+			totalMemoryBytes: catalog.system.total_memory_bytes ?? 0,
+			freeDiskBytes: catalog.system.free_disk_bytes ?? 0
+		},
+		models: catalog.models.map(mapAiModel)
+	};
+}
+
+export function mapEndpointCheck(check: BackendEndpointCheck): AiEndpointCheck {
+	return { ok: check.ok, externalHost: check.external_host };
+}
+
+export function mapTestResult(result: BackendGenerationTest): AiTestResult {
+	return { ok: result.ok, reason: result.reason };
+}
+
+/** ダウンロードの通知（進捗・終了）を画面の形にする */
+export function mapDownloadProgress(event: BackendDownloadProgress): AiDownloadNotice {
+	return {
+		kind: 'progress',
+		id: event.id,
+		received: event.received ?? 0,
+		total: event.total ?? 0
+	};
+}
+
+export function mapDownloadFinished(event: BackendDownloadFinished): AiDownloadNotice {
+	return { kind: 'finished', id: event.id, outcome: event.outcome };
 }
 
 /** 上書きしている項目のキー名（バックエンド側）を画面側の名前にする。画面で扱わない項目は除く */

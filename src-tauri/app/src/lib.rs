@@ -15,6 +15,7 @@ use core_ops::{Ops, OpsError, SaveOptions};
 use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
+mod ai;
 mod app_settings;
 mod auto_snapshot;
 mod blob_protocol;
@@ -369,11 +370,17 @@ pub struct AppState {
     pub session_user: Arc<Mutex<Option<core_github::User>>>,
     /// プロジェクトごとの健全性の記憶（破損の疑い・保存の容量。E09・E10）
     pub health: Arc<health::ProjectHealth>,
+    /// ローカル LLM（設計書 10 章）。読み取りは共有、接続先の切替は排他で行う
+    pub llm: Arc<tokio::sync::RwLock<core_llm::LlmService>>,
+    /// モデルの保存先（アプリのデータフォルダ配下の `models/`）
+    pub models_dir: PathBuf,
+    /// モデル ID ごとの、ダウンロード・削除の直列化
+    pub model_slots: Arc<ai::ModelSlots>,
 }
 
 impl AppState {
     /// 新規作成
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Store, llm: core_llm::LlmService, models_dir: PathBuf) -> Self {
         AppState {
             store: Arc::new(Mutex::new(store)),
             locks: Arc::new(ProjectLocks::new()),
@@ -381,6 +388,9 @@ impl AppState {
             login: Arc::new(core_github::LoginCoordinator::new()),
             session_user: Arc::new(Mutex::new(None)),
             health: Arc::new(health::ProjectHealth::default()),
+            llm: Arc::new(tokio::sync::RwLock::new(llm)),
+            models_dir,
+            model_slots: Arc::new(ai::ModelSlots::default()),
         }
     }
 
@@ -3426,6 +3436,14 @@ fn specta_builder() -> Builder<tauri::Wry> {
             app_settings::get_settings,
             app_settings::update_settings,
             app_settings::complete_onboarding,
+            ai::ai_catalog,
+            ai::ai_download_model,
+            ai::ai_cancel_download,
+            ai::ai_remove_model,
+            ai::ai_suggest_memo,
+            ai::ai_list_ollama_models,
+            ai::ai_check_endpoint,
+            ai::ai_test_generation,
         ])
         .events(collect_events![
             events::StatusChanged,
@@ -3436,6 +3454,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::NeedsAttention,
             events::SkipWorktreeNotice,
             events::CloneProgress,
+            events::LlmDownloadProgress,
+            events::LlmDownloadFinished,
         ])
 }
 
@@ -3513,7 +3533,26 @@ pub fn run() {
                     Vec::new()
                 });
 
-            let state = AppState::new(store);
+            // ローカル LLM。保存先はアプリのデータフォルダの models/、同梱の llama-server は resources/llama/。
+            // 接続先は保存されている設定から決める（内蔵か Ollama）
+            let models_dir = app_data_dir.join("models");
+            let resource_dir = app.path().resource_dir().ok();
+            let settings = store.get_settings().unwrap_or_default();
+            let llm_config = |settings: &core_store::AppSettings| {
+                ai::service_config(models_dir.clone(), resource_dir.as_deref(), settings)
+            };
+            // 保存された接続先が使えなくても、アプリは起動する（内蔵の既定で始め、設定画面で直せる）
+            let llm = core_llm::LlmService::new(llm_config(&settings))
+                .or_else(|_| {
+                    core_llm::LlmService::new(llm_config(&core_store::AppSettings::default()))
+                })
+                .map_err(|e| {
+                    tauri::Error::Io(std::io::Error::other(format!(
+                        "Failed to start the LLM service: {e}"
+                    )))
+                })?;
+
+            let state = AppState::new(store, llm, models_dir);
             app.manage(state);
 
             let mut notified = std::collections::HashSet::new();
@@ -3549,6 +3588,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(invoke_handler)
-        .run(tauri::generate_context!())
-        .expect("アプリの起動に失敗しました");
+        .build(tauri::generate_context!())
+        .expect("アプリの起動に失敗しました")
+        .run(|app_handle, event| {
+            // 終了時に、起動中の内蔵の llama-server を止める（設計書 10.5）
+            if let tauri::RunEvent::Exit = event {
+                let state = app_handle.state::<AppState>();
+                tauri::async_runtime::block_on(ai::stop_on_exit(&state));
+            }
+        });
 }

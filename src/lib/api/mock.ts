@@ -6,6 +6,12 @@ import { officeKindOf } from '#lib/features/compare/office-diff.js';
 import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
 	OfficeDiff,
+	AiCatalog,
+	AiModel,
+	AiDownloadNotice,
+	AiEndpointCheck,
+	AiModelStatus,
+	AiTestResult,
 	FilePreview,
 	PreviewSheet,
 	PreviewSlide,
@@ -478,7 +484,12 @@ const DEFAULT_SETTINGS: AppSettings = {
 	snapshotSizeCapX: 2,
 	autoSaveAfterRestore: true,
 	largeFileWarnMb: 50,
-	showSnapshotsInTimeline: 'collapsed'
+	showSnapshotsInTimeline: 'collapsed',
+	memoSuggestion: 'rules',
+	aiRunner: 'builtin',
+	aiModel: '',
+	aiScope: 'text-diff',
+	aiOllamaUrl: 'http://localhost:11434'
 };
 
 // 画面確認用: localStorage の 'hikae.mock.login' に denied / expired / setup を入れると、ログインの結末を再現できる
@@ -1561,5 +1572,161 @@ export const mockApi: ProjectApi = {
 			});
 		}
 		return mockApi.getSettings(projectId);
+	},
+
+	async aiCatalog(): Promise<AiCatalog> {
+		await sleep(80);
+		const saved = readAiStore();
+		return {
+			system: { totalMemoryBytes: MOCK_AI_MEMORY, freeDiskBytes: MOCK_AI_DISK },
+			models: MOCK_AI_MODELS.map((model) => {
+				const record = saved[model.id] ?? { status: 'missing', partialBytes: 0 };
+				return {
+					...model,
+					status: record.status,
+					partialBytes: record.partialBytes,
+					available:
+						model.minMemoryBytes <= MOCK_AI_MEMORY && model.sizeBytes * 1.1 <= MOCK_AI_DISK,
+					unavailableReason: null,
+					downloading: aiRunning.has(model.id)
+				};
+			})
+		};
+	},
+
+	async aiDownloadModel(id: string): Promise<void> {
+		const model = MOCK_AI_MODELS.find((m) => m.id === id);
+		if (!model) throw new Error(`unknown model: ${id}`);
+		if (aiRunning.has(id)) throw new Error(`already downloading: ${id}`);
+		// 実際のファイルは作らず、受信量を時間で進めるだけ
+		const progress = { received: readAiStore()[id]?.partialBytes ?? 0, total: model.sizeBytes };
+		const timer = setInterval(() => {
+			progress.received = Math.min(progress.total, progress.received + progress.total / 20);
+			emitAi({ kind: 'progress', id, received: progress.received, total: progress.total });
+			if (progress.received >= progress.total) {
+				clearInterval(timer);
+				aiRunning.delete(id);
+				writeAiRecord(id, { status: 'ready', partialBytes: progress.total });
+				emitAi({ kind: 'finished', id, outcome: 'ready' });
+			}
+		}, 200);
+		aiRunning.set(id, { timer, progress });
+	},
+
+	async aiCancelDownload(id: string): Promise<void> {
+		const run = aiRunning.get(id);
+		if (!run) return;
+		clearInterval(run.timer);
+		aiRunning.delete(id);
+		writeAiRecord(id, { status: 'partial', partialBytes: run.progress.received });
+		emitAi({ kind: 'finished', id, outcome: 'canceled' });
+	},
+
+	async aiRemoveModel(id: string): Promise<void> {
+		if (aiRunning.has(id)) throw new Error(`downloading: ${id}`);
+		writeAiRecord(id, { status: 'missing', partialBytes: 0 });
+		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
+		if (settings.aiModel === id) writeStorage('hikae.settings', { ...settings, aiModel: '' });
+	},
+
+	async aiSuggestMemo(projectId: string): Promise<string | null> {
+		await sleep(120);
+		const overrides = readOverrides()[projectId] ?? {};
+		const settings = {
+			...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS),
+			...overrides
+		};
+		if (settings.memoSuggestion !== 'ai' || settings.aiModel === '') return null;
+		if (settings.aiRunner === 'builtin' && readAiStore()[settings.aiModel]?.status !== 'ready') {
+			return null;
+		}
+		const state = states.get(projectId);
+		if (!state || state.changes.length === 0) return null;
+		return `AI 提案（モック）: ${suggestMemo(state.changes)}`;
+	},
+
+	async aiListOllamaModels(url: string): Promise<string[]> {
+		await sleep(150);
+		if (!/^https?:\/\//.test(url)) throw new Error('invalid endpoint');
+		return ['gemma3:4b', 'qwen3:4b'];
+	},
+
+	async aiCheckEndpoint(url: string): Promise<AiEndpointCheck> {
+		await sleep(120);
+		return {
+			ok: /^https?:\/\//.test(url),
+			externalHost: !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(url)
+		};
+	},
+
+	async aiTestGeneration(): Promise<AiTestResult> {
+		await sleep(300);
+		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
+		if (settings.aiModel === '') return { ok: false, reason: 'not-configured' };
+		if (settings.aiRunner === 'builtin' && readAiStore()[settings.aiModel]?.status !== 'ready') {
+			return { ok: false, reason: 'not-installed' };
+		}
+		return { ok: true, reason: null };
+	},
+
+	onAiDownload(listener: (notice: AiDownloadNotice) => void): () => void {
+		aiListeners.add(listener);
+		return () => {
+			aiListeners.delete(listener);
+		};
 	}
 };
+
+// ---- AI（ローカル LLM）のモック。ダウンロードは時間で進むだけで、ファイルは作らない ----
+
+const GIB = 1024 * 1024 * 1024;
+const MOCK_AI_MEMORY = 16 * GIB;
+const MOCK_AI_DISK = 120 * GIB;
+
+/** カタログの内容（バックエンドの catalog.json と同じ値） */
+const MOCK_AI_MODELS: Omit<
+	AiModel,
+	'status' | 'partialBytes' | 'available' | 'unavailableReason' | 'downloading'
+>[] = [
+	{
+		id: 'gemma-4-e2b-it-q4_k_m',
+		displayName: 'Gemma 4 E2B it（Q4_K_M）',
+		stage: 2,
+		sizeBytes: 3106738272,
+		licenseName: 'Apache License 2.0',
+		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+		minMemoryBytes: 7516192768,
+		recommended: true
+	},
+	{
+		id: 'qwen3-4b-instruct-2507-q4_k_m',
+		displayName: 'Qwen3-4B-Instruct-2507（Q4_K_M）',
+		stage: 2,
+		sizeBytes: 2497281120,
+		licenseName: 'Apache License 2.0',
+		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+		minMemoryBytes: 7516192768,
+		recommended: false
+	}
+];
+
+const aiListeners = new Set<(notice: AiDownloadNotice) => void>();
+const aiRunning = new Map<
+	string,
+	{ timer: ReturnType<typeof setInterval>; progress: { received: number; total: number } }
+>();
+
+function readAiStore(): Record<string, { status: AiModelStatus; partialBytes: number }> {
+	return readStorage<Record<string, { status: AiModelStatus; partialBytes: number }>>(
+		'hikae.mock.ai',
+		{}
+	);
+}
+
+function writeAiRecord(id: string, record: { status: AiModelStatus; partialBytes: number }): void {
+	writeStorage('hikae.mock.ai', { ...readAiStore(), [id]: record });
+}
+
+function emitAi(notice: AiDownloadNotice): void {
+	for (const listener of aiListeners) listener(notice);
+}

@@ -113,7 +113,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | ProjectCard | 名前、フォルダパス、状態バッジ、最終保存日時、保存先（個人 / Org 名）、右上の「⋯」メニュー（IconButton subtle + Menu。項目は「一覧から外す」） | 通常、ホバー、フォルダ不明（E11）、同期中、メニュー展開 | MVP |
 | ChangeListItem | 種別アイコン、ファイル名、フォルダ（薄字）、変更種別。新規（未追跡）ファイルの行には、右端に「元に戻す（作成しない）」の IconButton（subtle。ボタンの中にボタンを入れないため行の外に並べる） | 選択、非選択、ホバー、ぶつかり中、新規ファイル（右端の操作あり）。「すべてのファイル」の行は、ファイル名の右に小さな変更バッジ（ChangeBadge。アイコン＋文言）を出す | MVP |
 | DropZone | 変更一覧の下部と全体オーバーレイ。ファイルとフォルダをドロップできる。「すべてのファイル」ではフォルダ行もドロップ先（`data-drop-folder`）で、ドラッグ中の行を `accent-subtle` で強調し、全体オーバーレイの文言も「「資料」にファイルを追加します」になる | 待機、ドラッグ中（強調）、受付不可（大きすぎる） | MVP |
-| SaveBar | メモ欄、AI 提案チップ、保存ボタン | 変更なし（無効）、入力可、AI 生成中、AI 提案あり、保存中 | MVP（AI は Phase 2） |
+| SaveBar | メモ欄、AI 提案チップ、保存ボタン | 変更なし（無効）、入力可、AI 生成中、AI 提案あり、保存中。AI の提案は押したときだけメモ欄に入る | MVP（AI の提案は Phase 2 で実装済み） |
 | TimelineItem | 点、日時、メモ、クラウド境界線 | 保存ポイント / 自動保存（折りたたみ・展開）/ いま / 選択中 / 「ここまでクラウド」線 | MVP |
 | FileActionRow | ファイル名＋「見比べる」「元に戻す」「開く▾」 | 時点表示用 / 現在用 / 現在用・新規ファイル（「元に戻す」が「元に戻す（作成しない）」になる）/ 変更なし（「すべてのファイル」で選んだ変更の無いファイル。「開く▾」のみ） | MVP |
 | DiffView | 左右2カラム、行番号、追加・削除行 | テキスト / docx 段落 / xlsx セル（「Sheet1!B3: 120 → 150」）/ 差分なし / 大きすぎて省略 / 新規ファイル（全行が追加。行番号は 1 から）/ 空の新規ファイル（「空の新しいファイルです」）/ ファイル情報（バイナリ・リンク・変更の無いファイル。種類・サイズ・更新日時。更新日時が不明なら行ごと省く）。新規ファイルの本文は 1MB まで、超えたら「大きすぎて省略」 | MVP（docx・xlsx は Phase 2 で実装済み。`OfficeCompare.svelte`） |
@@ -121,7 +121,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | ConflictItem | ファイル名、2版の情報（日時・PC 名）、2択ラジオ、「別名で残す」チェック、見比べる | 未選択、選択済み、片方削除型（残す / 削除を受け入れる） | MVP |
 | ImpactList | 影響ファイル一覧（いまの内容 → 戻した後） | 変更 / 取り除かれる / 復活する | MVP |
 | OwnerPicker | 保存先（個人 / Org）のアバター付き選択 | 選択可、作成権限なし（灰色＋理由） | MVP |
-| ModelCard | AI モデルの段階、容量、必要メモリ、DL ボタン | 未導入、DL 中（進捗）、導入済み、PC 条件を満たさない（灰色＋理由） | Phase 2 |
+| ModelCard | AI モデルの段階、容量、必要メモリ、DL ボタン | 未導入、DL 中（進捗）、導入済み、PC 条件を満たさない（灰色＋理由）、途中まで取得（再開）。推奨バッジ、使用中。実装済み（`lib/components/ModelCard.svelte`、Phase 2）。ライセンスは名前と URL の文字だけを表示し、リンクにはしない（画面側に外部を開く権限を与えないため） | Phase 2 |
 | IgnoreRuleRow | パターン、対象件数、削除 | 通常、追跡中ファイルあり（2択の導線） | Phase 2 |
 
 ## 4. 画面ごとのレイアウト
@@ -218,7 +218,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 - 設定は即時保存（保存ボタンなし）。影響の大きい変更のみ確認ダイアログ
 - プロジェクト別に上書きできる項目は「このプロジェクトだけ変更」リンクを行内に置く
 - S6: IgnoreRuleRow の一覧、「追加」から拡張子 / フォルダ / ファイル選択、追跡中ファイルがあれば2択の Dialog
-- S7: 段階0〜4の ModelCard を縦に並べ、PC のメモリ・空き容量を上部に表示。詳細設定内に Ollama の接続先
+- S7: 段階0〜4の ModelCard を縦に並べ、PC のメモリ・空き容量を上部に表示。詳細設定内に Ollama の接続先（実装: 現状のカタログは段階 2 の 2 モデルだけで、段階 0・1・3・4 は未実装。「AI に渡す範囲」は「ファイル名まで」と「テキスト差分まで」の 2 択。有効・無効は「保存メモを AI で提案する」。カスタム GGUF は出さない）
 - S8: 拡張機能の一覧（名前、対応形式、有効化 Toggle）。開発者モードは詳細設定内
 
 ### D1 プロジェクト追加（560px）
@@ -310,7 +310,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 
 - **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
 - **3.2 Hikae 固有の部品 14 種のうち 11 種が実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、DiffView、ConflictItem、ImpactList、OwnerPicker。MVP の 27 種はすべて実装済み
-- **未実装（Phase 2）**: ModelCard。ImageCompare は実装済み（`features/compare/ImageCompare.svelte`）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
+- **Phase 2 の AI（ModelCard、S7、保存欄の提案）は実装済み**（2026-10-10。ビルド・型・単体テストまで確認。Tauri の実機での見た目、実ネットワークでのダウンロード、llama-server の実起動、Ollama の実機は未確認）。ImageCompare は実装済み（`features/compare/ImageCompare.svelte`）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
 - 一覧にない部品として、一覧系のローディング用に Skeleton（5章）と、変更の種類を示す小さな ChangeBadge（「すべてのファイル」のツリー用）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
 - StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」「GitHub に接続していない」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、未接続、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
 

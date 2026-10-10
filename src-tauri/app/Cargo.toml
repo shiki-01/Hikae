@@ -37,6 +37,11 @@ core-store = { workspace = true, features = ["specta"] }
 trash = "=5.2.9"
 # app-blob のパス（URL エンコードされた相対パス）を戻す。Cargo.lock に既にある版を使う
 percent-encoding = "2"
+# AI の導入可否の判定に使う、総メモリと空き容量（設計書 10.5）。機能は system と disk だけに絞る。バージョンは固定する
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system", "disk"] }
+# ローカル LLM の生成の時間制限（tokio::time）と、モデルのダウンロードの中断（CancellationToken）。core-llm と同じ版
+tokio = { version = "1", features = ["time", "sync"] }
+tokio-util = "0.7"
 
 [[bin]]
 name = "hikae"

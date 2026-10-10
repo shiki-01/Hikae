@@ -38,6 +38,12 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/fetch-git-windows.mjs
 
+      # 内蔵の llama-server（ローカル LLM）。Windows は公式の CPU 版を取得して SHA-256 を検証する（スクリプト内に固定）。
+      # macOS は HIKAE_LLAMA_SERVER_PATH と PATH の探索に任せる（未確認）
+      - name: Bundled llama-server (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/fetch-llama-windows.mjs
+
       # macOS の同梱 git は、手動実行の bundle-git-macos ジョブが作ってキャッシュに保存する。
       # キャッシュが無ければ同梱 git なしで進む（実行時は PATH 上の git を使う）
       - name: Bundled git (macOS, from cache)

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 pub mod journal;
+pub mod llm;
 pub mod migrations;
 pub mod models;
 pub mod settings;
@@ -17,6 +18,7 @@ pub use journal::{
     journal_cutoff, journal_cutoff_from_now, now_rfc3339, redact, JournalEntry, JournalFinish,
     JournalOutcome, JournalTrigger, NewJournalEntry, RunningJournal,
 };
+pub use llm::{LlmModelRecord, MESSAGE_CACHE_LIMIT};
 pub use migrations::run_migrations;
 pub use models::{Project, ProjectConfig};
 pub use settings::{

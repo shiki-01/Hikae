@@ -267,12 +267,41 @@ export const commands = {
 	updateSettings: (projectId: string | null, patch: SettingsPatch_Deserialize) => typedError<SettingsView, AppError>(__TAURI_INVOKE("update_settings", { projectId, patch })),
 	/**  初回設定の完了を記録する。 */
 	completeOnboarding: () => typedError<null, AppError>(__TAURI_INVOKE("complete_onboarding")),
+	/**  カタログの一覧と、この PC での状態・可否を返す（読み取りのみ）。 */
+	aiCatalog: () => typedError<AiCatalog, AppError>(__TAURI_INVOKE("ai_catalog")),
+	/**
+	 *  モデルのダウンロードを始める。バックグラウンドで実行し、すぐ戻る。
+	 *  進捗は `llm-download-progress`、完了・失敗・中止は `llm-download-finished` で知らせる。
+	 */
+	aiDownloadModel: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("ai_download_model", { id })),
+	/**  進行中のダウンロードを中止する。途中まで取得したファイルは残す（もう一度実行すると続きから）。 */
+	aiCancelDownload: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("ai_cancel_download", { id })),
+	/**
+	 *  モデルを削除する。先に内蔵の llama-server を止める。ダウンロード中は拒否する。
+	 *  選ばれていたモデルを削除したときは、選択を空に戻す。
+	 */
+	aiRemoveModel: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("ai_remove_model", { id })),
+	/**
+	 *  保存メモの提案を 1 文返す（読み取りのみ）。
+	 * 
+	 *  次の場合は `None`（エラーは出さない）: 提案が無効、モデルが選ばれていない、変更がない、
+	 *  内蔵モデルが未導入、Ollama に接続できない、タイムアウト、検証で弾かれた。
+	 */
+	aiSuggestMemo: (projectId: string) => __TAURI_INVOKE<string | null>("ai_suggest_memo", { projectId }),
+	/**  Ollama の一覧（`GET /api/tags`）。失敗は接続の失敗として返す */
+	aiListOllamaModels: (url: string) => typedError<string[], AppError>(__TAURI_INVOKE("ai_list_ollama_models", { url })),
+	/**  接続先の形式と到達性を確認する。形式が正しくないときは `ok` を偽にする（エラーにはしない）。 */
+	aiCheckEndpoint: (url: string) => __TAURI_INVOKE<EndpointCheck>("ai_check_endpoint", { url }),
+	/**  固定の短い入力で生成を試す（設定の「試す」）。結果は保存しない。 */
+	aiTestGeneration: () => __TAURI_INVOKE<GenerationTest>("ai_test_generation"),
 };
 
 /** Events */
 export const events = {
 	cloneProgress: makeEvent<CloneProgress>("clone-progress"),
 	filesChanged: makeEvent<FilesChanged>("files-changed"),
+	llmDownloadFinished: makeEvent<LlmDownloadFinished>("llm-download-finished"),
+	llmDownloadProgress: makeEvent<LlmDownloadProgress>("llm-download-progress"),
 	needsAttention: makeEvent<NeedsAttention>("needs-attention"),
 	opFinished: makeEvent<OpFinished>("op-finished"),
 	opProgress: makeEvent<OpProgress>("op-progress"),
@@ -358,6 +387,12 @@ export type AfterRestoreSaveKind =
 "needs-size-decision" | 
 /**  保存に失敗した（戻す操作は成功。未保存の変更として残っている） */
 "failed";
+
+/**  AI タブの一覧 */
+export type AiCatalog = {
+	system: SystemView,
+	models: ModelView[],
+};
 
 /**  AI モデルの指定方法 */
 export type AiModelSource = "catalog" | "custom-gguf";
@@ -477,6 +512,8 @@ export type AppSettings = {
 	ai_model: string,
 	/**  AI に渡す範囲 */
 	ai_scope: AiScope,
+	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
+	ai_ollama_url: string,
 	/**  git 実行ファイル */
 	git_executable: GitExecutable,
 	/**  技術情報をエラーに表示する */
@@ -638,6 +675,14 @@ export type DiscardNewFileResult = {
 	undo_token: string | null,
 };
 
+/**  接続先の確認の結果 */
+export type EndpointCheck = {
+	/**  接続先が使える（形式が正しく、Ollama が応答した） */
+	ok: boolean,
+	/**  ループバック以外のホストか（画面で警告する） */
+	external_host: boolean,
+};
+
 /**  保存時点のファイル（S3「この時点の全ファイルを見る」用） */
 export type FileEntry = {
 	/**  リポジトリ相対パス */
@@ -681,6 +726,13 @@ export type FolderCheck = {
 export type FolderWarning = 
 /**  クラウド同期ソフト（OneDrive・iCloud Drive・Dropbox・Google Drive など）の対象フォルダ */
 "cloud-sync";
+
+/**  生成の試行の結果 */
+export type GenerationTest = {
+	ok: boolean,
+	/**  失敗のときの理由 */
+	reason: TestFailure | null,
+};
 
 /**  git 実行ファイルの種類 */
 export type GitExecutable = "bundled" | "system";
@@ -739,6 +791,29 @@ export type LargeFileItem = {
 	size: number | null,
 };
 
+/**  ローカル LLM のモデルのダウンロードが終わった（成功・失敗・中止） */
+export type LlmDownloadFinished = {
+	id: string,
+	outcome: LlmDownloadOutcome,
+};
+
+/**  ダウンロードの結果 */
+export type LlmDownloadOutcome = 
+/**  導入できた（SHA-256 を検証済み） */
+"ready" | 
+/**  失敗した。もう一度実行すると、途中から再開する */
+"failed" | 
+/**  利用者が中止した。もう一度実行すると、途中から再開する */
+"canceled";
+
+/**  ローカル LLM のモデルのダウンロードの進捗（設計書 10.5）。受信済みと総量はバイト数 */
+export type LlmDownloadProgress = {
+	/**  カタログのモデル ID */
+	id: string,
+	received: number | null,
+	total: number | null,
+};
+
 /**  ログインの結末 */
 export type LoginOutcome = 
 /**  ログインできた */
@@ -768,6 +843,31 @@ export type MemoSuggestion =
 "rules" | 
 /**  AI を使う */
 "ai";
+
+/**  導入状態 */
+export type ModelStatus = "missing" | "partial" | "ready";
+
+/**  カタログの 1 モデルと、この PC での状態 */
+export type ModelView = {
+	id: string,
+	display_name: string,
+	stage: number,
+	size_bytes: number | null,
+	license_name: string,
+	license_url: string,
+	/**  必要メモリの目安（バイト） */
+	min_memory_bytes: number | null,
+	recommended: boolean,
+	status: ModelStatus,
+	/**  途中まで取得したバイト数（`partial` のときだけ意味を持つ） */
+	partial_bytes: number | null,
+	/**  この PC で導入できるか */
+	available: boolean,
+	/**  導入できないときの理由 */
+	unavailable_reason: UnavailableReason | null,
+	/**  ダウンロード中か */
+	downloading: boolean,
+};
 
 /**  確認が必要な同名のファイル */
 export type NameConflictItem = {
@@ -1165,6 +1265,8 @@ export type SettingsPatch_Deserialize = {
 	ai_model?: string | null,
 	/**  AI に渡す範囲 */
 	ai_scope?: AiScope | null,
+	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
+	ai_ollama_url?: string | null,
 	/**  git 実行ファイル */
 	git_executable?: GitExecutable | null,
 	/**  技術情報をエラーに表示する */
@@ -1227,6 +1329,8 @@ export type SettingsPatch_Serialize = {
 	ai_model?: string | null,
 	/**  AI に渡す範囲 */
 	ai_scope?: AiScope | null,
+	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
+	ai_ollama_url?: string | null,
 	/**  git 実行ファイル */
 	git_executable?: GitExecutable | null,
 	/**  技術情報をエラーに表示する */
@@ -1352,6 +1456,14 @@ export type SyncStatus = {
 	last_auto_snapshot_at: string | null,
 };
 
+/**  PC の状態（導入の可否の判定に使う値） */
+export type SystemView = {
+	/**  総メモリ（バイト） */
+	total_memory_bytes: number | null,
+	/**  モデルを置くドライブの空き容量（バイト）。判定できないときは 0 */
+	free_disk_bytes: number | null,
+};
+
 /**  用語の表示 */
 export type TermDisplay = 
 /**  平易な表現のみ */
@@ -1359,8 +1471,42 @@ export type TermDisplay =
 /**  Git 用語を併記 */
 "with-git";
 
+/**  生成の試行が失敗した理由（設定の「試す」の結果。文言は画面が選ぶ） */
+export type TestFailure = 
+/**  モデルが選ばれていない、または接続先の指定が正しくない */
+"not-configured" | 
+/**  内蔵のモデルが導入されていない */
+"not-installed" | 
+/**  llama-server が見つからない */
+"server-not-found" | 
+/**  llama-server の起動に失敗した */
+"server-start-failed" | 
+/**  llama-server の起動が時間内に終わらなかった */
+"server-start-timeout" | 
+/**  生成が時間内に終わらなかった */
+"timeout" | 
+/**  接続先に接続できなかった */
+"network" | 
+/**  接続先が正常な応答を返さなかった */
+"bad-status" | 
+/**  応答の形式が正しくなかった */
+"bad-response" | 
+/**  接続先の URL が正しくない */
+"invalid-endpoint" | 
+/**  生成されたが検証で弾かれた */
+"rejected" | 
+/**  そのほか */
+"other";
+
 /**  自動保存をタイムラインに出すか */
 export type TimelineSnapshots = "collapsed" | "shown" | "hidden";
+
+/**  導入できない理由（PC の条件） */
+export type UnavailableReason = 
+/**  メモリが足りない（必要量と PC の総メモリ） */
+{ kind: "not-enough-memory"; needed: number | null; have: number | null } | 
+/**  空き容量が足りない（必要量と空き容量） */
+{ kind: "not-enough-disk"; needed: number | null; have: number | null };
 
 /**  xlsx の値のあるセル 1 件（行・列は 0 始まり） */
 export type XlsxCell = {

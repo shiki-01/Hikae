@@ -17,6 +17,7 @@ mod identity;
 mod ignore_rules;
 mod index_lock;
 mod memo;
+mod memo_input;
 mod models;
 mod new_file_diff;
 mod open_path;
@@ -60,6 +61,7 @@ pub use index_lock::{
     WaitPlan, DEFAULT_WAIT, STALE_LOCK_AGE,
 };
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
+pub use memo_input::{MemoTextDiff, MEMO_DIFF_MAX_LINES, MEMO_TEXT_MAX_BYTES};
 pub use models::{
     new_restore_points, AddConflictAction, AddConflictDecision, AddConflictPolicy, AddFilesOutcome,
     AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave, Choice, ConflictFile, ConflictKind,
@@ -431,6 +433,17 @@ impl Ops {
     /// 未保存の変更からルールベースで保存メモの案を作る（設計書 10.3）。変更がなければ空文字列。
     pub fn suggest_memo(&self, repo: &Path, labels: &MemoLabels) -> Result<String, OpsError> {
         operations::suggest_memo_for(self.runner(), repo, labels)
+    }
+
+    /// 保存メモの提案（LLM）に渡す、テキストの差分（HEAD から作業フォルダまで）。読み取りのみ。
+    /// テキストとして読めない・`max_bytes` を超えるものは `None`。`path` はプロジェクト相対パス。
+    pub fn memo_text_diff(
+        &self,
+        repo: &Path,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<MemoTextDiff>, OpsError> {
+        memo_input::memo_text_diff(self.runner(), repo, path, max_bytes)
     }
 
     /// 復元点（隠し ref）の一覧。操作の前後で比べ、操作が作った復元点の特定に使う。

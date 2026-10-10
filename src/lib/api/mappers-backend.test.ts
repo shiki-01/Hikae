@@ -252,6 +252,7 @@ describe('設定の変換', () => {
 		ai_runner: 'builtin' as const,
 		ai_model: '',
 		ai_scope: 'text-diff' as const,
+		ai_ollama_url: 'http://localhost:11434',
 		git_executable: 'bundled' as const,
 		show_technical_info: false,
 		default_visibility: 'private' as const,
@@ -279,7 +280,12 @@ describe('設定の変換', () => {
 			snapshotSizeCapX: 2,
 			autoSaveAfterRestore: false,
 			largeFileWarnMb: 25,
-			showSnapshotsInTimeline: 'shown'
+			showSnapshotsInTimeline: 'shown',
+			memoSuggestion: 'rules',
+			aiRunner: 'builtin',
+			aiModel: '',
+			aiScope: 'text-diff',
+			aiOllamaUrl: 'http://localhost:11434'
 		});
 	});
 

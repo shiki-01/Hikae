@@ -9,9 +9,12 @@
 		memo: string;
 		hasChanges: boolean;
 		saving?: boolean;
-		aiState?: 'idle' | 'generating' | 'ready';
+		/** AI が作ったメモの提案（無ければ null）。押したときだけメモ欄に入る */
+		suggestion?: string | null;
+		/** AI の提案を取得中 */
+		suggesting?: boolean;
 		onsave: () => void;
-		onsuggest?: () => void;
+		onusesuggestion?: (text: string) => void;
 		class?: string;
 	}
 
@@ -19,9 +22,10 @@
 		memo = $bindable(),
 		hasChanges,
 		saving = false,
-		aiState,
+		suggestion = null,
+		suggesting = false,
 		onsave,
-		onsuggest,
+		onusesuggestion,
 		class: className = ''
 	}: Props = $props();
 </script>
@@ -41,20 +45,24 @@
 		class="flex:1"
 	/>
 	<div class="flex align-items:center gap:3 flex-shrink:0">
-		{#if aiState}
+		{#if suggesting}
+			<span class="flex align-items:center gap:2 type-small fg:fg-muted">
+				<Spinner size="sm" label={t('save_bar.ai_generating')} />
+				{t('save_bar.ai_generating')}
+			</span>
+		{:else if suggestion && hasChanges}
 			<Button
 				variant="ghost"
 				size="sm"
-				disabled={!hasChanges || saving || aiState === 'generating'}
-				onclick={onsuggest}
+				disabled={saving}
+				title={suggestion}
+				ariaLabel={t('save_bar.ai_use')}
+				onclick={() => onusesuggestion?.(suggestion)}
 			>
-				{#if aiState === 'generating'}
-					<Spinner size="sm" label={t('save_bar.ai_generating')} />
-					{t('save_bar.ai_generating')}
-				{:else}
-					<Sparkles size={14} aria-hidden="true" />
-					{t('save_bar.ai_suggestion')}
-				{/if}
+				<Sparkles size={14} aria-hidden="true" />
+				<span class="max-w:240px overflow:hidden text-overflow:ellipsis white-space:nowrap">
+					{suggestion}
+				</span>
 			</Button>
 		{/if}
 		<Button disabled={!hasChanges} loading={saving} onclick={onsave}>

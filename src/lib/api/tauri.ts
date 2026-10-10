@@ -3,6 +3,11 @@ import { commands, events } from '#lib/bindings.js';
 import { joinPath } from '#lib/utils/path.js';
 import {
 	mapAddFilesResult,
+	mapAiCatalog,
+	mapDownloadFinished,
+	mapDownloadProgress,
+	mapEndpointCheck,
+	mapTestResult,
 	mapAfterRestoreSave,
 	mapAppHealth,
 	mapFolderCheck,
@@ -41,6 +46,7 @@ import {
 } from './mappers';
 import type {
 	AddFilesOptions,
+	AiDownloadNotice,
 	AddFilesOutcome,
 	AddProjectInput,
 	AddProjectResult,
@@ -170,6 +176,50 @@ export const tauriApi: ProjectApi = {
 
 	async updateSettings(projectId: string | null, patch: Partial<AppSettings>) {
 		return mapSettingsView(await unwrap(commands.updateSettings(projectId, toBackendPatch(patch))));
+	},
+
+	async aiCatalog() {
+		return mapAiCatalog(await unwrap(commands.aiCatalog()));
+	},
+
+	async aiDownloadModel(id: string) {
+		await unwrap(commands.aiDownloadModel(id));
+	},
+
+	async aiCancelDownload(id: string) {
+		await unwrap(commands.aiCancelDownload(id));
+	},
+
+	async aiRemoveModel(id: string) {
+		await unwrap(commands.aiRemoveModel(id));
+	},
+
+	async aiSuggestMemo(projectId: string) {
+		// 提案は失敗しても null を返す（バックエンドもエラーを返さない）
+		return commands.aiSuggestMemo(projectId);
+	},
+
+	async aiListOllamaModels(url: string) {
+		return unwrap(commands.aiListOllamaModels(url));
+	},
+
+	async aiCheckEndpoint(url: string) {
+		return mapEndpointCheck(await commands.aiCheckEndpoint(url));
+	},
+
+	async aiTestGeneration() {
+		return mapTestResult(await commands.aiTestGeneration());
+	},
+
+	onAiDownload(listener: (notice: AiDownloadNotice) => void) {
+		// 進捗と終了は同じ購読で受ける。解除は両方のイベントをまとめて外す
+		const unlisteners: Promise<() => void>[] = [
+			events.llmDownloadProgress.listen((event) => listener(mapDownloadProgress(event.payload))),
+			events.llmDownloadFinished.listen((event) => listener(mapDownloadFinished(event.payload)))
+		];
+		return () => {
+			for (const pending of unlisteners) void pending.then((unlisten) => unlisten());
+		};
 	},
 
 	async listProjects(): Promise<Project[]> {

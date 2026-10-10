@@ -37,3 +37,8 @@ $RECYCLE.BIN/
 /src-tauri/app/resources/git/*
 !/src-tauri/app/resources/git/.gitkeep
 /src-tauri/app/resources/.git-staging/
+
+# 同梱のローカル LLM（scripts/fetch-llama-windows.mjs が生成する。バイナリはコミットしない）
+/src-tauri/app/resources/llama/*
+!/src-tauri/app/resources/llama/.gitkeep
+/src-tauri/app/resources/.llama-staging/

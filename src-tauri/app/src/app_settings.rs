@@ -81,6 +81,7 @@ pub async fn update_settings(
     patch: SettingsPatch,
 ) -> Result<SettingsView, AppError> {
     let store = state.store_clone();
+    let touches_ai_backend = patch.ai_runner.is_some() || patch.ai_ollama_url.is_some();
     let result = run_blocking(move || {
         let guard = store.lock().map_err(|_| lock_error())?;
         match project_id.as_deref() {
@@ -98,6 +99,16 @@ pub async fn update_settings(
     .await?;
     // 取り込み間隔などの変更を、次の巡回を待たずに計画へ反映する
     state.scheduler.refresh();
+    // AI の接続先（内蔵・Ollama、URL）の変更を、サービスへ反映する。保存は済んでいるため、
+    // ここで失敗しても保存の結果は変えない（次の提案の前にも同じ判定で合わせ直す）
+    // 生成の途中（読み取りの保持）で待たせないよう、切り替えはバックグラウンドで行う
+    if touches_ai_backend {
+        let llm = state.llm.clone();
+        let settings = result.settings.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::ai::apply_backend(&llm, &settings).await;
+        });
+    }
     Ok(result)
 }
 

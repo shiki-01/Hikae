@@ -185,6 +185,8 @@ define_settings! {
     ai_model: String = String::new(),
     /// AI に渡す範囲
     ai_scope: AiScope = AiScope::TextDiff,
+    /// Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ
+    ai_ollama_url: String = DEFAULT_OLLAMA_URL.to_string(),
 
     // ----- 詳細（アプリ全体） -----
     /// git 実行ファイル
@@ -229,6 +231,8 @@ pub const PROJECT_OVERRIDABLE_KEYS: &[&str] = &[
     "open_action",
 ];
 
+/// Ollama の既定の接続先（設計書 10.5）
+pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 /// 文字列項目の最大長
 const MAX_TEXT_LEN: usize = 1024;
 /// 追加索引 URL の最大件数
@@ -310,6 +314,15 @@ impl AppSettings {
         )?;
         plain_text("ai_model", &self.ai_model)?;
         plain_text("ai_custom_gguf_path", &self.ai_custom_gguf_path)?;
+        plain_text("ai_ollama_url", &self.ai_ollama_url)?;
+        if !(self.ai_ollama_url.starts_with("http://")
+            || self.ai_ollama_url.starts_with("https://"))
+            || self.ai_ollama_url.contains(char::is_whitespace)
+        {
+            return Err(
+                "ai_ollama_url には http:// か https:// の URL だけ指定できます".to_string(),
+            );
+        }
         if self.extension_index_urls.len() > MAX_INDEX_URLS {
             return Err("extension_index_urls が多すぎます".to_string());
         }
@@ -427,6 +440,7 @@ mod tests {
         assert_eq!(d.ai_runner, AiRunner::Builtin);
         assert_eq!(d.ai_model, "");
         assert_eq!(d.ai_scope, AiScope::TextDiff);
+        assert_eq!(d.ai_ollama_url, DEFAULT_OLLAMA_URL);
         assert_eq!(d.git_executable, GitExecutable::Bundled);
         assert!(!d.show_technical_info);
         // 7.1
@@ -483,6 +497,10 @@ mod tests {
         assert!(bad(|s| s.large_file_warn_mb = 101));
         assert!(bad(|s| s.snapshot_size_cap_x = 3));
         assert!(bad(|s| s.ai_model = "a\nb".to_string()));
+        assert!(bad(|s| s.ai_ollama_url = "localhost:11434".to_string()));
+        assert!(bad(|s| s.ai_ollama_url = "ftp://localhost".to_string()));
+        assert!(bad(|s| s.ai_ollama_url = "http://a b".to_string()));
+        assert!(bad(|s| s.ai_ollama_url = String::new()));
         assert!(bad(
             |s| s.extension_index_urls = vec!["http://x.example".to_string()]
         ));
