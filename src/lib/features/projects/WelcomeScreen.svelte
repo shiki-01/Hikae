@@ -3,16 +3,14 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import {
-		AlertTriangle,
-		Check,
-		CheckCircle2,
-		CloudDownload,
-		Copy,
-		ExternalLink,
-		FolderOpen,
-		FolderPlus
-	} from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import Check from '@lucide/svelte/icons/check';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import CloudDownload from '@lucide/svelte/icons/cloud-download';
+	import Copy from '@lucide/svelte/icons/copy';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import FolderOpen from '@lucide/svelte/icons/folder-open';
+	import FolderPlus from '@lucide/svelte/icons/folder-plus';
 	import { onDestroy, type Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import { api, isTauri } from '#lib/api/index.js';

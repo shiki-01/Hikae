@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { Upload } from '@lucide/svelte';
+	import Upload from '@lucide/svelte/icons/upload';
 	import { untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';

@@ -56,7 +56,7 @@ jobs:
       # 組み込みの拡張（Office 抽出器の WASM、設計書 11.1）。Rust のテストが wasm を読むため、先に作る。
       # wasm32-wasip1 の標準ライブラリは rust-toolchain.toml の targets により上の rustup が取得する
       - name: Bundled extensions (WASM)
-        run: node scripts/build-extensions.mjs
+        run: node scripts/build-extensions.mjs --force
 
       - name: Frontend (svelte-check, lint, test)
         run: |

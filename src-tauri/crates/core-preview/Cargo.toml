@@ -28,7 +28,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # 拡張ホストの依存（host の feature）。最新の安定版を完全に固定する（設計書 8.2）。
 # Component Model は使わず、WASI preview1 のコマンドだけを実行する
-wasmtime = { version = "=49.0.2", optional = true, default-features = false, features = ["cranelift", "runtime", "std"] }
+# parallel-compilation は、起動時の WASM 登録（3 つのコンパイル）を並列にする（rayon を使う）
+wasmtime = { version = "=49.0.2", optional = true, default-features = false, features = ["cranelift", "runtime", "std", "parallel-compilation"] }
 # p1（WASI preview1）は内部で p2 を要求するため、Component Model も含まれる。コンポーネントとしては使わない。
 # p3 は使わないため既定の機能から外す
 wasmtime-wasi = { version = "=49.0.2", optional = true, default-features = false, features = ["p1"] }

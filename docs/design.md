@@ -1176,6 +1176,8 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 
 **テスト**（`core-preview`）: 同値性（ネイティブと WASM の結果が完全に一致。段落・セル・スライド・空・順序・上限・失敗の種類）、制限（時間・メモリ・stdout・stdin、トラップのあとの回復）、WASI の権限、マニフェストの検証、一時フォルダからの登録。wasm が無いときは、スキップせず失敗する（`node scripts/build-extensions.mjs` を先に実行する）。
 
+**開発時の起動と再ビルド**（Windows、2026-10-11。利用者の `tauri dev` の実行中に計測。`src-tauri/target` は大きい状態）: `vite.config.ts` の `server.watch.ignored` で `src-tauri` を監視から外した（Vite は `target` を走査しない）。`vite dev` の ready は 426.6 秒から約 2.2 秒になった。組み込みの拡張のビルド（`scripts/build-extensions.mjs`）は、入力（`src/lib`、`extensions-ui`、Rust のソースと Cargo の設定など）の内容ハッシュが前回と同じで出力が揃っていれば飛ばす（変更なしは約 0.1 秒）。出力は内容が違うファイルだけ書き換え、更新時刻を変えない。`--force`、`pnpm build`、CI は全部ビルドする。`bindings.ts` の書き出し（debug 起動時）も、内容が同じなら書かない。`@lucide/svelte` は個別のパスから import する（バレルの全アイコンをコンパイルしない）。debug の設定は `line-tables-only` にし、依存の debug 情報を作らない。`app` の crate-type は `rlib` のみ（デスクトップ専用。モバイル対応を始めるときに戻す）。`lib.rs` に空行を 1 行足したときの `cargo build -p hikae` は、7.7 秒と 27.6 秒（同じ条件での 2 回。ばらつきが大きい）。内容を変えない再実行は 0.5 秒。resources の 1 ファイルを touch すると、tauri-build が build script を再実行して hikae を再コンパイルする（約 23 秒。内容が同じでも時刻を変えないことで避けている）。起動直後の初回要求の tokens.css（Master CSS）は 0.2〜0.4 秒（以前の 7〜8 秒は、`src-tauri` の監視を外したあとは再現しなかった）。`wasmtime` の `parallel-compilation` を有効にした（`rayon` が増える）。起動時の WASM 登録の時間は未計測。
+
 ## 12. 開発ロードマップ
 
 MVP は「1台目で保存・履歴・元に戻す、2台目で取り込む」が安全に回るところまでに絞ります。自動保存・画像比較・LLM は MVP の利用感を見てから載せる Phase 2 です。各フェーズの終了条件を満たすまで次へ進まない運用とします。

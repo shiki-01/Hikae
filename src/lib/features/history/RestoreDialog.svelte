@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ShieldCheck } from '@lucide/svelte';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import type { RestoreScope, SavePoint } from '#lib/api/types.js';

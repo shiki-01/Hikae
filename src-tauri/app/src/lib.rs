@@ -3501,14 +3501,24 @@ fn specta_builder() -> Builder<tauri::Wry> {
         ])
 }
 
-/// src/lib/bindings.ts を書き出す（debug 起動時と export-bindings bin から呼ぶ）
+/// src/lib/bindings.ts を書き出す（debug 起動時と export-bindings bin から呼ぶ）。
+/// 一時ファイルに生成し、既存の bindings.ts と内容が同じなら書き換えない。
+/// 内容が同じでも更新時刻が変わると、Vite の HMR と tauri-build の再実行が起きるため
 pub fn export_bindings() {
+    let dest = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../src/lib/bindings.ts"
+    ));
+    let tmp = std::env::temp_dir().join(format!("hikae-bindings-{}.ts", std::process::id()));
     specta_builder()
-        .export(
-            specta_typescript::Typescript::default(),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../src/lib/bindings.ts"),
-        )
+        .export(specta_typescript::Typescript::default(), &tmp)
         .expect("TS 型の書き出しに失敗しました");
+    let generated = std::fs::read(&tmp).expect("生成した TS 型の読み込みに失敗しました");
+    // 一時ファイルは、結果に関係なく消す（残っても害はないが、後始末を確実にする）
+    let _ = std::fs::remove_file(&tmp);
+    if std::fs::read(dest).ok().as_deref() != Some(generated.as_slice()) {
+        std::fs::write(dest, &generated).expect("TS 型の書き出しに失敗しました");
+    }
 }
 
 /// 既存のメインウィンドウを前面に出す（二重起動されたとき）。最小化されていれば戻す。

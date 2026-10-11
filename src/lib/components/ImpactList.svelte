@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Minus, Pencil, Plus } from '@lucide/svelte';
+	import Minus from '@lucide/svelte/icons/minus';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { t } from '#lib/i18n/index.js';
 	import type { ImpactItem } from '#lib/api/types.js';
 

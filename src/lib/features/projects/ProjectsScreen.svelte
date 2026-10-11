@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { FolderPlus, Plus, Settings } from '@lucide/svelte';
+	import FolderPlus from '@lucide/svelte/icons/folder-plus';
+	import Plus from '@lucide/svelte/icons/plus';
+	import Settings from '@lucide/svelte/icons/settings';
 	import { t } from '#lib/i18n/index.js';
 	import type { Project } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { FolderTree, RotateCcw } from '@lucide/svelte';
+	import FolderTree from '@lucide/svelte/icons/folder-tree';
+	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import { api } from '#lib/api/index.js';

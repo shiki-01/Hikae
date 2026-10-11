@@ -9,7 +9,10 @@ default-run = "hikae"
 
 [lib]
 name = "hikae_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# デスクトップ専用（Windows / macOS）。モバイル向けの #[tauri::mobile_entry_point] は持たないため、
+# staticlib / cdylib は作らない（リンク対象が無くなり、debug の再ビルドが軽くなる）。
+# モバイル対応を始めるときは crate-type に "staticlib" と "cdylib" を戻す
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

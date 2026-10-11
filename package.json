@@ -5,12 +5,12 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "node scripts/build-extensions.mjs && vite build",
+		"build": "node scripts/build-extensions.mjs --force && vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"test": "vitest run",
+		"test": "vitest run && node --test scripts/build-extensions-cache.test.mjs",
 		"tauri": "tauri"
 	},
 	"dependencies": {

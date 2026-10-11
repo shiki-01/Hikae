@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Check, User, Users } from '@lucide/svelte';
+	import Check from '@lucide/svelte/icons/check';
+	import User from '@lucide/svelte/icons/user';
+	import Users from '@lucide/svelte/icons/users';
 	import { t } from '#lib/i18n/index.js';
 	import type { Owner } from '#lib/api/types.js';
 	import { nextIndex } from '#lib/utils/keyboard.js';

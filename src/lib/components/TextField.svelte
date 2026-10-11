@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertCircle } from '@lucide/svelte';
+	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import { t } from '#lib/i18n/index.js';
 
 	interface Props {

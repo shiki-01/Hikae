@@ -11,5 +11,14 @@ export default defineConfig({
 		sveltekit({ adapter: adapter({ fallback: 'index.html' }) })
 	],
 	clearScreen: false,
-	server: { port: 5173, strictPort: true }
+	server: {
+		port: 5173,
+		strictPort: true,
+		watch: {
+			// src-tauri（Rust のソース・target・resources）は Vite の監視から外す。
+			// target は巨大になりうるため、監視が起動時間を支配する（docs/design.md 11 章「開発時の起動と再ビルド」）。
+			// Rust 側の変更は Tauri CLI が監視して再ビルドする
+			ignored: ['**/src-tauri/**']
+		}
+	}
 });

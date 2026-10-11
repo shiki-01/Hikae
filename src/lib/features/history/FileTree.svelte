@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { ChevronRight, File as FileIcon, Folder } from '@lucide/svelte';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import FileIcon from '@lucide/svelte/icons/file';
+	import Folder from '@lucide/svelte/icons/folder';
 	import { t } from '#lib/i18n/index.js';
 	import { formatBytes } from '#lib/i18n/format.js';
 	import Button from '#lib/components/Button.svelte';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { LoaderCircle } from '@lucide/svelte';
+	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import { t } from '#lib/i18n/index.js';
 
 	interface Props {

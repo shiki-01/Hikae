@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { AlertTriangle, Check, CloudUpload, Pencil } from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import Check from '@lucide/svelte/icons/check';
+	import CloudUpload from '@lucide/svelte/icons/cloud-upload';
+	import Pencil from '@lucide/svelte/icons/pencil';
 
 	type Variant = 'saved' | 'unsaved' | 'sync' | 'danger' | 'neutral';
 

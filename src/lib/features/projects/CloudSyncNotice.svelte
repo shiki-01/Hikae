@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { CloudAlert } from '@lucide/svelte';
+	import CloudAlert from '@lucide/svelte/icons/cloud-alert';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
 

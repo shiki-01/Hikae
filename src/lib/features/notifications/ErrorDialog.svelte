@@ -2,7 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { ChevronDown, ChevronRight, Copy } from '@lucide/svelte';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Copy from '@lucide/svelte/icons/copy';
 	import { t } from '#lib/i18n/index.js';
 	import { reloginSearch } from '#lib/features/projects/relogin.js';
 	import Button from '#lib/components/Button.svelte';

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { PackageX, ShieldCheck } from '@lucide/svelte';
+	import PackageX from '@lucide/svelte/icons/package-x';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import { t } from '#lib/i18n/index.js';
 	import type { AppHealth } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';

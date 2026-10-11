@@ -8,7 +8,8 @@
 </script>
 
 <script lang="ts">
-	import { Check, ChevronDown } from '@lucide/svelte';
+	import Check from '@lucide/svelte/icons/check';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import { nextIndex } from '#lib/utils/keyboard.js';
 
 	interface Props {

@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { CloudDownload, FolderOpen, FolderPlus } from '@lucide/svelte';
+	import CloudDownload from '@lucide/svelte/icons/cloud-download';
+	import FolderOpen from '@lucide/svelte/icons/folder-open';
+	import FolderPlus from '@lucide/svelte/icons/folder-plus';
 	import type { Component } from 'svelte';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import { api } from '#lib/api/index.js';

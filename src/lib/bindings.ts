@@ -290,7 +290,10 @@ export const commands = {
 	 *  進行中の要求があれば取り消してから始める（同時に走らせる提案は 1 件）。
 	 */
 	aiSuggestMemo: (projectId: string, fresh: boolean) => __TAURI_INVOKE<SuggestResult>("ai_suggest_memo", { projectId, fresh }),
-	/**  進行中の保存メモの提案を取り消す。llama-server は止めない（設計 10.5）。進行中が無ければ何もしない。 */
+	/**
+	 *  進行中の保存メモの提案を取り消す。進行中の要求の側が、後始末として llama-server を止める
+	 *  （`ai_suggest_memo`）。進行中が無ければ何もしない。
+	 */
 	aiCancelSuggest: () => __TAURI_INVOKE<void>("ai_cancel_suggest"),
 	/**  Ollama の一覧（`GET /api/tags`）。失敗は接続の失敗として返す */
 	aiListOllamaModels: (url: string) => typedError<string[], AppError>(__TAURI_INVOKE("ai_list_ollama_models", { url })),

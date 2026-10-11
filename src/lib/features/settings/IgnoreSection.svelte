@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2 } from '@lucide/svelte';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { t } from '#lib/i18n/index.js';
 	import type { IgnoreKind, IgnoreRule } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';

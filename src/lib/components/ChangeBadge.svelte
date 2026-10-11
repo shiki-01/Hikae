@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { AlertTriangle, ArrowRight, Minus, Pencil, Plus } from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import Minus from '@lucide/svelte/icons/minus';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { t } from '#lib/i18n/index.js';
 	import type { ChangeType } from '#lib/api/types.js';
 

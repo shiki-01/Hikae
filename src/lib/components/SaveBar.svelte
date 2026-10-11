@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Sparkles } from '@lucide/svelte';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import { t } from '#lib/i18n/index.js';
 	import { suggestFailureKey, type SuggestState } from '#lib/features/ai/suggest.js';
 	import Button from './Button.svelte';

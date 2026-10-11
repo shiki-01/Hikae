@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ShieldCheck } from '@lucide/svelte';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import { t } from '#lib/i18n/index.js';
 	import type { AddConflictAction, AddConflictDecision, NameConflict } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';

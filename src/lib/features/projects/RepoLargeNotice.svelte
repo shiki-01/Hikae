@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Database } from '@lucide/svelte';
+	import Database from '@lucide/svelte/icons/database';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
 

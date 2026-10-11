@@ -1,16 +1,14 @@
 <script lang="ts">
-	import {
-		AlertTriangle,
-		ArrowLeft,
-		CheckCircle2,
-		Cloud,
-		CloudDownload,
-		CloudOff,
-		CloudUpload,
-		LoaderCircle,
-		Pencil,
-		Settings
-	} from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import Cloud from '@lucide/svelte/icons/cloud';
+	import CloudDownload from '@lucide/svelte/icons/cloud-download';
+	import CloudOff from '@lucide/svelte/icons/cloud-off';
+	import CloudUpload from '@lucide/svelte/icons/cloud-upload';
+	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Settings from '@lucide/svelte/icons/settings';
 	import type { Component } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';

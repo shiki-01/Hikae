@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { Clock, CloudOff, Ellipsis, Folder, FolderMinus, User, Users } from '@lucide/svelte';
+	import Clock from '@lucide/svelte/icons/clock';
+	import CloudOff from '@lucide/svelte/icons/cloud-off';
+	import Ellipsis from '@lucide/svelte/icons/ellipsis';
+	import Folder from '@lucide/svelte/icons/folder';
+	import FolderMinus from '@lucide/svelte/icons/folder-minus';
+	import User from '@lucide/svelte/icons/user';
+	import Users from '@lucide/svelte/icons/users';
 	import { t } from '#lib/i18n/index.js';
 	import { formatRelative } from '#lib/i18n/format.js';
 	import type { Project } from '#lib/api/types.js';

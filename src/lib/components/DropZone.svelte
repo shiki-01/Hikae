@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { AlertCircle, Upload } from '@lucide/svelte';
+	import AlertCircle from '@lucide/svelte/icons/alert-circle';
+	import Upload from '@lucide/svelte/icons/upload';
 	import { t } from '#lib/i18n/index.js';
 	import Button from './Button.svelte';
 

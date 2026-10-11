@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { ArrowLeftRight, ChevronDown, ChevronUp, X } from '@lucide/svelte';
+	import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronUp from '@lucide/svelte/icons/chevron-up';
+	import X from '@lucide/svelte/icons/x';
 	import { onMount, untrack } from 'svelte';
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';

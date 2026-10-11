@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, Cloud } from '@lucide/svelte';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Cloud from '@lucide/svelte/icons/cloud';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
 	import type { TimelineEntry } from './timeline';

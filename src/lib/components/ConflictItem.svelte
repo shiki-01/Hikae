@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Check, Eye, Circle } from '@lucide/svelte';
+	import Check from '@lucide/svelte/icons/check';
+	import Eye from '@lucide/svelte/icons/eye';
+	import Circle from '@lucide/svelte/icons/circle';
 	import { t } from '#lib/i18n/index.js';
 	import type { Choice, ConflictFile } from '#lib/api/types.js';
 	import Button from './Button.svelte';

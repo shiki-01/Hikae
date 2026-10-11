@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { Eye, ExternalLink, FolderOpen, Copy, RotateCcw } from '@lucide/svelte';
+	import Eye from '@lucide/svelte/icons/eye';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import FolderOpen from '@lucide/svelte/icons/folder-open';
+	import Copy from '@lucide/svelte/icons/copy';
+	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import { t } from '#lib/i18n/index.js';
 	import type { OpenTarget } from '#lib/api/types.js';
 	import { OPEN_MENU } from './file-actions';

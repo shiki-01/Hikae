@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertTriangle } from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 	import { t } from '#lib/i18n/index.js';
 	import type { Owner, Visibility } from '#lib/api/types.js';
 	import Checkbox from '#lib/components/Checkbox.svelte';

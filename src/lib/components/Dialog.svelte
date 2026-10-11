@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { AlertTriangle, X, XCircle } from '@lucide/svelte';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import X from '@lucide/svelte/icons/x';
+	import XCircle from '@lucide/svelte/icons/x-circle';
 	import { t } from '#lib/i18n/index.js';
 	import IconButton from './IconButton.svelte';
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { ArrowLeft } from '@lucide/svelte';
+	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import { t, type MessageKey } from '#lib/i18n/index.js';
 	import type { AppSettings, SettingKey } from '#lib/api/types.js';
 	import Badge from '#lib/components/Badge.svelte';
