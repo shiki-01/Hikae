@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
@@ -12,7 +13,7 @@ use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use core_git::GitRunner;
 use core_ops::{Ops, OpsError, RecoverDiagnosis, RecoverOutcome, SaveOptions};
-use core_store::{Project, ProjectLocks, Store};
+use core_store::{wait_until_idle, Project, ProjectLocks, Store, EXIT_WAIT_LIMIT, EXIT_WAIT_POLL};
 use core_watch::SyncTask;
 
 mod ai;
@@ -3599,6 +3600,9 @@ pub fn run() {
     #[cfg(debug_assertions)]
     export_bindings();
 
+    // 終了時の待ちの状態（ExitRequested で使う）
+    let exit_gate = Arc::new(ExitGate::default());
+
     tauri::Builder::default()
         // 二重起動を防ぐ。2 つ目の起動は、すぐ終了して、既存のウィンドウを前面に出す。
         // 他のプラグインより先に登録する必要がある
@@ -3721,11 +3725,49 @@ pub fn run() {
         .invoke_handler(invoke_handler)
         .build(tauri::generate_context!())
         .expect("アプリの起動に失敗しました")
-        .run(|app_handle, event| {
-            // 終了時に、起動中の内蔵の llama-server を止める（設計書 10.5）
-            if let tauri::RunEvent::Exit = event {
-                let state = app_handle.state::<AppState>();
-                tauri::async_runtime::block_on(ai::stop_on_exit(&state));
+        .run(move |app_handle, event| match event {
+            // 終了の要求。実行中の状態変更の操作を、上限（EXIT_WAIT_LIMIT）まで待ってから終了する（設計書 6.2）
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                // 待ちが済んでから app.exit で再度来た要求は、止めずに通す
+                if exit_gate.ready.load(Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_exit();
+                // 待ちは 1 回だけ。二重に来た要求は、待ちの中の要求に任せる
+                if exit_gate.waiting.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let exit_code = code.unwrap_or(0);
+                let locks = app_handle
+                    .try_state::<AppState>()
+                    .map(|state| state.locks.clone());
+                let handle = app_handle.clone();
+                let gate = exit_gate.clone();
+                // 待ちは別のスレッドで行う（イベントループを止めないため）。待ちは必ず上限で終わる
+                std::thread::spawn(move || {
+                    if let Some(locks) = locks {
+                        // 待ちの結果（上限に達したか）は問わない。どちらでも終了する
+                        let _ = wait_until_idle(&locks, EXIT_WAIT_LIMIT, EXIT_WAIT_POLL);
+                    }
+                    gate.ready.store(true, Ordering::SeqCst);
+                    handle.exit(exit_code);
+                });
             }
+            // 終了時に、起動中の内蔵の llama-server を止める（設計書 10.5）
+            tauri::RunEvent::Exit => {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    tauri::async_runtime::block_on(ai::stop_on_exit(&state));
+                }
+            }
+            _ => {}
         });
+}
+
+/// 終了時の待ち（設計書 6.2）の状態。`ExitRequested` が二重に来ても待ちは 1 回だけにする
+#[derive(Default)]
+struct ExitGate {
+    /// 待ちを始めた（2 回目以降の要求は待たず、止めるだけにする）
+    waiting: AtomicBool,
+    /// 待ちが終わり、終了してよい（`app.exit` で再び来た要求を通す）
+    ready: AtomicBool,
 }

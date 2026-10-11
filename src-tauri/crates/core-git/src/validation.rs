@@ -1016,16 +1016,13 @@ fn validate_rev_parse_args(args: &[&str]) -> Result<(), Rejection> {
     Ok(())
 }
 
-/// 復元点の大きさの測定（設計書 6.2 の容量上限）で使う `rev-list --objects --disk-usage` の形
-const DISK_USAGE_NOT_SUFFIX: [&str; 3] = ["--not", "--branches", "--remotes"];
-
-/// `rev-list --objects --disk-usage` は次の形だけ許可する（ほかのオプションや別の表記は拒否）:
+/// `rev-list --objects --disk-usage` は次の 3 つの形だけ許可する（設計書 6.2 の容量上限の測定）。
+/// ほかのオプション・ref の混在、`--not` を伴う形、ほかの ref の指定は拒否する。
 ///
-/// - `--objects --disk-usage HEAD^{tree}`（保存済みの木の大きさ。`--not` は付けない）
-/// - `--objects --disk-usage --glob=refs/hikae/snapshots/* [--not --branches --remotes]`
-/// - `--objects --disk-usage <refs/hikae/snapshots/ 以下の ref>... [--not --branches --remotes]`
+/// - `--objects --disk-usage HEAD^{tree}`（保存済みの木の大きさ P）
+/// - `--objects --disk-usage --glob=refs/hikae/snapshots/* --branches --remotes`（スナップショットと、ブランチ・リモート追跡の和集合）
+/// - `--objects --disk-usage --branches --remotes`（ブランチ・リモート追跡だけ。S は上の 2 つの差）
 fn validate_rev_list_disk_usage_args(args: &[&str]) -> Result<(), Rejection> {
-    const SNAPSHOT_PREFIX: &str = "refs/hikae/snapshots/";
     const SNAPSHOT_GLOB: &str = "--glob=refs/hikae/snapshots/*";
 
     let rest = match args {
@@ -1037,28 +1034,15 @@ fn validate_rev_list_disk_usage_args(args: &[&str]) -> Result<(), Rejection> {
             })
         }
     };
-    let (targets, tail) = match rest.iter().position(|a| *a == "--not") {
-        Some(p) => (&rest[..p], &rest[p..]),
-        None => (rest, &rest[rest.len()..]),
-    };
-    let tail_ok = tail.is_empty() || tail == DISK_USAGE_NOT_SUFFIX;
-    let plain_ref = |r: &&str| {
-        r.len() > SNAPSHOT_PREFIX.len()
-            && r.starts_with(SNAPSHOT_PREFIX)
-            && !r.contains("..")
-            && !r.chars().any(|c| c.is_control() || c.is_whitespace())
-    };
-    let ok = match targets {
-        ["HEAD^{tree}"] => tail.is_empty(),
-        [SNAPSHOT_GLOB] => tail_ok,
-        [] => false,
-        refs => tail_ok && refs.iter().all(plain_ref),
-    };
+    let ok = matches!(
+        rest,
+        ["HEAD^{tree}"] | [SNAPSHOT_GLOB, "--branches", "--remotes"] | ["--branches", "--remotes"]
+    );
     if ok {
         Ok(())
     } else {
         Err(Rejection {
-            reason: "rev-list --disk-usage is only allowed in the fixed forms for snapshot refs"
+            reason: "rev-list --disk-usage is only allowed in the fixed forms for size measurement"
                 .to_string(),
         })
     }
@@ -1862,42 +1846,32 @@ mod tests {
 
     #[test]
     fn test_allow_rev_list_disk_usage_in_fixed_forms() {
-        let not = ["--not", "--branches", "--remotes"];
         // 保存済みの木
         assert!(validate(&["rev-list", "--objects", "--disk-usage", "HEAD^{tree}"]).is_ok());
-        // スナップショットだけが参照するオブジェクト（glob の形）
+        // スナップショットとブランチ・リモート追跡の和集合
         assert!(validate(&[
             "rev-list",
             "--objects",
             "--disk-usage",
             "--glob=refs/hikae/snapshots/*",
-            "--not",
             "--branches",
             "--remotes"
         ])
         .is_ok());
+        // ブランチ・リモート追跡だけ
         assert!(validate(&[
             "rev-list",
             "--objects",
             "--disk-usage",
-            "--glob=refs/hikae/snapshots/*"
+            "--branches",
+            "--remotes"
         ])
         .is_ok());
-        // スナップショットの ref を列挙した形
-        let mut args = vec![
-            "rev-list",
-            "--objects",
-            "--disk-usage",
-            "refs/hikae/snapshots/main/20260101T000000Z",
-            "refs/hikae/snapshots/feature/x/20260101T000000Z-1",
-        ];
-        args.extend(not);
-        assert!(validate(&args).is_ok());
     }
 
     #[test]
     fn test_reject_rev_list_disk_usage_other_forms() {
-        let rejected: [&[&str]; 18] = [
+        let rejected: [&[&str]; 24] = [
             // 別の表記・ほかのオプションの混在
             &["rev-list", "--objects", "--disk-usage=human", "HEAD^{tree}"],
             &["rev-list", "--disk-usage", "--objects", "HEAD^{tree}"],
@@ -1916,6 +1890,24 @@ mod tests {
                 "HEAD^{tree}",
             ],
             &["rev-list", "--objects", "--disk-usage", "--all"],
+            &["rev-list", "--objects", "--disk-usage", "--branches"],
+            &["rev-list", "--objects", "--disk-usage", "--remotes"],
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--branches",
+                "--remotes",
+                "--all",
+            ],
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--branches",
+                "--remotes",
+                "refs/heads/main",
+            ],
             // 対象が不正
             &["rev-list", "--objects", "--disk-usage"],
             &["rev-list", "--objects"],
@@ -1925,32 +1917,40 @@ mod tests {
                 "--objects",
                 "--disk-usage",
                 "--glob=refs/heads/*",
+                "--branches",
+                "--remotes",
             ],
             &[
                 "rev-list",
                 "--objects",
                 "--disk-usage",
                 "--glob=refs/hikae/*",
+                "--branches",
+                "--remotes",
+            ],
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--glob=refs/hikae/snapshots/*",
+            ],
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "refs/hikae/snapshots/main/20260101T000000Z",
+                "--branches",
+                "--remotes",
             ],
             &[
                 "rev-list",
                 "--objects",
                 "--disk-usage",
                 "refs/hikae/snapshots/../x",
+                "--branches",
+                "--remotes",
             ],
-            &[
-                "rev-list",
-                "--objects",
-                "--disk-usage",
-                "refs/hikae/snapshots/a b",
-            ],
-            &[
-                "rev-list",
-                "--objects",
-                "--disk-usage",
-                "refs/hikae/snapshots/",
-            ],
-            // HEAD^{tree} に --not は付けない
+            // HEAD^{tree} に --not やブランチは付けない
             &[
                 "rev-list",
                 "--objects",
@@ -1960,23 +1960,15 @@ mod tests {
                 "--branches",
                 "--remotes",
             ],
-            // --not の後ろが違う
             &[
                 "rev-list",
                 "--objects",
                 "--disk-usage",
-                "--glob=refs/hikae/snapshots/*",
-                "--not",
-                "--all",
-            ],
-            &[
-                "rev-list",
-                "--objects",
-                "--disk-usage",
-                "--glob=refs/hikae/snapshots/*",
-                "--not",
+                "HEAD^{tree}",
                 "--branches",
+                "--remotes",
             ],
+            // 旧の形（--not を伴う。今は許可しない）
             &[
                 "rev-list",
                 "--objects",
@@ -1985,7 +1977,32 @@ mod tests {
                 "--not",
                 "--branches",
                 "--remotes",
+            ],
+            // 和集合の形の後ろに余分なものを付けない
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--glob=refs/hikae/snapshots/*",
+                "--branches",
+                "--remotes",
                 "--all",
+            ],
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--glob=refs/hikae/snapshots/*",
+                "--remotes",
+                "--branches",
+            ],
+            // 順序・対象を入れ替えた形
+            &[
+                "rev-list",
+                "--objects",
+                "--disk-usage",
+                "--remotes",
+                "--branches",
             ],
             // 既存の形（--objects なし）への混入
             &["rev-list", "--count", "--disk-usage", "HEAD"],

@@ -4,9 +4,9 @@ mod size;
 mod thin;
 
 pub use size::{
-    plan_size_round, project_tree_bytes, size_cap_limit, snapshot_only_bytes,
-    thin_snapshots_by_size, SizeCapReport, DEFAULT_SNAPSHOT_SIZE_CAP_X, SIZE_CAP_FLOOR_BYTES,
-    SIZE_CAP_MAX_ROUNDS,
+    branch_reachable_bytes, only_snapshot_bytes, plan_size_round, project_tree_bytes,
+    size_cap_limit, snapshot_and_branch_bytes, snapshot_only_bytes, thin_snapshots_by_size,
+    SizeCapReport, DEFAULT_SNAPSHOT_SIZE_CAP_X, SIZE_CAP_FLOOR_BYTES, SIZE_CAP_MAX_ROUNDS,
 };
 pub use thin::{
     plan_thinning, thin_restore_points, ThinPolicy, ThinReport, BACKUP_RETENTION_DAYS,

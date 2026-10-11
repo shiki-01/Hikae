@@ -722,6 +722,26 @@ pub fn new_restore_points(before: &[String], after: &[String]) -> RestorePointIn
     }
 }
 
+/// 自動実行で「何も起きなかった」操作の記録を、残さず消してよいか（設計書 6.3）。
+///
+/// `quiet` は操作の結果が「何もしなかった」（最新だった、upstream なしなど）ことを表す。
+/// 次のどれかが起きていれば、何もしなかったとは言えないので消さない（記録に残す）:
+/// - 復元点を作った（スナップショットまたは backup ref が増えた）
+/// - HEAD が動いた（取り込み前の自動保存のコミット）
+///
+/// `head_moved` は、開始時と完了時の HEAD を比べた結果。HEAD を読めなかったときは `None` にし、
+/// 動いたかどうかを確かめられないため消さない。
+pub fn quiet_record_is_discardable(
+    quiet: bool,
+    restore: &RestorePointInfo,
+    head_moved: Option<bool>,
+) -> bool {
+    quiet
+        && restore.snapshot_ref.is_none()
+        && restore.backup_ref.is_none()
+        && head_moved == Some(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,6 +762,41 @@ mod tests {
             Some("refs/hikae/backup/pull/20260102T000500Z")
         );
         assert_eq!(new_restore_points(&after, &after).backup_ref, None);
+    }
+
+    #[test]
+    fn quiet_record_is_discarded_only_when_nothing_happened() {
+        let none = RestorePointInfo {
+            snapshot_ref: None,
+            backup_ref: None,
+        };
+        let with_backup = RestorePointInfo {
+            snapshot_ref: None,
+            backup_ref: Some("refs/hikae/backup/pull/20260102T000000Z".to_string()),
+        };
+        let with_snapshot = RestorePointInfo {
+            snapshot_ref: Some("refs/hikae/snapshots/main/20260102T000000Z".to_string()),
+            backup_ref: None,
+        };
+        // 何も起きず、HEAD も動いていなければ消す（従来どおり）
+        assert!(quiet_record_is_discardable(true, &none, Some(false)));
+        // 何もしていない操作は、結果が何もしなかったものでなければ消さない（失敗の記録など）
+        assert!(!quiet_record_is_discardable(false, &none, Some(false)));
+        // 復元点を作った（自動保存の後に最新だった取り込み）は残す
+        assert!(!quiet_record_is_discardable(
+            true,
+            &with_backup,
+            Some(false)
+        ));
+        assert!(!quiet_record_is_discardable(
+            true,
+            &with_snapshot,
+            Some(false)
+        ));
+        // HEAD が動いた（自動保存のコミット）は残す
+        assert!(!quiet_record_is_discardable(true, &none, Some(true)));
+        // HEAD を読めなかったときは、動いたかどうか確かめられないため残す
+        assert!(!quiet_record_is_discardable(true, &none, None));
     }
 
     #[test]

@@ -4,7 +4,9 @@
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub mod journal;
@@ -626,10 +628,57 @@ fn journal_entry_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<JournalEntry>
     })
 }
 
+/// アプリの終了時に、実行中の状態変更の操作を待つ上限（設計書 6.2・9.2 の終了時の扱い）
+pub const EXIT_WAIT_LIMIT: Duration = Duration::from_secs(5);
+/// 終了時の待ちで、実行中の件数を見る間隔
+pub const EXIT_WAIT_POLL: Duration = Duration::from_millis(100);
+
+/// 終了時の待ちを続けるか（純関数）。実行中（キューで待っている分を含む）の操作があり、
+/// 待った時間が上限に達していなければ続ける。
+pub fn exit_wait_continues(pending: usize, waited: Duration, limit: Duration) -> bool {
+    pending > 0 && waited < limit
+}
+
+/// 実行中の操作が無くなるまで待つ（上限まで）。戻り値は、無くなったら true、上限に達したら false。
+/// `poll` ごとに件数を見る。待つ時間は必ず `limit` で打ち切るため、無限に待たない。
+pub fn wait_until_idle(locks: &ProjectLocks, limit: Duration, poll: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        let pending = locks.pending_count();
+        if pending == 0 {
+            return true;
+        }
+        let waited = start.elapsed();
+        if !exit_wait_continues(pending, waited, limit) {
+            return false;
+        }
+        // waited < limit が成り立っているので、残りの時間は正の値
+        std::thread::sleep(poll.min(limit - waited));
+    }
+}
+
 /// プロジェクト単位の直列実行ロック。状態変更操作の並行実行を防ぐ。
 /// Tauri 非依存で、単体テスト可能。
 pub struct ProjectLocks {
     locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// キューに入っている（待機中を含む）状態変更の件数。終了時の待ちに使う
+    pending: AtomicUsize,
+}
+
+/// `pending` を 1 増やし、抜けるときに必ず 1 減らす（パニックで抜けたときも減る）
+struct PendingGuard<'a>(&'a AtomicUsize);
+
+impl<'a> PendingGuard<'a> {
+    fn new(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        PendingGuard(counter)
+    }
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl ProjectLocks {
@@ -637,6 +686,7 @@ impl ProjectLocks {
     pub fn new() -> Self {
         ProjectLocks {
             locks: Mutex::new(HashMap::new()),
+            pending: AtomicUsize::new(0),
         }
     }
 
@@ -646,6 +696,9 @@ impl ProjectLocks {
     where
         F: FnOnce() -> T,
     {
+        // 待機中も含めて件数を数える（終了時に、キューの中の操作を待つため）
+        let _pending = PendingGuard::new(&self.pending);
+
         let mut locks = self.locks.lock().map_err(|e| e.to_string())?;
         let lock_arc = locks
             .entry(project_id.to_string())
@@ -658,6 +711,11 @@ impl ProjectLocks {
         // lock_arc のロックを取得して f を実行
         let _guard = lock_arc.lock().map_err(|e| e.to_string())?;
         Ok(f())
+    }
+
+    /// 実行中（キューで待っている分を含む）の状態変更の件数
+    pub fn pending_count(&self) -> usize {
+        self.pending.load(Ordering::SeqCst)
     }
 }
 
@@ -678,6 +736,7 @@ impl Clone for ProjectLocks {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             ),
+            pending: AtomicUsize::new(self.pending_count()),
         }
     }
 }
@@ -973,5 +1032,120 @@ mod tests {
             overlapped.load(Ordering::SeqCst) >= 1,
             "異なる ID のロックは並行実行できるはず"
         );
+    }
+
+    #[test]
+    fn exit_wait_continues_only_while_work_is_pending_and_time_is_left() {
+        let limit = Duration::from_secs(5);
+        // 実行中の操作が無ければ待たない
+        assert!(!exit_wait_continues(0, Duration::ZERO, limit));
+        // 実行中があり、上限まで余裕があれば待つ
+        assert!(exit_wait_continues(1, Duration::ZERO, limit));
+        assert!(exit_wait_continues(3, Duration::from_millis(4_999), limit));
+        // 上限に達したら、実行中があっても待たない（無限に待たない）
+        assert!(!exit_wait_continues(1, limit, limit));
+        assert!(!exit_wait_continues(7, Duration::from_secs(60), limit));
+    }
+
+    #[test]
+    fn pending_count_covers_running_and_queued_operations() {
+        let locks = ProjectLocks::new();
+        assert_eq!(locks.pending_count(), 0);
+        // 実行の中では 1 件
+        locks
+            .run("p", || assert_eq!(locks.pending_count(), 1))
+            .expect("run");
+        // 抜けたら 0 に戻る
+        assert_eq!(locks.pending_count(), 0);
+    }
+
+    #[test]
+    fn pending_count_is_restored_when_the_operation_panics() {
+        let locks = ProjectLocks::new();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = locks.run("panicking", || panic!("テスト用のパニック"));
+        }));
+        assert!(caught.is_err());
+        assert_eq!(locks.pending_count(), 0, "パニックで抜けても件数は戻る");
+    }
+
+    #[test]
+    fn wait_until_idle_returns_when_the_running_operation_finishes() {
+        let locks = Arc::new(ProjectLocks::new());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker = {
+            let locks = locks.clone();
+            std::thread::spawn(move || {
+                locks
+                    .run("busy", || {
+                        started_tx.send(()).expect("send");
+                        std::thread::sleep(Duration::from_millis(300));
+                    })
+                    .expect("run");
+            })
+        };
+        // 操作が入ったことを確かめてから待つ（件数が 1 の状態で待ちに入る）
+        started_rx.recv().expect("recv");
+        assert_eq!(locks.pending_count(), 1);
+        assert!(
+            wait_until_idle(&locks, Duration::from_secs(5), Duration::from_millis(10)),
+            "上限より前に終わる"
+        );
+        assert_eq!(locks.pending_count(), 0);
+        worker.join().expect("join");
+    }
+
+    #[test]
+    fn wait_until_idle_gives_up_at_the_limit() {
+        let locks = Arc::new(ProjectLocks::new());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker = {
+            let locks = locks.clone();
+            std::thread::spawn(move || {
+                locks
+                    .run("stuck", || {
+                        started_tx.send(()).expect("send");
+                        // 待ちの上限を過ぎるまで終わらない
+                        let _ = release_rx.recv();
+                    })
+                    .expect("run");
+            })
+        };
+        started_rx.recv().expect("recv");
+        let began = Instant::now();
+        let idle = wait_until_idle(
+            &locks,
+            Duration::from_millis(150),
+            Duration::from_millis(10),
+        );
+        let elapsed = began.elapsed();
+        assert!(!idle, "上限に達したら、実行中のままでも戻る");
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "上限までは待つ: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "上限で打ち切る: {elapsed:?}"
+        );
+        // 後始末（操作を終わらせる）
+        release_tx.send(()).expect("send");
+        worker.join().expect("join");
+        assert!(wait_until_idle(
+            &locks,
+            Duration::ZERO,
+            Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn wait_until_idle_returns_at_once_when_nothing_is_pending() {
+        let locks = ProjectLocks::new();
+        assert!(wait_until_idle(
+            &locks,
+            Duration::ZERO,
+            Duration::from_millis(1)
+        ));
     }
 }

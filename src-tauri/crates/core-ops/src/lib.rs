@@ -63,14 +63,14 @@ pub use index_lock::{
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use memo_input::{MemoTextDiff, MEMO_DIFF_MAX_LINES, MEMO_TEXT_MAX_BYTES};
 pub use models::{
-    new_restore_points, AddConflictAction, AddConflictDecision, AddConflictPolicy, AddFilesOutcome,
-    AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave, Choice, ConflictFile, ConflictKind,
-    DiffLine, DiffLineKind, DiscardRefusal, FileInHistory, HistoryEntry, HistoryKind, Identity,
-    Labels, NameConflict, OpsError, PointChange, PointChangeKind, PullOutcome, RecoverDiagnosis,
-    RecoverOutcome, RejectedFile, RelocateCheck, ResolveOutcome, RestoreAndSave,
-    RestoreFileAndSave, RestoreFileChange, RestoreFileKind, RestoreFileOutcome, RestoreFilePreview,
-    RestorePointInfo, RestorePreview, SaveOutcome, SkipReason, SkipWorktreeReport, SkippedItem,
-    SyncState, UnsavedPolicy, UploadOutcome,
+    new_restore_points, quiet_record_is_discardable, AddConflictAction, AddConflictDecision,
+    AddConflictPolicy, AddFilesOutcome, AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave,
+    Choice, ConflictFile, ConflictKind, DiffLine, DiffLineKind, DiscardRefusal, FileInHistory,
+    HistoryEntry, HistoryKind, Identity, Labels, NameConflict, OpsError, PointChange,
+    PointChangeKind, PullOutcome, RecoverDiagnosis, RecoverOutcome, RejectedFile, RelocateCheck,
+    ResolveOutcome, RestoreAndSave, RestoreFileAndSave, RestoreFileChange, RestoreFileKind,
+    RestoreFileOutcome, RestoreFilePreview, RestorePointInfo, RestorePreview, SaveOutcome,
+    SkipReason, SkipWorktreeReport, SkippedItem, SyncState, UnsavedPolicy, UploadOutcome,
 };
 pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};

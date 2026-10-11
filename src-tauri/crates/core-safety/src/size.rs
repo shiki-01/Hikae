@@ -1,9 +1,11 @@
 // 自動保存（スナップショット）の容量上限（設計書 6.2）。
 //
 // - 上限 = max(snapshot_size_cap_x × P, SIZE_CAP_FLOOR_BYTES)。P は保存済みの木（HEAD^{tree}）の大きさ
-// - S は、スナップショットの ref からだけ到達できるオブジェクトの大きさ（ブランチ・リモート追跡からは到達できないもの）
+// - S は、スナップショットの ref からだけ到達できるオブジェクトの大きさ（ブランチ・リモート追跡からは到達できないもの）。
+//   集合の差で求める: S = usage(スナップショット ∪ ブランチ・リモート) − usage(ブランチ・リモート)（負なら 0）
 // - S が上限を超えたら、保護されていないスナップショットを古い順に削除する。
-//   1 ラウンドで残っている候補の古い方 25%（最低 1 件）を削除し、S を測り直す。最大 8 ラウンド
+//   1 ラウンドで残っている候補の古い方 25%（最低 1 件）を削除し、S を測り直す。最大 8 ラウンド。
+//   ブランチ・リモート側の大きさは、削除で変わらないため 1 回だけ測って使い回す
 // - 保護規則は期間による間引き（`plan_thinning`）と同じ（各ブランチの最新 1 件、利用者の手動の操作に紐づく
 //   復元点、未来の時刻）。保護一覧を読めない場合の見送りは呼び出し側（app）で行う
 // - 削除は `update-ref -d` だけ（`refs/hikae/snapshots/` の ref のみ）。データの実体の解放は git の通常の gc に任せる
@@ -94,14 +96,9 @@ pub fn plan_size_round(
     doomed
 }
 
-/// スナップショットだけが参照しているオブジェクトの大きさ（バイト。`S`）。
-/// `--not --branches --remotes` で、ブランチ・リモート追跡の履歴から到達できるものを除く。
-/// スナップショットが 1 件も無いときは 0。
-///
-/// 既知の制限: git の `rev-list` は、除外側の履歴をスナップショットの親の系譜の範囲でしか辿らない。
-/// そのため、スナップショットの作成後に main へ保存された同じ内容は除外されず、S に含まれる（過大になる）。
-/// 過大な S は、上限の超過と間引きを早める方向にだけ働く（保護規則は変わらない）。
-pub fn snapshot_only_bytes(runner: &GitRunner, repo: &Path) -> Result<u64, SafetyError> {
+/// スナップショットとブランチ・リモート追跡の和集合から到達できるオブジェクトの大きさ（バイト）。
+/// `rev-list --objects --disk-usage --glob=refs/hikae/snapshots/* --branches --remotes`（読み取りのみ）
+pub fn snapshot_and_branch_bytes(runner: &GitRunner, repo: &Path) -> Result<u64, SafetyError> {
     let glob = format!("--glob={SNAPSHOT_REF_PREFIX}*");
     let out = runner.run_ok(
         repo,
@@ -110,12 +107,44 @@ pub fn snapshot_only_bytes(runner: &GitRunner, repo: &Path) -> Result<u64, Safet
             "--objects",
             "--disk-usage",
             glob.as_str(),
-            "--not",
             "--branches",
             "--remotes",
         ],
     )?;
     parse_bytes(&out.stdout)
+}
+
+/// ブランチ・リモート追跡から到達できるオブジェクトの大きさ（バイト）。
+/// `rev-list --objects --disk-usage --branches --remotes`（読み取りのみ）
+pub fn branch_reachable_bytes(runner: &GitRunner, repo: &Path) -> Result<u64, SafetyError> {
+    let out = runner.run_ok(
+        repo,
+        &[
+            "rev-list",
+            "--objects",
+            "--disk-usage",
+            "--branches",
+            "--remotes",
+        ],
+    )?;
+    parse_bytes(&out.stdout)
+}
+
+/// S（スナップショットだけが参照するオブジェクトの大きさ）を、2 つの測定値の差で求める（純関数）。
+/// 差が負になるとき（測定の丸めなど）は 0。
+pub fn only_snapshot_bytes(union_bytes: u64, branch_bytes: u64) -> u64 {
+    union_bytes.saturating_sub(branch_bytes)
+}
+
+/// スナップショットだけが参照しているオブジェクトの大きさ（バイト。`S`）を、2 回の測定で求める。
+/// `S = usage(スナップショット ∪ ブランチ・リモート) − usage(ブランチ・リモート)`。
+///
+/// ブランチ側は、スナップショットの作成後に同じ内容を保存しても正しく除外される（集合の差で測るため）。
+/// 容量の間引き（`thin_snapshots_by_size`）は、ブランチ側の測定を 1 回だけ行って使い回す。
+pub fn snapshot_only_bytes(runner: &GitRunner, repo: &Path) -> Result<u64, SafetyError> {
+    let union = snapshot_and_branch_bytes(runner, repo)?;
+    let branches = branch_reachable_bytes(runner, repo)?;
+    Ok(only_snapshot_bytes(union, branches))
 }
 
 /// 保存済みの木（HEAD^{tree}）の大きさ（バイト。`P`）。HEAD が無ければ None（測れないので何もしない）。
@@ -199,7 +228,14 @@ pub fn thin_snapshots_by_size(
     };
     report.limit_bytes = Some(limit);
 
-    let before = snapshot_only_bytes(runner, repo)?;
+    // スナップショットが 1 件も無ければ S は 0 で、測る必要がない
+    if list_snapshot_refs(runner, repo)?.is_empty() {
+        return Ok(report);
+    }
+    // ブランチ・リモート側の大きさは 1 回だけ測り、ラウンドの測り直しで使い回す。
+    // 削除するのはスナップショットの ref だけなので、この値はラウンドの間に変わらない
+    let branches = branch_reachable_bytes(runner, repo)?;
+    let before = only_snapshot_bytes(snapshot_and_branch_bytes(runner, repo)?, branches);
     report.before_bytes = before;
     report.after_bytes = before;
     if before <= limit {
@@ -231,8 +267,9 @@ pub fn thin_snapshots_by_size(
             }
         }
         report.rounds += 1;
-        match snapshot_only_bytes(runner, repo) {
-            Ok(bytes) => {
+        match snapshot_and_branch_bytes(runner, repo) {
+            Ok(union) => {
+                let bytes = only_snapshot_bytes(union, branches);
                 current = bytes;
                 report.after_bytes = bytes;
             }
@@ -366,5 +403,16 @@ mod tests {
         let broken = format!("{SNAPSHOT_REF_PREFIX}main/not-a-time");
         let refs = [newest, backup_old, heads, broken];
         assert!(plan(&refs, &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn only_snapshot_is_the_difference_of_the_two_measurements() {
+        // 和集合が大きいぶんがスナップショットだけの大きさ
+        assert_eq!(only_snapshot_bytes(1_500, 1_000), 500);
+        // 同じなら 0（スナップショットだけの内容が無い）
+        assert_eq!(only_snapshot_bytes(1_000, 1_000), 0);
+        // 差が負（測定の丸めなど）は 0 とする
+        assert_eq!(only_snapshot_bytes(900, 1_000), 0);
+        assert_eq!(only_snapshot_bytes(0, u64::MAX), 0);
     }
 }

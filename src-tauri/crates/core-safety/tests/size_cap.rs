@@ -324,15 +324,59 @@ fn measures_only_objects_that_only_snapshots_reach() {
         "親に含まれる keep.bin は S に入らない: {s2}（前 {s1}）"
     );
 
-    // 既知の制限: スナップショットの後から、同じ内容を main に保存しても、そのスナップショットの親には
-    // 含まれないため除外されない（`rev-list --not --branches` は、ブランチ先端の木を辿らないため）。
-    // 後から保存された内容を S が過大に数えることを、ここで固定しておく
+    // スナップショット B（seed 9）の作成後に、同じ内容（work.bin の seed 9）を main に保存する。
+    // その内容はブランチから到達できるので、集合の差で測る S からは外れる（B の分が減る）。
+    // 旧の `--not --branches` では、ブランチ先端の木を辿らないため外れず、S が過大になっていた
     fs::write(repo.join("work.bin"), noise(9, BLOB)).expect("write");
     common::git_command(&repo, &["add", "-A"]);
     common::git_command(&repo, &["commit", "-m", "save the same content"]);
     let s3 = snapshot_only_bytes(&runner, &repo).expect("S");
     assert!(
-        s3 >= s2 - 10_000,
-        "既知の制限: 後から保存した内容は S から外れない: {s3}（前 {s2}）"
+        s3 + (BLOB as u64) / 2 < s2,
+        "後から保存した内容は S から外れる: {s3}（前 {s2}）"
+    );
+    // 残るのは A（seed 7）だけの分。A の作成直後の S（s1）と同じ程度
+    assert!(
+        s3 <= s1 + 10_000,
+        "スナップショットだけの内容（A の分）が残る: {s3}（A の作成直後 {s1}）"
+    );
+}
+
+#[test]
+fn snapshot_content_saved_later_on_a_branch_does_not_count_toward_s() {
+    let (_temp, repo) = setup();
+    let runner = GitRunner::from_path_env();
+    // スナップショット A（seed 21）の作成直後の S（内容はスナップショットだけが持つ）
+    snapshot_with(&runner, &repo, BASE, 21);
+    let just_after = snapshot_only_bytes(&runner, &repo).expect("S");
+    assert!(just_after >= BLOB as u64, "前提: {just_after}");
+
+    // スナップショット B（seed 22）を作ってから、同じ内容を main に保存する。B の分だけが S から外れる
+    snapshot_with(&runner, &repo, BASE + Duration::hours(1), 22);
+    let with_two = snapshot_only_bytes(&runner, &repo).expect("S");
+    fs::write(repo.join("work.bin"), noise(22, BLOB)).expect("write");
+    common::git_command(&repo, &["add", "-A"]);
+    common::git_command(&repo, &["commit", "-m", "save seed 22"]);
+    let after_save = snapshot_only_bytes(&runner, &repo).expect("S");
+    assert!(
+        after_save + (BLOB as u64) / 2 < with_two,
+        "保存した内容（seed 22）は S から外れる: {after_save}（前 {with_two}）"
+    );
+    assert!(after_save <= just_after + 10_000, "seed 21 の分だけが残る");
+}
+
+#[test]
+fn reported_sizes_are_the_difference_of_the_two_measurements() {
+    let (_temp, repo) = setup();
+    let runner = GitRunner::from_path_env();
+    make_snapshots(&runner, &repo, 12);
+    // 上限は十分大きく、間引きが起きない（測定の値の確認だけ）
+    let report =
+        thin_snapshots_by_size(&runner, &repo, NOW, &policy(1000), &HashSet::new()).expect("thin");
+    assert!(report.deleted.is_empty());
+    assert_eq!(
+        report.before_bytes,
+        snapshot_only_bytes(&runner, &repo).expect("S"),
+        "間引きの報告は、和集合とブランチ側の差と一致する"
     );
 }

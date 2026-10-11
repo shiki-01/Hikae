@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use core_git::GitError;
 use core_ops::{
-    new_restore_points, Labels, MemoLabels, Ops, OpsError, PullOutcome, SizeLimits,
-    SkipWorktreeReport, UnsavedPolicy, UploadOutcome,
+    new_restore_points, quiet_record_is_discardable, Labels, MemoLabels, Ops, OpsError,
+    PullOutcome, SizeLimits, SkipWorktreeReport, UnsavedPolicy, UploadOutcome,
 };
 use core_store::{
     now_rfc3339, JournalFinish, JournalOutcome, JournalTrigger, NewJournalEntry, ProjectLocks,
@@ -105,7 +105,8 @@ pub(crate) struct OpSpec {
 pub(crate) struct OpSummary {
     /// 結果の要約（`merged` など）。エラー本文は入れない
     pub detail: String,
-    /// 自動実行で何も起きなかった場合に true（ジャーナル・状態通知を省く）
+    /// 自動実行で何も起きなかった場合に true（ジャーナル・状態通知を省く）。
+    /// ただし復元点を作った・HEAD が動いたときは `run_op` が残すため、これは「何もしなかった」の候補
     pub quiet: bool,
 }
 
@@ -223,12 +224,12 @@ where
                 .ok()
             });
             // 開始時の HEAD を記録する（本体より前。中断の自動確定の判定に使う。設計書 6.3）。
-            // 取得・記録に失敗しても操作は止めない（記録は空のまま）
-            if let Some(jid) = journal_id {
-                if let Ok(Some(head)) = ops.current_head(&project.path) {
-                    if let Ok(g) = store.lock() {
-                        let _ = g.set_journal_head_before(jid, &head);
-                    }
+            // 取得・記録に失敗しても操作は止めない（記録は空のまま）。
+            // 完了時の HEAD と比べ、取り込みの自動保存などで動いたかを判定する（記録を残すかの判定）
+            let head_read_before = ops.current_head(&project.path);
+            if let (Some(jid), Ok(Some(head))) = (journal_id, &head_read_before) {
+                if let Ok(g) = store.lock() {
+                    let _ = g.set_journal_head_before(jid, head);
                 }
             }
             let before = ops.restore_point_refs(&project.path).unwrap_or_default();
@@ -256,8 +257,14 @@ where
             let after = ops.restore_point_refs(&project.path).unwrap_or_default();
             let restore = new_restore_points(&before, &after);
 
+            // 完了時の HEAD を、開始時と比べる。どちらかが読めなければ動いたかは不明（None）
+            let head_moved = match (&head_read_before, ops.current_head(&project.path)) {
+                (Ok(before_head), Ok(after_head)) => Some(*before_head != after_head),
+                _ => None,
+            };
+
             let auto = trigger == OpTrigger::Auto;
-            let (journal_outcome, detail, quiet) = match &result {
+            let (journal_outcome, detail, quiet_candidate) = match &result {
                 Ok(value) => {
                     let s = summarize(value);
                     (JournalOutcome::Success, s.detail, auto && s.quiet)
@@ -268,6 +275,9 @@ where
                     auto && failure_kind(e) == FailureKind::Offline,
                 ),
             };
+            // 何も起きなかった自動実行だけを静かに扱う。復元点を作った・HEAD が動いた（取り込み前の
+            // 自動保存のコミット）場合は、結果を記録に残す（設計書 6.3）
+            let quiet = quiet_record_is_discardable(quiet_candidate, &restore, head_moved);
 
             // 記録に失敗しても操作の結果は変えない
             let recorded = match journal_id {

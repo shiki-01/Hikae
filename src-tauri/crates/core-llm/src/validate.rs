@@ -32,6 +32,12 @@ const QUOTE_PAIRS: [(char, char); 6] = [
     ('`', '`'),
 ];
 
+/// 前置きと判断する行の長さの上限（文字数。これ未満の行で、先頭が `PREAMBLE_PREFIXES` のものが前置き）
+const PREAMBLE_MAX_CHARS: usize = 40;
+
+/// 前置きの先頭語（英字は大文字小文字を区別しない）。小型モデルが本文の前に付ける定型の言い回し
+const PREAMBLE_PREFIXES: [&str; 7] = ["以下", "次の", "保存メモ", "メモ", "Here", "Sure", "回答"];
+
 /// 検証を通った出力。`rescued` は、複数行の出力から最初の空でない 1 行を採ったことを表す
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cleaned {
@@ -51,7 +57,9 @@ pub fn clean_summary(raw: &str) -> Option<String> {
 ///
 /// - 出力が 1 行（末尾の改行を除く）なら、その行を検証する
 /// - 複数行の出力は、最初の空でない 1 行だけを検証する（救済。その行が通らなければ `None`）。
-///   小型モデルが「ファイルごとに 1 行」で返す出力を、検証で全件落とさないための規則（設計 10.4）
+///   小型モデルが「ファイルごとに 1 行」で返す出力を、検証で全件落とさないための規則（設計 10.4）。
+///   ただし最初の行が前置き（`is_preamble`）なら、本文ではないため採らない
+/// - 1 行の出力（改行なし）には、前置きの判定を適用しない
 pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
     let trimmed = raw.trim();
     if trimmed.contains('\n') || trimmed.contains('\r') {
@@ -59,6 +67,9 @@ pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())?;
+        if is_preamble(first) {
+            return None;
+        }
         return validate_line(first).map(|text| Cleaned {
             text,
             rescued: true,
@@ -94,6 +105,27 @@ fn validate_line(line: &str) -> Option<String> {
         return None;
     }
     Some(s)
+}
+
+/// 複数行の出力の 1 行目が前置き（本文の前置きの言い回し）か。純関数。
+///
+/// - 末尾が `:` または `：` の行（「次の内容です:」など）
+/// - 先頭が `PREAMBLE_PREFIXES` のいずれかで、短い行（`PREAMBLE_MAX_CHARS` 未満）の行
+///
+/// 箇条書き記号と対の引用符は外して判定する。長い行は、同じ語で始まっても前置きとみなさない
+/// （「メモリの設定を…」のような本文を誤って弾かないため）。
+fn is_preamble(line: &str) -> bool {
+    let probe = strip_quotes(strip_bullet(line.trim()).trim()).trim();
+    if probe.ends_with(':') || probe.ends_with('：') {
+        return true;
+    }
+    if probe.chars().count() >= PREAMBLE_MAX_CHARS {
+        return false;
+    }
+    let lower = probe.to_lowercase();
+    PREAMBLE_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(&prefix.to_lowercase()))
 }
 
 /// 先頭の箇条書き記号を取り除く。`-` と `*` は直後に空白がある場合だけ対象にする。
@@ -350,6 +382,63 @@ mod tests {
         assert_eq!(
             clean_summary("sales 2024 year を更新しました。").as_deref(),
             Some("sales 2024 year を更新しました。")
+        );
+    }
+
+    #[test]
+    fn multiline_first_line_that_is_a_preamble_is_not_rescued() {
+        // 前置き（末尾がコロン）の次の行が正しくても、前置きの行は採らない
+        assert_eq!(
+            clean_summary_detail("以下の内容です:\n予算を変更しました。"),
+            None
+        );
+        assert_eq!(
+            clean_summary_detail("変更は次のとおりです：\n予算を変更しました。"),
+            None
+        );
+        // 先頭の語が前置きの言い回し（短い行）
+        for head in [
+            "以下の通りです\n予算を変更しました。",
+            "次の文です\n予算を変更しました。",
+            "保存メモ\n予算を変更しました。",
+            "メモ: 予算を変更しました。\n表も追加した。",
+            "回答\n予算を変更しました。",
+            "Here is the memo\n予算を変更しました。",
+            "Sure, here you go\n予算を変更しました。",
+            "「以下の通りです」\n予算を変更しました。",
+            "- 以下の通りです\n予算を変更しました。",
+        ] {
+            assert_eq!(clean_summary_detail(head), None, "{head}");
+        }
+        // 大文字小文字は区別しない
+        assert_eq!(
+            clean_summary_detail("here is the memo\n予算を変更しました。"),
+            None
+        );
+    }
+
+    #[test]
+    fn multiline_first_line_that_is_content_is_still_rescued() {
+        // 前置きの語を含んでいても、先頭でなければ本文
+        let got = clean_summary_detail("報告書に保存メモを追加した。\n表も追加した。").unwrap();
+        assert_eq!(got.text, "報告書に保存メモを追加した。");
+        assert!(got.rescued);
+        // 前置きの語で始まっても、長い行は本文として採る（40 文字以上）
+        let long = format!("メモ{}。\n次の行", "あ".repeat(40));
+        let got = clean_summary_detail(&long).unwrap();
+        assert_eq!(got.text, format!("メモ{}。", "あ".repeat(40)));
+        assert!(got.rescued);
+    }
+
+    #[test]
+    fn preamble_rule_does_not_apply_to_single_line_outputs() {
+        // 改行を含まない出力は、前置きの判定を行わない（通常の 1 行は弾かない）
+        let got = clean_summary_detail("以下の内容です:").unwrap();
+        assert_eq!(got.text, "以下の内容です:");
+        assert!(!got.rescued);
+        assert_eq!(
+            clean_summary("回答: 予算を変更しました。").as_deref(),
+            Some("回答: 予算を変更しました。")
         );
     }
 }
