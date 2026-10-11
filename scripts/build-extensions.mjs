@@ -174,7 +174,10 @@ try {
 	});
 } catch (err) {
 	// 原因が分からないと直せないため、エラーの本文（先頭の数行）を出す
-	const detail = String(err?.message ?? err).split('\n').slice(0, 6).join('\n');
+	const detail = String(err?.message ?? err)
+		.split('\n')
+		.slice(0, 6)
+		.join('\n');
 	console.error(detail);
 	fail('表示拡張の UI のビルドに失敗しました（pnpm install の後に実行してください）');
 }
