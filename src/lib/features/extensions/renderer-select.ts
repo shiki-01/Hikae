@@ -19,35 +19,35 @@ export function extOf(path: string): string {
 }
 
 /**
- * 拡張子と方法から、使う表示を決める。同じ拡張子の宣言が優先し、無ければ `*`。
- * ホスト（`renderer_for`）と同じ規則。`view` の宣言だけを対象にする
+ * 拡張子と方法から、使う表示を決める。ホスト（Rust の `renderer_for`）と同じ規則:
+ * その拡張子を宣言した表示が 1 つでもあれば、その中から方法に対応するものを選ぶ（無ければ null。`*` には落とさない）。
+ * 宣言の無い拡張子だけ、`*` の宣言から選ぶ
  */
-export function rendererFor(
+function pick(
 	renderers: readonly RendererInfo[],
 	ext: string,
-	mode: 'view' = 'view'
+	mode: 'view' | 'compare'
 ): RendererInfo | null {
-	const find = (wanted: string) =>
-		renderers.find((r) => r.modes.includes(mode) && r.fileTypes.includes(wanted)) ?? null;
-	return find(ext) ?? find(FALLBACK_FILE_TYPE);
+	const own = renderers.filter((r) => r.fileTypes.includes(ext));
+	const pool =
+		own.length > 0 ? own : renderers.filter((r) => r.fileTypes.includes(FALLBACK_FILE_TYPE));
+	return pool.find((r) => r.modes.includes(mode)) ?? null;
+}
+
+/** 表示（view）に使う表示を決める */
+export function rendererFor(renderers: readonly RendererInfo[], ext: string): RendererInfo | null {
+	return pick(renderers, ext, 'view');
 }
 
 /**
- * 比較（compare）に使う表示を決める。拡張子の宣言が 1 つでもあれば、その中から compare を選ぶ（無ければ null）。
- * `*` には落とさない。pdf・pptx のように compare を宣言しない形式は、ホストが view を 2 つ並べる（設計書 11.2）。
- * 宣言の無い拡張子だけ、`*` の compare を使う
+ * 比較（compare）に使う表示を決める。pdf・pptx のように compare を宣言しない形式は null で、
+ * ホストが view を 2 つ並べる（設計書 11.2）
  */
 export function compareRendererFor(
 	renderers: readonly RendererInfo[],
 	ext: string
 ): RendererInfo | null {
-	const own = renderers.filter((r) => r.fileTypes.includes(ext));
-	if (own.length > 0) return own.find((r) => r.modes.includes('compare')) ?? null;
-	return (
-		renderers.find(
-			(r) => r.fileTypes.includes(FALLBACK_FILE_TYPE) && r.modes.includes('compare')
-		) ?? null
-	);
+	return pick(renderers, ext, 'compare');
 }
 
 /** `ext://` の URL（Windows の WebView は `http://ext.localhost/` に変換して読む）。`entryUrlPath` はセグメントごとに扱う */

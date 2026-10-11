@@ -47,12 +47,12 @@ export function resolveReloginTarget(path: string): string {
  * 履歴に積まず置き換える（ログインの画面が履歴に残らない）
  */
 export async function goBackTo(path: string): Promise<void> {
-	await goto(resolveReloginTarget(path), { replaceState: true });
+	await goto(resolveReloginTarget(path), { replace: true });
 }
 
 /** ログアウト後などに、ログインの画面へ移る。移る前の画面を履歴に残さない */
 export async function gotoLogin(search: string): Promise<void> {
-	await goto(`${resolve('/welcome')}${search}`, { replaceState: true });
+	await goto(`${resolve('/welcome')}${search}`, { replace: true });
 }
 
 /**
@@ -66,5 +66,5 @@ export function resolveSettingsBackTarget(search: string): string {
 
 /** 設定画面を閉じて、元の画面へ戻る（履歴を置き換える） */
 export async function goBackFromSettings(search: string): Promise<void> {
-	await goto(resolveSettingsBackTarget(search), { replaceState: true });
+	await goto(resolveSettingsBackTarget(search), { replace: true });
 }

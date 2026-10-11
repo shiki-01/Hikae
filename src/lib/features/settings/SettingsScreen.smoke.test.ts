@@ -56,7 +56,7 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(screen.getByText(t('account.logout_text'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.logout_confirm') }));
 		await vi.waitFor(() =>
-			expect(goto).toHaveBeenCalledWith('/welcome?return=%2F', { replaceState: true })
+			expect(goto).toHaveBeenCalledWith('/welcome?return=%2F', { replace: true })
 		);
 		expect(JSON.parse(localStorage.getItem('hikae.session') ?? '{}')).toMatchObject({
 			loggedIn: false,
@@ -80,7 +80,7 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(await screen.findByText(t('account.reauth'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.relogin') }));
 		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`, {
-			replaceState: true
+			replace: true
 		});
 	});
 
@@ -112,7 +112,7 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(screen.queryByRole('button', { name: t('account.logout') })).toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: t('account.login') }));
 		expect(goto).toHaveBeenCalledWith(`/welcome?return=${encodeURIComponent('/settings')}`, {
-			replaceState: true
+			replace: true
 		});
 	});
 
@@ -122,7 +122,7 @@ describe('SettingsScreen のスモークテスト', () => {
 		renderWithClient(SettingsScreen);
 		await screen.findByText(t('account.not_logged_in'));
 		await fireEvent.click(screen.getByRole('button', { name: t('settings.back') }));
-		expect(goto).toHaveBeenCalledWith('/', { replaceState: true });
+		expect(goto).toHaveBeenCalledWith('/', { replace: true });
 		expect(back).not.toHaveBeenCalled();
 		back.mockRestore();
 	});
@@ -131,7 +131,7 @@ describe('SettingsScreen のスモークテスト', () => {
 		setPageUrl('/settings?project=proj1&tab=auto_save');
 		renderWithClient(SettingsScreen);
 		await fireEvent.click(screen.getByRole('button', { name: t('settings.back') }));
-		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replaceState: true });
+		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replace: true });
 	});
 
 	it('プロジェクトごとの設定に切り替えると、アカウントは出さない', async () => {

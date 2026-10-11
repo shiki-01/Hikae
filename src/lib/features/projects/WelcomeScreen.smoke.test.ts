@@ -32,7 +32,7 @@ describe('WelcomeScreen のスモークテスト', () => {
 		expect(await screen.findByRole('button', { name: t('wizard.login.button') })).toBeTruthy();
 		expect(screen.queryByRole('button', { name: t('wizard.next') })).toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: t('relogin.back') }));
-		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replaceState: true });
+		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replace: true });
 	});
 
 	it('ログアウト直後（戻り先が設定画面）は、戻るボタンもログイン成功後も一覧へ向かう', async () => {
@@ -40,10 +40,10 @@ describe('WelcomeScreen のスモークテスト', () => {
 		setPageUrl(`/welcome?return=${encodeURIComponent('/settings')}`);
 		renderWithClient(WelcomeScreen);
 		await fireEvent.click(await screen.findByRole('button', { name: t('relogin.back') }));
-		expect(goto).toHaveBeenLastCalledWith('/', { replaceState: true });
+		expect(goto).toHaveBeenLastCalledWith('/', { replace: true });
 		goto.mockClear();
 		await fireEvent.click(await screen.findByRole('button', { name: t('wizard.login.button') }));
-		await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/', { replaceState: true }), {
+		await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/', { replace: true }), {
 			timeout: 5000
 		});
 	});

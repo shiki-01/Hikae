@@ -68,6 +68,43 @@ fn an_exact_file_type_wins_over_the_star_whatever_the_order() {
 }
 
 #[test]
+fn a_declared_file_type_without_the_mode_does_not_fall_back_to_the_star() {
+    // pdf は view だけを宣言し、`*` は compare も持つ。pdf の compare は `*` に落とさない
+    // （アプリが view を 2 つ並べる。設計書 11.2）。宣言の無い拡張子は `*` の compare を使う
+    let mut host = ExtensionHost::new();
+    let star = folder(
+        &manifest(
+            "test.star",
+            json!([{ "fileTypes": ["*"], "modes": ["view", "compare"], "entry": "index.html" }]),
+        ),
+        &["index.html"],
+    );
+    let pdf = folder(
+        &manifest(
+            "test.pdf",
+            json!([{ "fileTypes": [".pdf"], "modes": ["view"], "entry": "pdf.html" }]),
+        ),
+        &["pdf.html"],
+    );
+    host.register_dir(star.path())
+        .unwrap_or_else(|e| panic!("{e}"));
+    host.register_dir(pdf.path())
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    assert!(host.renderer_for("pdf", RenderMode::Compare).is_none());
+    assert_eq!(
+        host.renderer_for("pdf", RenderMode::View)
+            .map(|r| r.extension_id.as_str()),
+        Some("test.pdf")
+    );
+    assert_eq!(
+        host.renderer_for("txt", RenderMode::Compare)
+            .map(|r| r.extension_id.as_str()),
+        Some("test.star")
+    );
+}
+
+#[test]
 fn the_same_file_type_and_mode_claimed_twice_is_rejected() {
     let mut host = ExtensionHost::new();
     let first = folder(

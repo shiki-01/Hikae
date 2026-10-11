@@ -48,8 +48,9 @@ describe('rendererFor', () => {
 		expect(rendererFor(renderers, '')?.fileTypes).toEqual(['*']);
 	});
 
-	it('表示の方法（view）の宣言だけを対象にする。compare だけの宣言は選ばない', () => {
-		expect(rendererFor(renderers, 'doc')?.fileTypes).toEqual(['*']);
+	it('表示の方法（view）の宣言だけを対象にする。compare だけの宣言は選ばず、`*` にも落とさない', () => {
+		// doc は compare だけを宣言している。宣言のある拡張子は `*` に落とさない（Rust の renderer_for と同じ規則）
+		expect(rendererFor(renderers, 'doc')).toBeNull();
 		expect(rendererFor([renderers[2]], 'doc')).toBeNull();
 	});
 

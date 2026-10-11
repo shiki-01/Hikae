@@ -206,19 +206,23 @@ impl ExtensionHost {
         &self.renderers
     }
 
-    /// 拡張子と表示の方法から、表示を決める。同じ拡張子の宣言があればそれを、無ければ `*` を使う。
+    /// 拡張子と表示の方法から、表示を決める。
+    ///
+    /// その拡張子を宣言した表示が 1 つでもあれば、その中から方法に対応するものを選ぶ（無ければ None。
+    /// `*` には落とさない。pdf・pptx のように compare を宣言しない形式は、アプリが view を 2 つ並べる）。
+    /// 宣言の無い拡張子だけ、`*` の宣言から選ぶ。フロントの `rendererFor` / `compareRendererFor` と同じ規則。
     /// 拡張子は `.` の有無と大文字小文字を問わない
     pub fn renderer_for(&self, file_type: &str, mode: RenderMode) -> Option<&RendererInfo> {
         let key = file_type
             .strip_prefix('.')
             .unwrap_or(file_type)
             .to_ascii_lowercase();
-        let find = |wanted: &str| {
-            self.renderers
-                .iter()
-                .find(|r| r.modes.contains(&mode) && r.file_types.iter().any(|t| t == wanted))
-        };
-        find(&key).or_else(|| find("*"))
+        let declares = |r: &RendererInfo, wanted: &str| r.file_types.iter().any(|t| t == wanted);
+        let own = self.renderers.iter().any(|r| declares(r, &key));
+        let pool = if own { key.as_str() } else { "*" };
+        self.renderers
+            .iter()
+            .find(|r| declares(r, pool) && r.modes.contains(&mode))
     }
 
     /// 登録済みの拡張のフォルダ（正規化済み）。登録されていなければ None。`ext://` の配信の根
