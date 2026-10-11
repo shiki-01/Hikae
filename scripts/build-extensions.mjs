@@ -148,6 +148,23 @@ for (const bin of BINS) {
 // manifest の renderers の入口（ui/index.html）が無いと登録されない
 log('表示拡張の UI をビルドします');
 await rm(scratchUiDir, { recursive: true, force: true });
+
+// tsconfig の継承元（`$app/tsconfig`）は `.svelte-kit/tsconfig.json`（`svelte-kit sync` の生成物）にある。
+// 新しい clone や CI では無く、無いと UI のビルドが「Tsconfig not found」で失敗するため、先に生成する
+try {
+	await stat(join(root, '.svelte-kit', 'tsconfig.json'));
+} catch {
+	log('.svelte-kit が無いため、svelte-kit sync を実行します');
+	const sync = spawnSync(
+		process.execPath,
+		[join(root, 'node_modules', '@sveltejs', 'kit', 'svelte-kit.js'), 'sync'],
+		{ cwd: root, stdio: 'inherit' }
+	);
+	if (sync.status !== 0) {
+		fail('svelte-kit sync に失敗しました（pnpm install の後に実行してください）');
+	}
+}
+
 try {
 	const { build: viteBuild } = await import('vite');
 	await viteBuild({
@@ -155,7 +172,10 @@ try {
 		logLevel: 'warn',
 		build: { outDir: scratchUiDir }
 	});
-} catch {
+} catch (err) {
+	// 原因が分からないと直せないため、エラーの本文（先頭の数行）を出す
+	const detail = String(err?.message ?? err).split('\n').slice(0, 6).join('\n');
+	console.error(detail);
 	fail('表示拡張の UI のビルドに失敗しました（pnpm install の後に実行してください）');
 }
 try {
