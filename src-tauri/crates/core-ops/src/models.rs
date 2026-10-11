@@ -338,6 +338,8 @@ pub struct Labels {
     pub copy_mine: String,
     /// 「クラウドの版」を別名コピーするときにファイル名へ付ける語
     pub copy_theirs: String,
+    /// 「今後の変更だけ無視する」の退避を別名で取り出すときにファイル名へ付ける語（設計書 4.8）
+    pub skip_stash: String,
 }
 
 impl Default for Labels {
@@ -346,6 +348,7 @@ impl Default for Labels {
             auto_save_memo: "Auto-save before pulling".to_string(),
             copy_mine: "this PC".to_string(),
             copy_theirs: "cloud".to_string(),
+            skip_stash: "this PC copy".to_string(),
         }
     }
 }

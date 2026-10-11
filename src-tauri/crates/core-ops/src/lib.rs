@@ -88,6 +88,7 @@ pub use repo_health::{
 };
 pub use restore_save::memo_for_auto_save;
 pub use size_check::{classify_sizes, LargeFile, SaveOptions, SizeFindings, SizeLimits};
+pub use skip_worktree::{ExtractOutcome, SkipStashItem, SkipStashList, SkipStashReason};
 pub use windows_names::{
     find_unsupported_names, root_path_len, UnsupportedName, UnsupportedReason, MAX_LISTED_NAMES,
 };
@@ -808,6 +809,26 @@ impl Ops {
         let report = skip_worktree::reapply_skip_worktree(self.runner(), repo)?;
         self.record_skip(report.clone());
         Ok(report)
+    }
+
+    /// 残っている「今後の変更だけ無視する」の退避の一覧（読み取りのみ。設計書 4.8）。
+    /// 壊れたものは一覧に出さず `skipped_invalid` に数える。
+    pub fn list_skip_stash(&self, repo: &Path) -> Result<SkipStashList, OpsError> {
+        skip_worktree::list_skip_stash(self.runner(), repo)
+    }
+
+    /// 退避の内容を、元のファイルと同じフォルダに別名のファイルとして取り出す（設計書 4.8）。
+    /// 復元点を作ってから置き、内容を確かめたあとだけ退避を消す。元のファイルは変えない。
+    /// 退避を破棄する操作は無い（取り出したコピーの扱いは利用者が決める）。
+    pub fn extract_skip_stash(&self, repo: &Path, id: &str) -> Result<ExtractOutcome, OpsError> {
+        skip_worktree::extract_skip_stash(
+            self.runner(),
+            repo,
+            id,
+            self.now(),
+            &self.labels,
+            self.meta(),
+        )
     }
 
     /// 付け替え先のフォルダが登録済みプロジェクトと同じリポジトリか確認する（ファイルは変更しない）。

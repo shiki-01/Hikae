@@ -666,6 +666,7 @@ fn test_13_labels_are_injected_and_pull_creates_a_single_restore_point(
         auto_save_memo: "memo-from-caller".to_string(),
         copy_mine: "mine-label".to_string(),
         copy_theirs: "theirs-label".to_string(),
+        ..core_ops::Labels::default()
     };
     let ops_a = Ops::new(new_runner());
     let ops_b = Ops::new(new_runner()).with_labels(labels);

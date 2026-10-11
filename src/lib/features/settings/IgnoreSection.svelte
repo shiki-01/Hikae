@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { t } from '#lib/i18n/index.js';
+	import { formatBytes, formatDateTime } from '#lib/i18n/format.js';
 	import type { IgnoreKind, IgnoreRule } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';
 	import IconButton from '#lib/components/IconButton.svelte';
@@ -9,14 +10,21 @@
 	import UntrackDialog from './UntrackDialog.svelte';
 	import { ignoreRuleStatus } from './ignore-model';
 	import { displayPath, skipEntryStatus } from './skip-model';
+	import { stashReasonKey, stashSavedDate } from './skip-stash-model';
 	import {
 		useAddIgnorePattern,
 		useClearSkipWorktree,
+		useExtractSkipStash,
 		useRemoveIgnorePattern,
 		useSetSkipWorktree,
 		useUntrackFiles
 	} from './mutations';
-	import { useIgnoreRules, useSkipWorktreeEntries, useTrackedIgnoredFiles } from './queries';
+	import {
+		useIgnoreRules,
+		useSkipStash,
+		useSkipWorktreeEntries,
+		useTrackedIgnoredFiles
+	} from './queries';
 
 	interface Props {
 		/** 開いているプロジェクト */
@@ -28,6 +36,8 @@
 	const rules = useIgnoreRules(() => projectId);
 	const tracked = useTrackedIgnoredFiles(() => projectId);
 	const skipEntries = useSkipWorktreeEntries(() => projectId);
+	const stashes = useSkipStash(() => projectId);
+	const extractStash = useExtractSkipStash(() => projectId);
 
 	let addOpen = $state(false);
 	/** 保存対象から外す／無視する確認で扱うファイル。null のときは閉じている */
@@ -156,6 +166,45 @@
 			<p class="m:0 type-body fg:fg-muted">{t('ignore.skip_empty')}</p>
 		{/if}
 	</section>
+
+	{#if stashes.data && stashes.data.items.length > 0}
+		<section class="flex flex-direction:column gap:2 mt:4">
+			<h3 class="m:0 type-heading">{t('skip_stash.section_title')}</h3>
+			<p class="m:0 type-small fg:fg-muted">{t('skip_stash.section_description')}</p>
+			<ul
+				class="m:0 p:0 list-style:none flex flex-direction:column"
+				aria-label={t('skip_stash.list_label')}
+			>
+				{#each stashes.data.items as entry (entry.id)}
+					{@const savedDate = stashSavedDate(entry.savedAt)}
+					<li
+						class="flex align-items:center justify-content:space-between gap:3 py:3 bb:1px|solid|border"
+					>
+						<div class="flex flex-direction:column gap:1 min-w:0">
+							<span class="type-body overflow-wrap:anywhere">{displayPath(entry.path)}</span>
+							{#if savedDate}
+								<span class="type-small fg:fg-muted">
+									{t('skip_stash.saved_size', {
+										time: formatDateTime(savedDate),
+										size: formatBytes(entry.sizeBytes)
+									})}
+								</span>
+							{/if}
+							<span class="type-small fg:fg-muted">{t(stashReasonKey(entry.reason))}</span>
+						</div>
+						<Button
+							size="sm"
+							variant="secondary"
+							disabled={extractStash.isPending}
+							onclick={() => extractStash.mutate(entry.id)}
+						>
+							{t('skip_stash.extract')}
+						</Button>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
 </div>
 
 <IgnoreAddDialog

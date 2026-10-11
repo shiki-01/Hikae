@@ -3510,6 +3510,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             skip_worktree::set_skip_worktree,
             skip_worktree::clear_skip_worktree,
             skip_worktree::reapply_skip_worktree,
+            skip_worktree::list_skip_stash,
+            skip_worktree::extract_skip_stash,
             add_ignore_pattern,
             remove_ignore_pattern,
             untrack_files,

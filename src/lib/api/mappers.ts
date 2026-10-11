@@ -42,6 +42,9 @@ import type {
 	IgnoreKindArg,
 	IgnoreRuleItem,
 	SkipWorktreeItem,
+	SkipStashEntry as BackendSkipStashEntry,
+	SkipStashExtracted as BackendSkipStashExtracted,
+	SkipStashListView,
 	SaveResult,
 	SaveSizeChoice,
 	SessionInfo,
@@ -100,6 +103,9 @@ import type {
 	IgnoreKind,
 	IgnoreRule,
 	SkipWorktreeEntry,
+	SkipStashEntry,
+	SkipStashExtracted,
+	SkipStashList,
 	SaveOutcome,
 	SavePoint,
 	SettingKey,
@@ -666,6 +672,30 @@ export function mapSkipWorktreeEntry(item: SkipWorktreeItem): SkipWorktreeEntry 
 		ignored: item.ignored,
 		dismissed: item.dismissed
 	};
+}
+
+/** 退避に残っているファイル 1 件（バックエンドの形から画面の形へ。理由の文字列は同じ） */
+export function mapSkipStashEntry(item: BackendSkipStashEntry): SkipStashEntry {
+	return {
+		id: item.id,
+		path: item.path,
+		sizeBytes: item.size_bytes ?? 0,
+		savedAt: item.saved_at ?? null,
+		reason: item.reason
+	};
+}
+
+/** 退避の一覧（壊れていて一覧に出していない件数を含む） */
+export function mapSkipStashList(list: SkipStashListView): SkipStashList {
+	return {
+		items: list.items.map(mapSkipStashEntry),
+		skippedInvalid: list.skipped_invalid
+	};
+}
+
+/** 退避の取り出し結果 */
+export function mapSkipStashExtracted(result: BackendSkipStashExtracted): SkipStashExtracted {
+	return { copyPath: result.copy_path };
 }
 
 /** 保存しないファイルの種類をバックエンドの形にする（文字列は同じ） */

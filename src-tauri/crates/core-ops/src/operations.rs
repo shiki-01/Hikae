@@ -1225,7 +1225,7 @@ pub(crate) fn sync_state(runner: &GitRunner, repo: &Path) -> Result<SyncState, O
 
 /// 使わない版を別名で保存するときのパスを作る。
 /// `<元のフォルダ>/<名前> (<ラベル> MM-DD).<拡張子>`。既存ファイルは上書きせず、連番を付ける。
-fn make_copy_path(repo: &Path, path: &str, label: &str, now: OffsetDateTime) -> String {
+pub(crate) fn make_copy_path(repo: &Path, path: &str, label: &str, now: OffsetDateTime) -> String {
     let date = format!("{:02}-{:02}", now.month() as u8, now.day());
     let p = Path::new(path);
     let dir = p.parent().and_then(|d| d.to_str()).unwrap_or("");

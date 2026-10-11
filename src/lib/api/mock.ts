@@ -55,6 +55,9 @@ import type {
 	IgnoreKind,
 	IgnoreRule,
 	SkipWorktreeEntry,
+	SkipStashEntry,
+	SkipStashExtracted,
+	SkipStashList,
 	RestoreResult,
 	RestoreScope,
 	SaveOutcome,
@@ -629,6 +632,34 @@ function impactFor(state: ProjectState, targetId: string, scope: RestoreScope): 
 
 /** 保存しないファイルのパターン（プロジェクトごと。ブラウザ単体の確認用に保持する） */
 const ignorePatterns = new Map<string, string[]>();
+
+/** 退避に残っているファイル（プロジェクトごと。ブラウザ単体の確認用に保持する。初めて開いたときに 2 件入れる） */
+const skipStashes = new Map<string, SkipStashEntry[]>();
+
+function skipStashesOf(projectId: string): SkipStashEntry[] {
+	let list = skipStashes.get(projectId);
+	if (!list) {
+		const now = Date.now() / 1000;
+		list = [
+			{
+				id: 'mock-pending-1',
+				path: 'デザイン/ロゴ.psd',
+				sizeBytes: 12_400_000,
+				savedAt: now - 3600,
+				reason: 'pending'
+			},
+			{
+				id: 'mock-deleted-1',
+				path: '資料/旧版.docx',
+				sizeBytes: 84_000,
+				savedAt: now - 86_400,
+				reason: 'deleted-upstream'
+			}
+		];
+		skipStashes.set(projectId, list);
+	}
+	return list;
+}
 
 /** 「今後の変更だけ無視する」の記録（プロジェクトごと。ブラウザ単体の確認用に保持する） */
 const skipRecords = new Map<string, { path: string; setAt: string; dismissed: boolean }[]>();
@@ -1335,6 +1366,47 @@ export const mockApi: ProjectApi = {
 		await sleep(WAIT_SHORT);
 		stateOf(projectId);
 		setMockSkipRecords(projectId, paths);
+	},
+
+	async listSkipStash(projectId: string): Promise<SkipStashList> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		return { items: [...skipStashesOf(projectId)], skippedInvalid: 0 };
+	},
+
+	async extractSkipStash(projectId: string, stashId: string): Promise<SkipStashExtracted> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const list = skipStashesOf(projectId);
+		const entry = list.find((item) => item.id === stashId);
+		if (!entry) {
+			throw new AppError(
+				'backend',
+				'saved copy not found',
+				{},
+				{
+					code: 'invalid_input',
+					params: {},
+					whatHappened: t('errcode.invalid_input.what'),
+					dataIsSafe: t('errcode.invalid_input.safe'),
+					nextAction: t('errcode.invalid_input.next')
+				}
+			);
+		}
+		// 元のファイルと同じフォルダに、別名（ラベルつき）で置く。ブラウザ単体では実ファイルは作らない
+		const slash = entry.path.lastIndexOf('/');
+		const dir = entry.path.slice(0, slash + 1);
+		const name = entry.path.slice(slash + 1);
+		const dot = name.lastIndexOf('.');
+		const stem = dot > 0 ? name.slice(0, dot) : name;
+		const ext = dot > 0 ? name.slice(dot) : '';
+		const date = new Date();
+		const mmdd = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+		skipStashes.set(
+			projectId,
+			list.filter((item) => item.id !== stashId)
+		);
+		return { copyPath: `${dir}${stem} (${t('skip_stash.copy_label')} ${mmdd})${ext}` };
 	},
 
 	async fetch(projectId: string, options?: FetchOptions): Promise<FetchResult> {

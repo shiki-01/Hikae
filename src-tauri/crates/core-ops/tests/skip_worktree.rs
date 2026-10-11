@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use core_git::GitRunner;
-use core_ops::{Choice, Identity, Ops, OpsError, PullOutcome, SaveOutcome};
+use core_ops::{Choice, Identity, Ops, OpsError, PullOutcome, SaveOutcome, SkipStashReason};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -506,4 +506,274 @@ fn the_runner_rejects_update_index_forms_outside_the_allowlist() {
             "not rejected: {args:?}"
         );
     }
+}
+
+/// 退避を手で作る（取り込みで残ったものと同じ形。`content` と `meta.json`）
+fn make_stash(
+    repo: &Path,
+    id: &str,
+    meta: &str,
+    content: &[u8],
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = repo.join(".git").join("hikae-skip-stash").join(id);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("content"), content)?;
+    std::fs::write(dir.join("meta.json"), meta)?;
+    Ok(dir)
+}
+
+/// 利用者が作業フォルダのファイルを編集した、保留の退避（`pending-1`）を作る
+fn pending_stash(pair: &Pair) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = &pair.pc_a;
+    pair.ops_a
+        .set_skip_worktree(repo, &["big.psd".to_string()])?;
+    pair.ops_a
+        .clear_skip_worktree(repo, &["big.psd".to_string()])?;
+    make_stash(repo, "pending-1", r#"{"path":"big.psd"}"#, b"OLD LOCAL")?;
+    write_test_file(repo, "big.psd", "EDITED AFTER")?;
+    Ok(())
+}
+
+#[test]
+fn list_shows_pending_and_deleted_upstream_copies_and_counts_invalid_ones() -> TestResult {
+    let pair = setup("skip-list")?;
+    let repo = &pair.pc_a;
+    pending_stash(&pair)?;
+    // 相手が削除したもの（インデックスに無いパス）
+    make_stash(repo, "gone-1", r#"{"path":"gone.psd"}"#, b"GONE LOCAL")?;
+    // 壊れたもの・不正なもの。一覧に出さず、件数だけ数える
+    make_stash(repo, "broken-1", "{not json", b"x")?;
+    make_stash(repo, "escape-1", r#"{"path":"../escape.txt"}"#, b"x")?;
+    make_stash(repo, "abs-1", r#"{"path":"/etc/passwd"}"#, b"x")?;
+    make_stash(repo, "bad name", r#"{"path":"other.txt"}"#, b"x")?;
+
+    let list = pair.ops_a.list_skip_stash(repo)?;
+    assert_eq!(list.skipped_invalid, 4, "{list:?}");
+    assert_eq!(list.items.len(), 2, "{list:?}");
+    let pending = &list.items[0];
+    assert_eq!(pending.path, "big.psd");
+    assert_eq!(pending.id, "pending-1");
+    assert_eq!(pending.reason, SkipStashReason::Pending);
+    assert_eq!(pending.size_bytes, "OLD LOCAL".len() as u64);
+    assert!(pending.saved_at.is_some());
+    let gone = &list.items[1];
+    assert_eq!(gone.path, "gone.psd");
+    assert_eq!(gone.reason, SkipStashReason::DeletedUpstream);
+    Ok(())
+}
+
+#[test]
+fn list_changes_nothing() -> TestResult {
+    let pair = setup("skip-list-readonly")?;
+    let repo = &pair.pc_a;
+    pending_stash(&pair)?;
+    make_stash(repo, "broken-1", "{not json", b"x")?;
+
+    let snapshot = |repo: &Path| {
+        (
+            git_out(repo, &["ls-files", "-v", "-z"]),
+            git_out(repo, &["rev-parse", "HEAD"]),
+            read(repo, "big.psd"),
+            ref_count(repo, "refs/hikae/"),
+            stash_dirs(repo).len(),
+        )
+    };
+    let before = snapshot(repo);
+    pair.ops_a.list_skip_stash(repo)?;
+    assert_eq!(before, snapshot(repo));
+    Ok(())
+}
+
+#[test]
+fn list_is_empty_without_a_stash_folder() -> TestResult {
+    let pair = setup("skip-list-empty")?;
+    let list = pair.ops_a.list_skip_stash(&pair.pc_a)?;
+    assert!(list.items.is_empty());
+    assert_eq!(list.skipped_invalid, 0);
+    Ok(())
+}
+
+#[test]
+fn extract_writes_a_copy_with_the_same_bytes_and_removes_the_stash() -> TestResult {
+    let pair = setup("skip-extract")?;
+    let repo = &pair.pc_a;
+    let bytes: Vec<u8> = vec![0, 255, 10, 13, 97, 0, 128];
+    pair.ops_a
+        .set_skip_worktree(repo, &["big.psd".to_string()])?;
+    pair.ops_a
+        .clear_skip_worktree(repo, &["big.psd".to_string()])?;
+    make_stash(repo, "pending-1", r#"{"path":"big.psd"}"#, &bytes)?;
+    write_test_file(repo, "big.psd", "EDITED AFTER")?;
+
+    let outcome = pair.ops_a.extract_skip_stash(repo, "pending-1")?;
+    assert!(
+        outcome.copy_path.starts_with("big (this PC copy ") && outcome.copy_path.ends_with(").psd"),
+        "{}",
+        outcome.copy_path
+    );
+    // 同じフォルダ（直下）に、バイト単位で同じ内容のコピーができる
+    assert_eq!(std::fs::read(repo.join(&outcome.copy_path))?, bytes);
+    // 退避は消え、元のファイルは変わらない
+    assert!(stash_dirs(repo).is_empty());
+    assert_eq!(read(repo, "big.psd"), "EDITED AFTER");
+    // 復元点が作られている（不変条件 3）
+    assert_eq!(ref_count(repo, "refs/hikae/backup/skip-stash-extract/"), 1);
+    Ok(())
+}
+
+#[test]
+fn extract_then_the_ignore_can_be_set_again() -> TestResult {
+    let pair = setup("skip-extract-then-set")?;
+    let repo = &pair.pc_a;
+    pending_stash(&pair)?;
+    assert!(pair
+        .ops_a
+        .set_skip_worktree(repo, &["big.psd".to_string()])
+        .is_err_and(|e| matches!(e, OpsError::SkipStashPending)));
+
+    pair.ops_a.extract_skip_stash(repo, "pending-1")?;
+    pair.ops_a
+        .set_skip_worktree(repo, &["big.psd".to_string()])?;
+    assert!(is_skipped(repo, "big.psd"));
+    Ok(())
+}
+
+#[test]
+fn extract_never_overwrites_an_existing_file_and_numbers_the_name() -> TestResult {
+    let pair = setup("skip-extract-same-name")?;
+    let repo = &pair.pc_a;
+    pending_stash(&pair)?;
+    let first = pair.ops_a.extract_skip_stash(repo, "pending-1")?.copy_path;
+
+    // 同じパスの別の退避（別の内容）をもう一つ作って取り出す
+    make_stash(repo, "pending-2", r#"{"path":"big.psd"}"#, b"SECOND")?;
+    let second = pair.ops_a.extract_skip_stash(repo, "pending-2")?.copy_path;
+
+    assert_ne!(first, second);
+    assert_eq!(second, first.replace(").psd", " 2).psd"));
+    assert_eq!(std::fs::read(repo.join(&first))?, b"OLD LOCAL");
+    assert_eq!(std::fs::read(repo.join(&second))?, b"SECOND");
+    Ok(())
+}
+
+#[test]
+fn extract_creates_the_folder_of_a_file_the_cloud_removed() -> TestResult {
+    let pair = setup("skip-extract-folder")?;
+    let repo = &pair.pc_a;
+    make_stash(repo, "gone-1", r#"{"path":"docs/deep/memo.txt"}"#, b"MEMO")?;
+
+    let outcome = pair.ops_a.extract_skip_stash(repo, "gone-1")?;
+    assert!(outcome
+        .copy_path
+        .starts_with("docs/deep/memo (this PC copy "));
+    assert_eq!(std::fs::read(repo.join(&outcome.copy_path))?, b"MEMO");
+    assert!(stash_dirs(repo).is_empty());
+    Ok(())
+}
+
+#[test]
+fn extract_refuses_invalid_ids_and_unsafe_paths_without_changing_anything() -> TestResult {
+    let pair = setup("skip-extract-invalid")?;
+    let repo = &pair.pc_a;
+    make_stash(repo, "escape-1", r#"{"path":"../escape.txt"}"#, b"x")?;
+    make_stash(repo, "dotgit-1", r#"{"path":".git/config"}"#, b"x")?;
+    make_stash(repo, "abs-1", r#"{"path":"/etc/passwd"}"#, b"x")?;
+    make_stash(repo, "broken-1", "{not json", b"x")?;
+    // 作業フォルダのファイルの下を指す（フォルダではない）
+    make_stash(repo, "blocked-1", r#"{"path":"other.txt/x.psd"}"#, b"x")?;
+
+    for id in [
+        "",
+        "../hikae-skip-stash",
+        "a/b",
+        "missing",
+        "escape-1",
+        "dotgit-1",
+        "abs-1",
+        "broken-1",
+        "blocked-1",
+    ] {
+        assert!(
+            matches!(
+                pair.ops_a.extract_skip_stash(repo, id),
+                Err(OpsError::InvalidInput(_))
+            ),
+            "accepted {id:?}"
+        );
+    }
+    // 何も変えていない（復元点も、コピーも、退避の削除も無い）
+    assert_eq!(ref_count(repo, "refs/hikae/backup/skip-stash-extract/"), 0);
+    assert_eq!(stash_dirs(repo).len(), 5);
+    assert_eq!(read(repo, "other.txt"), "v1");
+    Ok(())
+}
+
+#[test]
+fn extract_is_refused_during_a_conflict_and_the_stash_stays() -> TestResult {
+    let pair = setup("skip-extract-conflict")?;
+    let repo = &pair.pc_a;
+    write_test_file(repo, "big.psd", "A COMMITTED")?;
+    pair.ops_a.save(repo, "a edit")?;
+    pair.ops_a
+        .set_skip_worktree(repo, &["big.psd".to_string()])?;
+    write_test_file(repo, "big.psd", "LOCAL SETTINGS")?;
+    cloud_changes_big_psd(&pair, "B CLOUD")?;
+    assert!(matches!(
+        pair.ops_a.pull(repo)?,
+        PullOutcome::Conflicted { .. }
+    ));
+
+    // 取り込みの後の再適用が退避を必要とするため、競合の途中では取り出さない
+    let id = stash_dirs(repo)[0]
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .ok_or("no stash id")?;
+    assert!(pair
+        .ops_a
+        .extract_skip_stash(repo, &id)
+        .is_err_and(|e| matches!(e, OpsError::Conflict(_))));
+    assert_eq!(only_stash_content(repo), "LOCAL SETTINGS");
+
+    // 解消のあとは取り出せ、無視の印も付け直される
+    pair.ops_a.resolve(
+        repo,
+        &[("big.psd".to_string(), Choice::Mine)],
+        &[],
+        false,
+        "merged",
+    )?;
+    assert!(stash_dirs(repo).is_empty());
+    assert!(is_skipped(repo, "big.psd"));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn a_failed_copy_keeps_the_stash_and_changes_nothing_else() -> TestResult {
+    use std::os::windows::fs::OpenOptionsExt;
+    let pair = setup("skip-extract-fail")?;
+    let repo = &pair.pc_a;
+    pending_stash(&pair)?;
+    let stash = repo.join(".git").join("hikae-skip-stash").join("pending-1");
+    // 他のプロセスが開いている状態（共有なし）を再現し、内容の読み取りを失敗させる
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(stash.join("content"))?;
+
+    assert!(pair.ops_a.extract_skip_stash(repo, "pending-1").is_err());
+    drop(locked);
+    // 退避は残り（内容と meta）、作業フォルダには別名のファイルも一時ファイルも残らない
+    assert_eq!(only_stash_content(repo), "OLD LOCAL");
+    assert_eq!(std::fs::read_dir(&stash)?.count(), 2);
+    assert_eq!(read(repo, "big.psd"), "EDITED AFTER");
+    assert!(std::fs::read_dir(repo)?
+        .filter_map(|e| e.ok())
+        .all(|e| !e.file_name().to_string_lossy().contains("this PC copy")));
+
+    // 読めるようになれば、取り出せる
+    pair.ops_a.extract_skip_stash(repo, "pending-1")?;
+    assert!(stash_dirs(repo).is_empty());
+    Ok(())
 }

@@ -56,6 +56,14 @@ export function useSkipWorktreeEntries(getProjectId: () => string) {
 	}));
 }
 
+/** 退避に残っているファイル（設計書 4.8。取り出すと一覧から消える） */
+export function useSkipStash(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.skipStash(getProjectId()),
+		queryFn: () => api.listSkipStash(getProjectId())
+	}));
+}
+
 /** 無視が外れている記録（再適用の提案の対象。提案を出すかどうかは呼び出し側が決める） */
 export function useSkipDrift(getProjectId: () => string) {
 	return createQuery(() => ({

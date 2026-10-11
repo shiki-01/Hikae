@@ -5,6 +5,7 @@ import type { IgnoreKind } from '#lib/api/types.js';
 import { t } from '#lib/i18n/index.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import { invalidateProject } from '#lib/features/projects/sync.js';
+import { baseName } from './skip-stash-model';
 
 /**
  * 保存しないファイルの設定が変わったときに取り直すもの。
@@ -16,7 +17,8 @@ function invalidateIgnore(client: QueryClient, projectId: string): Promise<unkno
 		client.invalidateQueries({ queryKey: keys.ignoreRules(projectId) }),
 		client.invalidateQueries({ queryKey: keys.trackedIgnored(projectId) }),
 		client.invalidateQueries({ queryKey: keys.skipWorktree(projectId) }),
-		client.invalidateQueries({ queryKey: keys.skipDrift(projectId) })
+		client.invalidateQueries({ queryKey: keys.skipDrift(projectId) }),
+		client.invalidateQueries({ queryKey: keys.skipStash(projectId) })
 	]);
 }
 
@@ -129,6 +131,39 @@ export function useReapplySkipWorktree(getProjectId: () => string, onDone?: () =
 		onError: (error, paths) => reportError(error, { retry: () => retry.run?.(paths) })
 	}));
 	retry.run = (paths) => mutation.mutate(paths);
+	return mutation;
+}
+
+/**
+ * 退避を別名で取り出す（元のファイルは変えない。取り出せたら退避は消え、一覧から外れる）。
+ * 成功のトーストには「場所を開く」を付ける。失敗は 3 要素のエラーで出す。
+ */
+export function useExtractSkipStash(getProjectId: () => string) {
+	const client = useQueryClient();
+	const retry: { run?: (stashId: string) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (stashId: string) => api.extractSkipStash(getProjectId(), stashId),
+		onSuccess: async (result) => {
+			const projectId = getProjectId();
+			await Promise.all([
+				invalidateProject(client, projectId),
+				client.invalidateQueries({ queryKey: keys.skipStash(projectId) }),
+				client.invalidateQueries({ queryKey: keys.skipWorktree(projectId) })
+			]);
+			pushToast({
+				type: 'success',
+				message: t('skip_stash.extracted', { name: baseName(result.copyPath) }),
+				actionLabel: t('toast.open_location'),
+				onaction: () => {
+					void api
+						.openFile(projectId, result.copyPath, 'folder')
+						.catch((error: unknown) => reportError(error));
+				}
+			});
+		},
+		onError: (error, stashId) => reportError(error, { retry: () => retry.run?.(stashId) })
+	}));
+	retry.run = (stashId) => mutation.mutate(stashId);
 	return mutation;
 }
 

@@ -12,9 +12,9 @@
 // - `add -A`（保存）と `git status` は、印の付いたファイルの変更と削除を無視する（実機で確認）
 // - 手元で削除したまま無視しているファイルは、取り込みで相手の版が作業フォルダに戻る（実機で確認）。退避の対象外
 
-use crate::models::{OpsError, SkipWorktreeReport};
+use crate::models::{Labels, OpsError, SkipWorktreeReport};
 use crate::open_path::{resolve_entry_in_project, OpenPathError};
-use crate::operations::{conflicts, current_branch, entry_error};
+use crate::operations::{conflicts, current_branch, entry_error, make_copy_path};
 use crate::pc_name::Meta;
 use crate::restore_file::normalize_project_path;
 use core_git::GitRunner;
@@ -608,6 +608,313 @@ pub(crate) fn recover_after_failed_incoming(runner: &GitRunner, repo: &Path) {
     let _ = reapply_skip_worktree(runner, repo);
 }
 
+/// 残っている退避の 1 件（設計書 4.8「退避に残っているファイル」）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkipStashItem {
+    /// 退避フォルダの名前（`.git/hikae-skip-stash` の直下。英数字・`-`・`_` のみ）
+    pub id: String,
+    /// 元のパス（プロジェクトからの相対パス、`/` 区切り）
+    pub path: String,
+    /// 退避している内容の大きさ（バイト）
+    pub size_bytes: u64,
+    /// 退避フォルダの更新時刻（Unix 秒）。取れなければ None
+    pub saved_at: Option<i64>,
+    /// 残っている理由（推定）
+    pub reason: SkipStashReason,
+}
+
+/// 退避が残っている理由（推定。設計書 4.8）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipStashReason {
+    /// 手元の内容を書き戻せなかった（インデックスにパスがあり、無視の印が無い。利用者がその間に編集した、など）
+    Pending,
+    /// 相手が削除したため書き戻さなかった（インデックスにパスが無い）
+    DeletedUpstream,
+    /// 判断できない（無視の印が付いたまま残っている、など）
+    Unknown,
+}
+
+/// 退避の一覧と、壊れているため一覧に出さなかった件数
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkipStashList {
+    /// 一覧（パス・フォルダ名の順）
+    pub items: Vec<SkipStashItem>,
+    /// 壊れている・不正なため一覧に出さなかった項目の数（退避のフォルダと、その中身の検査に失敗したもの）
+    pub skipped_invalid: usize,
+}
+
+/// 別名で取り出した結果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractOutcome {
+    /// 作成したコピーのパス（プロジェクトからの相対パス、`/` 区切り）
+    pub copy_path: String,
+}
+
+/// 別名のファイルを置くときに、同名を避けて試す回数の上限（同時に同名が作られ続けた場合の打ち切り）
+const COPY_NAME_ATTEMPTS: usize = 100;
+
+/// 退避フォルダの名前として許すか（英数字・`-`・`_` のみ、1〜64 文字）。パスとして解釈させない。
+fn valid_stash_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// 退避フォルダの検査結果（読み取りのみで得たもの）
+struct StashInfo {
+    /// 元のパス（正規化済み）
+    path: String,
+    /// 内容の大きさ（バイト）
+    size_bytes: u64,
+    /// フォルダの更新時刻（Unix 秒）
+    saved_at: Option<i64>,
+}
+
+/// フォルダの更新時刻を Unix 秒にする（取れなければ None）
+fn modified_unix(meta: &std::fs::Metadata) -> Option<i64> {
+    let secs = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    i64::try_from(secs).ok()
+}
+
+/// 退避フォルダが一覧・取り出しに使えるか検査する（読み取りのみ）。
+/// 条件: 名前が有効、フォルダ（リンクでない）、`meta.json` から元のパスが正規化できる、`content` が通常のファイル。
+/// 1 つでも満たさなければ None（そのフォルダには触らない）。
+fn inspect_stash(dir: &Path, name: &str) -> Option<StashInfo> {
+    if !valid_stash_id(name) {
+        return None;
+    }
+    let dir_meta = std::fs::symlink_metadata(dir).ok()?;
+    if !dir_meta.is_dir() || dir_meta.file_type().is_symlink() {
+        return None;
+    }
+    let content_meta = std::fs::symlink_metadata(dir.join(STASH_CONTENT)).ok()?;
+    if !content_meta.is_file() {
+        return None;
+    }
+    let path = stash_path(dir)?;
+    Some(StashInfo {
+        path,
+        size_bytes: content_meta.len(),
+        saved_at: modified_unix(&dir_meta),
+    })
+}
+
+/// 残っている退避の一覧（読み取りのみ。設計書 4.8）。
+/// 壊れた・不正なフォルダは一覧に出さず、`skipped_invalid` に数える。退避が無ければ git を呼ばない。
+pub(crate) fn list_skip_stash(runner: &GitRunner, repo: &Path) -> Result<SkipStashList, OpsError> {
+    let root = stash_root(runner, repo)?;
+    let read = match std::fs::read_dir(&root) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SkipStashList::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut found: Vec<(String, StashInfo)> = Vec::new();
+    let mut skipped_invalid = 0;
+    for entry in read {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match inspect_stash(&entry.path(), &name) {
+            Some(info) => found.push((name, info)),
+            None => skipped_invalid += 1,
+        }
+    }
+    let tags: BTreeMap<String, bool> = if found.is_empty() {
+        BTreeMap::new()
+    } else {
+        index_tags(runner, repo)?.into_iter().collect()
+    };
+    let mut items: Vec<SkipStashItem> = found
+        .into_iter()
+        .map(|(id, info)| SkipStashItem {
+            reason: stash_reason(&tags, &info.path),
+            id,
+            path: info.path,
+            size_bytes: info.size_bytes,
+            saved_at: info.saved_at,
+        })
+        .collect();
+    items.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
+    Ok(SkipStashList {
+        items,
+        skipped_invalid,
+    })
+}
+
+/// 退避が残っている理由の推定（純関数）。`tags` はインデックスのパスと無視中かどうか。
+fn stash_reason(tags: &BTreeMap<String, bool>, path: &str) -> SkipStashReason {
+    match tags.get(path) {
+        None => SkipStashReason::DeletedUpstream,
+        Some(false) => SkipStashReason::Pending,
+        Some(true) => SkipStashReason::Unknown,
+    }
+}
+
+/// 退避フォルダの 1 件を指す絶対パス。id が不正・無い・リンクなら InvalidInput（何も変えない）
+fn stash_dir_of(root: &Path, id: &str) -> Result<PathBuf, OpsError> {
+    if !valid_stash_id(id) {
+        return Err(OpsError::InvalidInput(
+            "saved copy id is not valid".to_string(),
+        ));
+    }
+    let dir = root.join(id);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => Ok(dir),
+        Ok(_) => Err(OpsError::InvalidInput(
+            "saved copy is not a folder".to_string(),
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(OpsError::InvalidInput(
+            "saved copy was not found".to_string(),
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// 元のパスのフォルダ部分（`/` 区切り。プロジェクト直下なら空）
+fn parent_rel(path: &str) -> String {
+    match path.rsplit_once('/') {
+        Some((dir, _)) => dir.to_string(),
+        None => String::new(),
+    }
+}
+
+/// `rel_dir` のうち、作業フォルダに既にある最も深いフォルダと、まだ無い残りの成分を返す（読み取りのみ）。
+/// 既存の成分にリンク・通常でないものがあれば、またはプロジェクトの外を指せば InvalidInput。
+/// 作成するのは残りの成分だけ（新しく作るものはリンクにならないため、外へ書かない）。
+fn existing_folder_chain(repo: &Path, rel_dir: &str) -> Result<(PathBuf, Vec<String>), OpsError> {
+    let root_real = repo.canonicalize()?;
+    let comps: Vec<&str> = rel_dir.split('/').filter(|c| !c.is_empty()).collect();
+    let mut existing = repo.to_path_buf();
+    let mut i = 0;
+    while i < comps.len() {
+        let next = existing.join(comps[i]);
+        match std::fs::symlink_metadata(&next) {
+            Ok(meta) => {
+                if !meta.is_dir() || meta.file_type().is_symlink() {
+                    return Err(OpsError::InvalidInput(
+                        "folder of the file is not a plain folder".to_string(),
+                    ));
+                }
+                existing = next;
+                i += 1;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    // 実体（リンク・ジャンクションをたどった先）がプロジェクトの配下か
+    if !existing.canonicalize()?.starts_with(&root_real) {
+        return Err(OpsError::InvalidInput(
+            "folder of the file is outside the project".to_string(),
+        ));
+    }
+    let missing = comps[i..].iter().map(|c| c.to_string()).collect();
+    Ok((existing, missing))
+}
+
+/// 検証済みの一時ファイル `tmp`（内容は `content` と同じ）を、元のフォルダの別名のファイルとして置く。
+/// 既存のファイルは上書きしない（硬いリンクは既存があれば失敗する。使えない FS では存在を確かめてから名前を変える）。
+/// 置いたあと、内容が `content` と一致するかを読み戻して確かめる。失敗したら、置いたファイルを消す（自分で作ったもの）。
+/// 戻り値は作ったコピーのプロジェクトからの相対パス。
+fn place_copy(
+    repo: &Path,
+    path: &str,
+    label: &str,
+    now: OffsetDateTime,
+    content: &Path,
+    tmp: &Path,
+) -> Result<String, OpsError> {
+    copy_verified(content, tmp)?;
+    for _ in 0..COPY_NAME_ATTEMPTS {
+        let candidate = make_copy_path(repo, path, label, now);
+        let target = repo.join(&candidate);
+        match std::fs::hard_link(tmp, &target) {
+            Ok(()) => {}
+            // 同名が先に作られた。make_copy_path が次の番号を選ぶ
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                // 硬いリンクが使えない FS。同名が無いことを確かめてから名前を変える
+                if std::fs::symlink_metadata(&target).is_ok() {
+                    continue;
+                }
+                std::fs::rename(tmp, &target)?;
+            }
+        }
+        return match files_equal(content, &target) {
+            Ok(true) => Ok(candidate),
+            Ok(false) => {
+                let _ = std::fs::remove_file(&target);
+                Err(OpsError::Unexpected(
+                    "saved copy does not match the file".to_string(),
+                ))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&target);
+                Err(e)
+            }
+        };
+    }
+    Err(OpsError::Unexpected(
+        "no free name for the saved copy".to_string(),
+    ))
+}
+
+/// 退避を、元のファイルと同じフォルダの別名のファイルとして取り出す（設計書 4.8）。
+///
+/// 順序: (1) 読み取りで検査（ここで拒否すれば何も変えない）→ (2) 復元点を作る（不変条件 3）→
+/// (3) 別名のファイルを置いて内容を確かめる → (4) 確かめられたあとだけ退避フォルダを消す。
+/// (3) で失敗したら退避は残し、置きかけのファイルは消す。作業フォルダの同名のファイルには触れない。
+/// 退避を捨てる操作は持たない（取り出したコピーを消すかは利用者が決める）。
+/// 競合の途中と、取り込みの途中（`MERGE_HEAD`）は拒否する（取り込みの後の再適用が退避を必要とするため）。
+pub(crate) fn extract_skip_stash(
+    runner: &GitRunner,
+    repo: &Path,
+    id: &str,
+    now: OffsetDateTime,
+    labels: &Labels,
+    meta: Meta,
+) -> Result<ExtractOutcome, OpsError> {
+    refuse_during_conflict(runner, repo)?;
+    if merge_in_progress(runner, repo)? {
+        return Err(OpsError::Unexpected("a merge is in progress".to_string()));
+    }
+    let root = stash_root(runner, repo)?;
+    let dir = stash_dir_of(&root, id)?;
+    let info = inspect_stash(&dir, id)
+        .ok_or_else(|| OpsError::InvalidInput("saved copy is broken".to_string()))?;
+    let rel_dir = parent_rel(&info.path);
+    // 読み取りの検査。外を指す・リンクを経由するなら、何も変えずに拒否する
+    existing_folder_chain(repo, &rel_dir)?;
+
+    let branch = current_branch(runner, repo)?;
+    let _ = meta.restore_point(runner, repo, &branch, "skip-stash-extract", now)?;
+
+    // 元のファイルのフォルダが無ければ作る（削除されたフォルダに、取り出した版を置くため）
+    let (existing, missing) = existing_folder_chain(repo, &rel_dir)?;
+    let mut folder = existing;
+    for comp in &missing {
+        folder = folder.join(comp);
+    }
+    std::fs::create_dir_all(&folder)?;
+
+    let content = dir.join(STASH_CONTENT);
+    // 一時ファイルは退避フォルダの中に作る（作業フォルダに残さないため）
+    let tmp = dir.join(format!("extract-{}.tmp", uuid::Uuid::new_v4().simple()));
+    let placed = place_copy(repo, &info.path, &labels.skip_stash, now, &content, &tmp);
+    let _ = std::fs::remove_file(&tmp);
+    let copy_path = placed?;
+
+    // 置いて確かめたので、退避を消す。消せなくてもコピーは確かめ済みで、退避の内容はコピーに残っている
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(ExtractOutcome { copy_path })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +986,31 @@ mod tests {
         assert_eq!(stash_path(&dir), None);
         std::fs::write(dir.join(STASH_META), "{not json").expect("meta");
         assert_eq!(stash_path(&dir), None);
+    }
+
+    #[test]
+    fn stash_id_must_be_a_plain_name() {
+        assert!(valid_stash_id("pending-1"));
+        assert!(valid_stash_id("0123456789abcdef0123456789abcdef"));
+        let long = "x".repeat(65);
+        for bad in ["", "../x", "a/b", "a b", ".hidden", "a.b", long.as_str()] {
+            assert!(!valid_stash_id(bad), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn stash_reason_follows_the_index() {
+        let tags: BTreeMap<String, bool> = [
+            ("kept.psd".to_string(), false),
+            ("ignored.psd".to_string(), true),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(stash_reason(&tags, "kept.psd"), SkipStashReason::Pending);
+        assert_eq!(stash_reason(&tags, "ignored.psd"), SkipStashReason::Unknown);
+        assert_eq!(
+            stash_reason(&tags, "gone.psd"),
+            SkipStashReason::DeletedUpstream
+        );
     }
 }

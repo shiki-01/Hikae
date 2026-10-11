@@ -464,7 +464,14 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - 復元の確認画面（`restore_preview`）の件数には無視中のファイルは出ない（`git diff <commit>` が印の付いたファイルを返さないため）。復元もそのファイルの手元の内容は変えない（テストで確認）
 - 保存（`add -A`）と `git status` は印の付いたファイルの変更と削除を無視する（実機で確認。削除も記録されない）
 - 操作名（ジャーナル・復元点）: `skip-worktree-set` / `skip-worktree-clear`（復元点）、`skip-worktree-reapply`（起動時の再適用、ジャーナルには残さない）
-- 既知の限界: 退避が残ったまま（保留・相手が削除）の内容を、画面から見たり戻したりする手段はまだ無い（退避は `.git` の中に残る）。保留の退避が残るファイルには、印を付けられない（`skip_stash_pending`）。HEAD に無い無視中のパスは、復元後に印を付け直せない（通常は起きない）
+- 退避の確認と取り出し（実装 2026-10-12）:
+  - 一覧（`list_skip_stash`。読み取りのみ）: `.git/hikae-skip-stash/<ID>/` の `content` と `meta.json` を検査し、元のパスは `normalize_project_path` を通ったものだけを出す。壊れた・不正な退避（フォルダ名が英数字・`-`・`_` 以外、`meta.json` が読めない、パスが `..`・絶対パス・`.git` 配下、`content` が通常のファイルでない）は一覧に出さず、件数（`skipped_invalid`）だけを数える。
+  - 理由は推定する: インデックスにパスが無い → `deleted-upstream`（相手が削除した）。インデックスにあり無視の印が無い → `pending`（この PC でも変更されていて書き戻せなかった）。印が付いたまま残っている → `unknown`。
+  - 取り出し（`extract_skip_stash`。直列キュー。操作名 `skip-stash-extract`）: 元のファイルと同じフォルダに `<名前> (この PC の退避 MM-DD).<拡張子>` を作る（`make_copy_path` を使う）。同名があれば連番にし、既存のファイルは決して上書きしない。手順は次のとおり。(a) 読み取りで検査する（フォルダが作業フォルダの外を指す・リンクを経由する、退避が壊れている、なら拒否し何も変えない）。(b) 復元点を作る。(c) 退避フォルダの中の一時ファイルへバイト単位で書いて読み戻して確かめ、硬いリンク（既存があれば失敗する）で別名に置く。硬いリンクが使えない FS では、同名が無いことを確かめてから名前を変える。置いたあと、内容を読み戻して一致を確かめる。(d) 確かめられたあとだけ退避フォルダを消す。(c) で失敗したら退避は残し、置きかけのファイルは消す。元のファイルのフォルダが無ければ作る。元のファイルには触れない。
+  - 競合の途中と、取り込みの途中（`MERGE_HEAD` がある間）は取り出さない。取り込みの後の再適用が退避を必要とするため。
+  - 取り出した後は、同じパスの無視を指定できる（`skip_stash_pending` が解消される）。
+  - 退避を破棄する操作は提供しない（利用者の内容を復元不能にしないため）。取り出したコピーを消すかどうかは利用者が決める。コピーを作れたのに退避を消せなかった場合は、コピーと退避の両方が残るが、データは失われない。
+- 既知の限界: 退避が残ったまま（保留・相手が削除）のファイルは、「保存しないファイル」の画面の「退避に残っているファイル」から別名で取り出せる（上記）。退避は取り出すまで `.git` の中に残る。保留の退避が残るファイルには、印を付けられない（`skip_stash_pending`）。HEAD に無い無視中のパスは、復元後に印を付け直せない（通常は起きない）
 
 ## 5. エラー・例外ケースと文言案
 
@@ -986,13 +993,13 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 
 ### 9.3 フロントエンドとの通信
 
-- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 68 個）:
+- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 74 個）:
   - プロジェクト: `list_projects`、`add_project`、`remove_project`、`relocate_project`、`project_status`、`check_project_folder`（フォルダの確認。13.1）
   - 起動時の確認: `app_health`（git が使えるか。5.2 の E17）
   - 変更・保存: `list_changes`、`list_project_tree`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
   - 履歴・比較: `list_history`（`offset` と `limit` でページ指定）、`list_point_changes`、`list_files_at`、`diff`、`preview_file`、`list_renderers`、`compare_office`
   - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`、`discard_new_file`
-  - 除外設定・追跡中のファイル（4.8）: `list_ignore_patterns`、`add_ignore_pattern`、`remove_ignore_pattern`、`list_tracked_ignored_files`、`untrack_files`、`list_skip_worktree`、`list_skip_worktree_drift`、`dismiss_skip_worktree_drift`、`set_skip_worktree`、`clear_skip_worktree`、`reapply_skip_worktree`
+  - 除外設定・追跡中のファイル（4.8）: `list_ignore_patterns`、`add_ignore_pattern`、`remove_ignore_pattern`、`list_tracked_ignored_files`、`untrack_files`、`list_skip_worktree`、`list_skip_worktree_drift`、`dismiss_skip_worktree_drift`、`set_skip_worktree`、`clear_skip_worktree`、`reapply_skip_worktree`、`list_skip_stash`（退避の一覧。読み取り）、`extract_skip_stash`（退避の別名での取り出し。`run_op`）
   - 同期: `pull`、`push`、`list_conflicts`、`conflict_text`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
   - ファイルを開く: `open_project_file`、`reveal_project_file`、`open_file_at`
   - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
@@ -1358,7 +1365,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | リスク | 状況 |
 | --- | --- |
 | クラウド同期フォルダ（OneDrive、iCloud）上のプロジェクト | 登録時の警告と、軽い検査による破損の検出は実装済み（13.1、5.2）。破損したときの**自動の復旧**（退避 → 取得し直し → 未保存変更のコピー）は未実装で、取得し直しの案内のみ。`fsck` による検査は行わない |
-| skip-worktree の限界（4.8） | 実装済み（0409480。取り込み前の一時解除・内容の退避・再設定）。「保存しないファイル」の画面は実装済み（4f3bd83）。残る限界は 4.8 の「既知の限界」（保留の退避を画面から戻す手段が無い、など） |
+| skip-worktree の限界（4.8） | 実装済み（0409480。取り込み前の一時解除・内容の退避・再設定）。「保存しないファイル」の画面は実装済み（4f3bd83）。退避に残ったファイルの一覧と別名での取り出しは実装済み（2026-10-12）。残る限界は 4.8 の「既知の限界」（保留の退避が残るファイルに印を付けられない、など） |
 | 署名・公証のコスト | 署名の設定は無い。配布の直前にまとめて行う（2026-10-09 に決定。12章） |
 | WebView の差異（Windows と macOS の表示・D&D） | CI は両 OS で実行するが、WebView 上の E2E テストは無い |
 

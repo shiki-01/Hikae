@@ -60,6 +60,35 @@ export interface SkipWorktreeEntry {
 	dismissed: boolean;
 }
 
+/** 退避が残っている理由（推定。設計書 4.8） */
+export type SkipStashReason = 'pending' | 'deleted-upstream' | 'unknown';
+
+/** 退避に残っているファイル 1 件（設計書 4.8） */
+export interface SkipStashEntry {
+	/** 退避の ID（取り出しに渡す） */
+	id: string;
+	/** プロジェクトからの相対パス（`/` 区切り） */
+	path: string;
+	/** 退避している内容の大きさ（バイト） */
+	sizeBytes: number;
+	/** 退避した時刻（Unix 秒）。取れなければ null */
+	savedAt: number | null;
+	/** 残っている理由 */
+	reason: SkipStashReason;
+}
+
+/** 退避の一覧と、壊れていて一覧に出していない件数 */
+export interface SkipStashList {
+	items: SkipStashEntry[];
+	skippedInvalid: number;
+}
+
+/** 退避を別名で取り出した結果 */
+export interface SkipStashExtracted {
+	/** 作ったコピーのパス（プロジェクトからの相対パス、`/` 区切り） */
+	copyPath: string;
+}
+
 /** 保存しないファイル（`.gitignore`）の 1 行 */
 export interface IgnoreRule {
 	/** 行の内容（手書きの行も含む） */
@@ -787,6 +816,10 @@ export interface ProjectApi {
 	clearSkipWorktree(projectId: string, paths: string[]): Promise<void>;
 	/** 無視が外れている記録を、もう一度無視する（再適用の提案を承諾した） */
 	reapplySkipWorktree(projectId: string, paths: string[]): Promise<void>;
+	/** 退避に残っているファイルの一覧（読み取りのみ。設計書 4.8） */
+	listSkipStash(projectId: string): Promise<SkipStashList>;
+	/** 退避を、元のファイルと同じフォルダに別名のファイルとして取り出す。取り出せたら退避は消える（破棄は無い） */
+	extractSkipStash(projectId: string, stashId: string): Promise<SkipStashExtracted>;
 	fetch(projectId: string, options?: FetchOptions): Promise<FetchResult>;
 	push(projectId: string): Promise<PushResult>;
 	listConflicts(projectId: string): Promise<ConflictFile[]>;

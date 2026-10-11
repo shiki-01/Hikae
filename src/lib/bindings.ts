@@ -149,6 +149,13 @@ export const commands = {
 	clearSkipWorktree: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("clear_skip_worktree", { id, paths })),
 	/**  無視が外れている記録を、もう一度無視する（再適用の提案を承諾した）。`set_skip_worktree` と同じ処理。 */
 	reapplySkipWorktree: (id: string, paths: string[]) => typedError<null, AppError>(__TAURI_INVOKE("reapply_skip_worktree", { id, paths })),
+	/**  退避に残っているファイルの一覧（読み取りのみ。設計書 4.8）。直列キューは通さない。 */
+	listSkipStash: (id: string) => typedError<SkipStashListView, AppError>(__TAURI_INVOKE("list_skip_stash", { id })),
+	/**
+	 *  退避を、元のファイルと同じフォルダに別名のファイルとして取り出す（設計書 4.8）。
+	 *  直列キュー（`run_op`）を通す。復元点を作り、置いて確かめたあとだけ退避を消す。退避の破棄は無い。
+	 */
+	extractSkipStash: (id: string, stashId: string) => typedError<SkipStashExtracted, AppError>(__TAURI_INVOKE("extract_skip_stash", { id, stashId })),
 	/**  保存しないファイルのパターンを追加する（保存はしない）。書いたパターンを返す。 */
 	addIgnorePattern: (id: string, kind: IgnoreKindArg, value: string) => typedError<string, AppError>(__TAURI_INVOKE("add_ignore_pattern", { id, kind, value })),
 	/**  保存しないファイルのパターンを、完全一致する 1 行だけ削除する（保存はしない）。 */
@@ -1450,6 +1457,42 @@ export type SkipKind =
 "hidden" | 
 /**  OS・Office の一時ファイル */
 "os-temp";
+
+/**  退避に残っているファイル 1 件（画面用） */
+export type SkipStashEntry = {
+	/**  退避の ID（取り出しに渡す。英数字・`-`・`_` のみ） */
+	id: string,
+	/**  プロジェクトからの相対パス（`/` 区切り） */
+	path: string,
+	/**  退避している内容の大きさ（バイト） */
+	size_bytes: number | null,
+	/**  退避した時刻（Unix 秒）。取れなければ null */
+	saved_at: number | null,
+	/**  残っている理由 */
+	reason: SkipStashKind,
+};
+
+/**  取り出しの結果 */
+export type SkipStashExtracted = {
+	/**  作ったコピーのパス（プロジェクトからの相対パス、`/` 区切り） */
+	copy_path: string,
+};
+
+/**  退避が残っている理由（画面の文言の選び分けに使う。設計書 4.8） */
+export type SkipStashKind = 
+/**  手元の内容を書き戻せなかった（まだ同じパスが保存の対象で、無視の印が無い） */
+"pending" | 
+/**  相手が削除したため書き戻さなかった */
+"deleted-upstream" | 
+/**  判断できない */
+"unknown";
+
+/**  退避の一覧と、壊れていて一覧に出していない件数 */
+export type SkipStashListView = {
+	items: SkipStashEntry[],
+	/**  壊れている・不正なため一覧に出していない件数（画面には出さず、確認用に保持する） */
+	skipped_invalid: number,
+};
 
 /**  「今後の変更だけ無視する」の記録 1 件（S6 の「この PC だけ無視中のファイル」） */
 export type SkipWorktreeItem = {

@@ -35,6 +35,8 @@ import {
 	mapSavePoint,
 	mapIgnoreRule,
 	mapSkipWorktreeEntry,
+	mapSkipStashExtracted,
+	mapSkipStashList,
 	mapSession,
 	mapSettingsView,
 	restoreFileFailure,
@@ -62,6 +64,8 @@ import type {
 	IgnoreKind,
 	IgnoreRule,
 	SkipWorktreeEntry,
+	SkipStashExtracted,
+	SkipStashList,
 	DroppedFile,
 	FetchOptions,
 	FileDiff,
@@ -466,6 +470,14 @@ export const tauriApi: ProjectApi = {
 
 	async clearSkipWorktree(projectId: string, paths: string[]): Promise<void> {
 		await unwrap(commands.clearSkipWorktree(projectId, paths));
+	},
+
+	async listSkipStash(projectId: string): Promise<SkipStashList> {
+		return mapSkipStashList(await unwrap(commands.listSkipStash(projectId)));
+	},
+
+	async extractSkipStash(projectId: string, stashId: string): Promise<SkipStashExtracted> {
+		return mapSkipStashExtracted(await unwrap(commands.extractSkipStash(projectId, stashId)));
 	},
 
 	async reapplySkipWorktree(projectId: string, paths: string[]): Promise<void> {

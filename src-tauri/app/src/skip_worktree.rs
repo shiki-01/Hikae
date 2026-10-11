@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use core_ops::Ops;
+use core_ops::{Ops, SkipStashReason};
 use core_store::{now_rfc3339, SkipWorktreeRecord, Store};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -268,4 +268,111 @@ pub(crate) async fn reapply_on_startup(app: tauri::AppHandle) {
         )
         .await;
     }
+}
+
+/// 退避が残っている理由（画面の文言の選び分けに使う。設計書 4.8）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkipStashKind {
+    /// 手元の内容を書き戻せなかった（まだ同じパスが保存の対象で、無視の印が無い）
+    Pending,
+    /// 相手が削除したため書き戻さなかった
+    DeletedUpstream,
+    /// 判断できない
+    Unknown,
+}
+
+/// 退避に残っているファイル 1 件（画面用）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SkipStashEntry {
+    /// 退避の ID（取り出しに渡す。英数字・`-`・`_` のみ）
+    pub id: String,
+    /// プロジェクトからの相対パス（`/` 区切り）
+    pub path: String,
+    /// 退避している内容の大きさ（バイト）
+    pub size_bytes: f64,
+    /// 退避した時刻（Unix 秒）。取れなければ null
+    pub saved_at: Option<f64>,
+    /// 残っている理由
+    pub reason: SkipStashKind,
+}
+
+/// 退避の一覧と、壊れていて一覧に出していない件数
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SkipStashListView {
+    pub items: Vec<SkipStashEntry>,
+    /// 壊れている・不正なため一覧に出していない件数（画面には出さず、確認用に保持する）
+    pub skipped_invalid: u32,
+}
+
+/// 取り出しの結果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SkipStashExtracted {
+    /// 作ったコピーのパス（プロジェクトからの相対パス、`/` 区切り）
+    pub copy_path: String,
+}
+
+/// 退避に残っているファイルの一覧（読み取りのみ。設計書 4.8）。直列キューは通さない。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_skip_stash(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<SkipStashListView, AppError> {
+    let store = state.store_clone();
+    run_blocking(move || {
+        let project = load_project(&store, &id)?;
+        let list = Ops::new(crate::git_runner())
+            .list_skip_stash(&project.path)
+            .map_err(AppError::from_ops_error)?;
+        Ok(SkipStashListView {
+            items: list
+                .items
+                .into_iter()
+                .map(|item| SkipStashEntry {
+                    id: item.id,
+                    path: item.path,
+                    size_bytes: item.size_bytes as f64,
+                    saved_at: item.saved_at.map(|s| s as f64),
+                    reason: match item.reason {
+                        SkipStashReason::Pending => SkipStashKind::Pending,
+                        SkipStashReason::DeletedUpstream => SkipStashKind::DeletedUpstream,
+                        SkipStashReason::Unknown => SkipStashKind::Unknown,
+                    },
+                })
+                .collect(),
+            skipped_invalid: u32::try_from(list.skipped_invalid).unwrap_or(u32::MAX),
+        })
+    })
+    .await
+}
+
+/// 退避を、元のファイルと同じフォルダに別名のファイルとして取り出す（設計書 4.8）。
+/// 直列キュー（`run_op`）を通す。復元点を作り、置いて確かめたあとだけ退避を消す。退避の破棄は無い。
+#[tauri::command]
+#[specta::specta]
+pub async fn extract_skip_stash(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    stash_id: String,
+) -> Result<SkipStashExtracted, AppError> {
+    let ctx = OpContext::new(app, &state);
+    let copy_path = run_op(
+        &ctx,
+        &id,
+        OpSpec {
+            operation: "skip-stash-extract",
+            trigger: OpTrigger::Manual,
+            target: None,
+            data_is_safe: "ファイルは変わっていません（退避は残したままです）",
+        },
+        move |ops, path| ops.extract_skip_stash(path, &stash_id).map(|o| o.copy_path),
+        |_: &String| OpSummary {
+            detail: "extracted".to_string(),
+            quiet: false,
+        },
+    )
+    .await?;
+    Ok(SkipStashExtracted { copy_path })
 }

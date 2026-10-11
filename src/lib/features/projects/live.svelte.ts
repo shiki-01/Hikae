@@ -1,5 +1,8 @@
 import { onDestroy } from 'svelte';
+import { goto } from '$app/navigation';
+import { resolve } from '$app/paths';
 import type { QueryClient } from '@tanstack/svelte-query';
+import { t } from '#lib/i18n/index.js';
 import { isTauri } from '#lib/api/index.js';
 import { events } from '#lib/bindings.js';
 import { applyLiveEvent, initialLiveState, type LiveEvent, type LiveState } from './live-state';
@@ -71,15 +74,23 @@ export function useBackendEvents(client: QueryClient): void {
 	// 「今後の変更だけ無視する」の再適用の結果（取り込み・解消・中止・復旧の後）。退避が残ったファイルを知らせる
 	subscribe(() =>
 		events.skipWorktreeNotice.listen((e) => {
+			const id = e.payload.project_id;
+			// 退避に残ったファイルは、設定の「保存しないファイル」の節から別名で取り出せる
 			for (const message of describeSkipNotice({
 				pending: e.payload.pending,
 				removedUpstream: e.payload.removed_upstream
 			})) {
-				pushToast({ type: 'warning', message });
+				pushToast({
+					type: 'warning',
+					message,
+					actionLabel: t('skip.notice_action'),
+					onaction: () =>
+						void goto(`${resolve('/settings')}?project=${encodeURIComponent(id)}&tab=ignore`)
+				});
 			}
-			const id = e.payload.project_id;
 			void client.invalidateQueries({ queryKey: keys.skipWorktree(id) });
 			void client.invalidateQueries({ queryKey: keys.skipDrift(id) });
+			void client.invalidateQueries({ queryKey: keys.skipStash(id) });
 			void client.invalidateQueries({ queryKey: keys.ignoreRules(id) });
 		})
 	);

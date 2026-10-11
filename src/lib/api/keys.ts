@@ -21,6 +21,8 @@ export const keys = {
 	skipWorktree: (id: string) => ['skip-worktree', id] as const,
 	/** 無視が外れている記録（再適用の提案の対象） */
 	skipDrift: (id: string) => ['skip-drift', id] as const,
+	/** 退避に残っているファイル（取り出しで消える。設計書 4.8） */
+	skipStash: (id: string) => ['skip-stash', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,
 	/** Office 文書の比較。`['compare', id]` の接頭辞で、変更後に一緒に無効化される */

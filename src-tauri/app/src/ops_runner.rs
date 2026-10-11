@@ -383,6 +383,7 @@ pub(crate) fn app_labels() -> Labels {
         auto_save_memo: "取り込み前の自動保存".to_string(),
         copy_mine: "この PC の版".to_string(),
         copy_theirs: "クラウドの版".to_string(),
+        skip_stash: "この PC の退避".to_string(),
     }
 }
 
