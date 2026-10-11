@@ -205,3 +205,55 @@ async fn timeout_is_applied_per_call() {
 
     server.stop().await;
 }
+
+/// 本文に「明日の会議」の差分がある入力（内容に触れた応答かを確かめる）
+fn meeting_input() -> ChangeInput {
+    ChangeInput {
+        files: vec![ChangedFile {
+            kind: ChangeKind::Modified,
+            name: "test.txt".into(),
+            old_name: None,
+            amount: Some("行 +2 / -0".into()),
+            diff_text: Some("+ 明日の会議は10時から。\n+ 資料は3部印刷する。\n".into()),
+        }],
+    }
+}
+
+/// 偽サーバーを、モデルのファイル名（挙動の選択）で起動し、その URL を Ollama の接続先にした API を返す
+async fn fake_ollama(model_file: &str) -> (tempfile::TempDir, LlamaServer, LlmService) {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join(model_file);
+    std::fs::write(&model, b"fake").unwrap();
+    let server = LlamaServer::new(fake_options()).unwrap();
+    let base = server.ensure_started(&model).await.unwrap();
+    let service = LlmService::with_options(
+        config(dir.path(), Backend::Ollama { base_url: base }),
+        fake_options(),
+    )
+    .unwrap();
+    (dir, server, service)
+}
+
+#[tokio::test]
+async fn a_count_only_answer_is_rewritten_once_to_mention_the_content() {
+    // 1 回目は件数だけ（「2行追加」）、書き直しの指示を受けた 2 回目は内容に触れた文を返す
+    let (_dir, server, service) = fake_ollama("count-then-content.gguf").await;
+    let out = service
+        .suggest(&meeting_input(), "fake-model", GENERATE_TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(out.as_deref(), Some("会議の時間を10時からに変えた。"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_count_only_answer_is_kept_when_the_rewrite_is_also_count_only() {
+    // 書き直しも件数だけなら、1 回目の結果を返す（失敗にはしない）
+    let (_dir, server, service) = fake_ollama("count-only.gguf").await;
+    let out = service
+        .suggest(&meeting_input(), "fake-model", GENERATE_TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(out.as_deref(), Some("test.txtに2行追加した。"));
+    server.stop().await;
+}

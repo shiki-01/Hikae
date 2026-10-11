@@ -7,6 +7,8 @@
 // - `no-health` を含む: `/health` が 503 を返す（起動待ちのタイムアウト用）
 // - `exit-on-chat` を含む: `/v1/chat/completions` を受けたら応答せずに終了する（異常終了の再現用）
 // - `slow-chat` を含む: `/v1/chat/completions` の応答を 2 秒遅らせる（タイムアウト・取り消しの確認用）
+// - `count-only` を含む: 応答は常に件数だけの文（内容に触れない出力の再生成の確認用）
+// - `count-then-content` を含む: 本文に「直前の出力は」（再生成の指示）が無ければ件数だけの文、あれば内容の文を返す
 //
 // 応答はすべて `Connection: close` で返す。
 
@@ -20,9 +22,17 @@ struct Mode {
     no_health: bool,
     exit_on_chat: bool,
     slow_chat: bool,
+    count_only: bool,
+    count_then_content: bool,
 }
 
 const CHAT_JSON: &str = r#"{"choices":[{"message":{"role":"assistant","content":"保存メモです。"},"finish_reason":"stop"}]}"#;
+
+/// 件数だけの応答（内容に触れていない）
+const COUNT_ONLY_JSON: &str = r#"{"choices":[{"message":{"role":"assistant","content":"test.txtに2行追加した。"},"finish_reason":"stop"}]}"#;
+
+/// 内容に触れた応答（再生成の指示を受けたとき）
+const CONTENT_JSON: &str = r#"{"choices":[{"message":{"role":"assistant","content":"会議の時間を10時からに変えた。"},"finish_reason":"stop"}]}"#;
 
 fn main() {
     if let Err(code) = run() {
@@ -69,6 +79,8 @@ fn run() -> Result<(), i32> {
         no_health: name.contains("no-health"),
         exit_on_chat: name.contains("exit-on-chat"),
         slow_chat: name.contains("slow-chat"),
+        count_only: name.contains("count-only"),
+        count_then_content: name.contains("count-then-content"),
     };
     record_start(&model);
 
@@ -93,7 +105,7 @@ fn record_start(model: &std::path::Path) {
 }
 
 fn handle(mut stream: TcpStream, mode: Mode) {
-    let Some((method, path)) = read_request(&mut stream) else {
+    let Some((method, path, body)) = read_request(&mut stream) else {
         return;
     };
     let response = match (method.as_str(), path.as_str()) {
@@ -111,17 +123,34 @@ fn handle(mut stream: TcpStream, mode: Mode) {
             if mode.slow_chat {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
+            if mode.count_only {
+                return send(&mut stream, &http_response(200, COUNT_ONLY_JSON));
+            }
+            if mode.count_then_content {
+                // 再生成の指示（「直前の出力は」）が入った要求だけ、内容に触れた応答を返す
+                let json = if body.contains("直前の出力は") {
+                    CONTENT_JSON
+                } else {
+                    COUNT_ONLY_JSON
+                };
+                return send(&mut stream, &http_response(200, json));
+            }
             http_response(200, CHAT_JSON)
         }
         ("GET", "/api/tags") => http_response(200, r#"{"models":[{"name":"fake-model"}]}"#),
         _ => http_response(404, r#"{"error":"not found"}"#),
     };
+    send(&mut stream, &response);
+}
+
+/// 応答を書き出す（失敗しても何もしない）
+fn send(stream: &mut TcpStream, response: &str) {
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
 }
 
-/// 要求の行とヘッダ、本文を読み、メソッドと経路を返す。本文は読み捨てる。
-fn read_request(stream: &mut TcpStream) -> Option<(String, String)> {
+/// 要求の行とヘッダ、本文を読み、メソッドと経路と本文を返す。
+fn read_request(stream: &mut TcpStream) -> Option<(String, String, String)> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
     let header_end = loop {
@@ -144,15 +173,15 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String)> {
         .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
         .unwrap_or(0);
-    let mut body_read = buf.len() - header_end;
-    while body_read < content_length {
+    let mut body = buf[header_end..].to_vec();
+    while body.len() < content_length {
         let n = stream.read(&mut chunk).ok()?;
         if n == 0 {
             break;
         }
-        body_read += n;
+        body.extend_from_slice(&chunk[..n]);
     }
-    Some((method, path))
+    Some((method, path, String::from_utf8_lossy(&body).to_string()))
 }
 
 fn http_response(code: u16, body: &str) -> String {

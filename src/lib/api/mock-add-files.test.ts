@@ -72,6 +72,8 @@ describe('モックの元に戻した後の保存', () => {
 	const ADDED = 'sp2';
 
 	it('メモを渡すと、設定がオンなら続けて保存する', async () => {
+		// 既定はオフのため、オンにして確かめる
+		await mockApi.updateSettings(null, { autoSaveAfterRestore: true });
 		const result = await mockApi.restore(
 			PROJECT,
 			ADDED,
@@ -82,6 +84,7 @@ describe('モックの元に戻した後の保存', () => {
 		const points = await mockApi.listSavePoints(PROJECT, 0, 5);
 		expect(points[0].message).toBe('10/4 の状態に戻しました');
 		expect((await mockApi.listChanges(PROJECT)).length).toBe(0);
+		await mockApi.updateSettings(null, { autoSaveAfterRestore: false });
 	});
 
 	it('メモを渡さないと保存せず、戻した内容が未保存の変更として残る', async () => {
@@ -93,7 +96,7 @@ describe('モックの元に戻した後の保存', () => {
 		await mockApi.updateSettings(null, { autoSaveAfterRestore: false });
 		const result = await mockApi.restore(PROJECT, 'sp1', { kind: 'all' }, 'メモ');
 		expect(result.save).toBe('not_requested');
-		await mockApi.updateSettings(null, { autoSaveAfterRestore: true });
+		await mockApi.updateSettings(null, { autoSaveAfterRestore: false });
 	});
 });
 

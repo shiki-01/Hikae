@@ -44,7 +44,7 @@ pub(crate) fn is_full_oid(rev: &str) -> bool {
 
 /// 読み取りの結果。上限を超えたものは、エラーではなく `TooLarge` として返す
 /// （画像は `InvalidInput` に、Office 文書は抽出できない理由に写す）
-enum Fetched {
+pub(crate) enum Fetched {
     Bytes(Vec<u8>),
     TooLarge,
 }
@@ -159,6 +159,19 @@ pub(crate) fn read_text(
         Fetched::TooLarge => Ok(TextFile::TooLarge),
         Fetched::Bytes(bytes) => Ok(classify_text(bytes)),
     }
+}
+
+/// 指定時点（完全な OID）または作業フォルダ（`work`）のファイルを、バイト列のまま上限つきで読む（保存メモの差分用）。
+/// 拡張子は見ない。存在しない場合は `Io(NotFound)`。パスの検査・リンクの扱いは `read_text` と同じ
+pub(crate) fn read_bytes(
+    runner: &GitRunner,
+    repo: &Path,
+    rev: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Result<Fetched, OpsError> {
+    let rel = validate_request(rev, path)?;
+    fetch(runner, repo, rev, &rel, max_bytes)
 }
 
 /// 内容がテキストか。NUL を含まず、UTF-8 として有効なら文字列にする

@@ -792,6 +792,7 @@ version = "0.0.1"
 dependencies = [
  "core-git",
  "core-safety",
+ "encoding_rs",
  "serde",
  "serde_json",
  "tempfile",

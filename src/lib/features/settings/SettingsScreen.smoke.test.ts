@@ -91,17 +91,18 @@ describe('SettingsScreen のスモークテスト', () => {
 		const toggle = await screen.findByRole('switch', {
 			name: t('settings.auto_save_after_restore')
 		});
-		expect(toggle.getAttribute('aria-checked')).toBe('true');
+		// 既定はオフ（戻しただけで勝手に保存しない）
+		expect(toggle.getAttribute('aria-checked')).toBe('false');
 		await fireEvent.click(toggle);
 		await waitFor(() =>
 			expect(
 				screen
 					.getByRole('switch', { name: t('settings.auto_save_after_restore') })
 					.getAttribute('aria-checked')
-			).toBe('false')
+			).toBe('true')
 		);
 		// 次に開いたときにも反映されている（モックの設定は端末に保存される）
-		expect(localStorage.getItem('hikae.settings')).toContain('"autoSaveAfterRestore":false');
+		expect(localStorage.getItem('hikae.settings')).toContain('"autoSaveAfterRestore":true');
 		localStorage.removeItem('hikae.settings');
 	});
 

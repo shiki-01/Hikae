@@ -1,15 +1,20 @@
 // 保存メモの提案に渡すテキストの差分（設計書 10.4）。読み取りのみで、作業フォルダ・インデックス・refs に書かない。
 //
 // - 比べる相手は HEAD（この PC の最新の保存）。HEAD が無い（最初の保存の前）ときは、作業フォルダの内容を全部追加として扱う
-// - テキストとして読めないもの（バイナリ）・上限を超えるもの・新規のバイナリは None（本文は渡さない）
+// - 文字コードは UTF-8（先頭の BOM を除く）と Shift_JIS を読む。どちらでもないもの・NUL を含むもの（バイナリ）・
+//   上限を超えるものは None（本文は渡さない）
+// - 追跡中のファイルの差分は `git diff` の出力をバイト列のまま読む（`diff_with` は文字列へ変換するため、Shift_JIS が崩れる）。
+//   UI の差分表示（`diff_file`）は変えない
 // - 行数は全体を数え、差分の本文は `MEMO_DIFF_MAX_LINES` 行までにする（残りは件数だけ）
 // - 文書（docx・xlsx）の差分は app 層が `core-preview` で行う。ここはテキストだけを扱う
 
-use crate::blob::{read_text, TextFile, WORK_REV};
+use crate::blob::{read_bytes, Fetched, WORK_REV};
 use crate::models::{DiffLineKind, OpsError};
-use crate::new_file_diff::{diff_file, FileDiffOutcome};
+use crate::operations::parse_unified_diff;
 use crate::point::resolve_point;
+use crate::restore_file::{normalize_project_path, size_at};
 use core_git::GitRunner;
+use std::borrow::Cow;
 use std::path::Path;
 
 /// 差分を読む元ファイルの上限（バイト）。これを超えるファイルは本文を渡さない
@@ -35,10 +40,15 @@ pub(crate) fn memo_text_diff(
     path: &str,
     max_bytes: u64,
 ) -> Result<Option<MemoTextDiff>, OpsError> {
+    let rel = normalize_project_path(path)?;
+
     // 作業フォルダ側の内容。無い（削除された）ときは None、テキストでないときは本文を渡さない
-    let work = match read_text(runner, repo, WORK_REV, path, max_bytes) {
-        Ok(TextFile::Text(text)) => Some(text),
-        Ok(TextFile::Binary | TextFile::TooLarge) => return Ok(None),
+    let work = match read_bytes(runner, repo, WORK_REV, path, max_bytes) {
+        Ok(Fetched::Bytes(bytes)) => match decode_memo_text(&bytes) {
+            Some(text) => Some(text),
+            None => return Ok(None),
+        },
+        Ok(Fetched::TooLarge) => return Ok(None),
         Err(OpsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
@@ -49,23 +59,57 @@ pub(crate) fn memo_text_diff(
         Err(e) => return Err(e),
     };
 
+    // 最初の保存の前。作業フォルダの内容を全部追加として扱う
     let Some(head) = head else {
-        // 最初の保存の前。作業フォルダの内容を全部追加として扱う
         return Ok(work.map(|text| all_added(&text)));
     };
-    let outcome = diff_file(runner, repo, &head, WORK_REV, Some(path))?;
-    Ok(match outcome {
-        FileDiffOutcome::Lines(lines) | FileDiffOutcome::NewFileLines(lines) => {
-            // 作業フォルダの版が無いのに差分が取れた（削除）ときは、そのまま行を使う
-            Some(collect(lines.iter().map(|l| (l.kind, l.content.as_str()))))
-        }
-        FileDiffOutcome::NewFileEmpty => Some(MemoTextDiff {
-            added: 0,
-            removed: 0,
-            text: String::new(),
-        }),
-        FileDiffOutcome::NewFileBinary { .. } | FileDiffOutcome::NewFileTooLarge { .. } => None,
-    })
+    // 保存（HEAD）に無いファイル（未追跡の新規ファイル）は、作業フォルダの内容を全部追加として扱う
+    if size_at(runner, repo, &head, &rel)?.is_none() {
+        return Ok(work.map(|text| all_added(&text)));
+    }
+
+    // 保存にあるファイル: git の差分をバイト列のまま読み、同じ文字コードの規則で解釈する
+    let spec = format!(":(literal){rel}");
+    let out = runner.run_ok(repo, &["diff", "--unified=3", &head, "--", &spec])?;
+    let Some(text) = decode_diff_output(&out.stdout) else {
+        return Ok(None);
+    };
+    // バイナリ（保存時点か作業フォルダのどちらか）は行が出ないため、件数の 0 として扱わず本文を渡さない
+    if text.lines().any(|line| line.starts_with("Binary files ")) {
+        return Ok(None);
+    }
+    let lines = parse_unified_diff(&text);
+    Ok(Some(collect(
+        lines.iter().map(|l| (l.kind, l.content.as_str())),
+    )))
+}
+
+/// 保存メモの本文として読める文字列にする。
+///
+/// - NUL を含むもの（バイナリ）は読まない
+/// - UTF-8 として有効なら、先頭の BOM（U+FEFF）を除いて使う
+/// - それ以外は Shift_JIS として、すべての並びが有効なときだけ使う（Windows の既定の文字コードの日本語ファイル）
+/// - どちらでもないものは None
+pub(crate) fn decode_memo_text(bytes: &[u8]) -> Option<String> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Some(text.strip_prefix('\u{feff}').unwrap_or(text).to_string());
+    }
+    encoding_rs::SHIFT_JIS
+        .decode_without_bom_handling_and_without_replacement(bytes)
+        .map(Cow::into_owned)
+}
+
+/// `git diff` の出力を、行ごとに読む。保存時点と作業フォルダで文字コードが違う（UTF-8 から Shift_JIS へ変えた）と、
+/// 1 つの出力に両方が混ざるため、出力全体では決められない。改行（0x0A）はどちらの文字コードでも 1 バイトなので、行で分けて安全。
+fn decode_diff_output(bytes: &[u8]) -> Option<String> {
+    let mut text = String::new();
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        text.push_str(&decode_memo_text(line)?);
+    }
+    Some(text)
 }
 
 /// 本文の全行を追加として数える

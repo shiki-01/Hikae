@@ -11,6 +11,8 @@ core-git = { workspace = true }
 core-safety = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# 保存メモの差分で、Shift_JIS の本文を読む（Cargo.lock に既にある版を使う）
+encoding_rs = "0.8"
 thiserror = { workspace = true }
 time = "0.3"
 uuid = { version = "1", features = ["v4"] }

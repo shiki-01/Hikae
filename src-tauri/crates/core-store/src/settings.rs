@@ -170,7 +170,7 @@ define_settings! {
     /// メモの自動提案の方式
     memo_suggestion: MemoSuggestion = MemoSuggestion::Rules,
     /// 元に戻した後に自動で保存する
-    auto_save_after_restore: bool = true,
+    auto_save_after_restore: bool = false,
     /// 大きいファイルの警告閾値（MB）。1〜100 の任意の値（画面の選択肢は 25 / 50 / 100 とカスタム）
     large_file_warn_mb: u32 = 50,
     /// 自動保存をタイムラインに表示するか
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(d.auto_snapshot_delay_secs, 120);
         assert_eq!(d.snapshot_retention_days, 90);
         assert_eq!(d.memo_suggestion, MemoSuggestion::Rules);
-        assert!(d.auto_save_after_restore);
+        assert!(!d.auto_save_after_restore);
         assert_eq!(d.large_file_warn_mb, 50);
         assert_eq!(d.show_snapshots_in_timeline, TimelineSnapshots::Collapsed);
         assert_eq!(d.open_action, OpenAction::DefaultApp);

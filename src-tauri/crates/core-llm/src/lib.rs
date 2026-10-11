@@ -33,7 +33,7 @@ pub use input::{
 };
 pub use prompt::{build_messages, ChangeInput, ChangeKind, ChangedFile, Message, Role};
 pub use requirements::{required_disk_bytes, stage_availability, Availability, Reason, SystemInfo};
-pub use service::{LlmService, ServiceConfig};
+pub use service::{content_retry_messages, needs_content_retry, LlmService, ServiceConfig};
 pub use sidecar::{Clock, LlamaServer, LlamaServerOptions, SystemClock};
 pub use suggestion::{failure_of, SuggestFailure, SuggestSlot};
 pub use validate::{clean_summary, clean_summary_detail, Cleaned};

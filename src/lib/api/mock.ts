@@ -489,7 +489,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 	autoSnapshotDelaySecs: 120,
 	snapshotRetentionDays: 90,
 	snapshotSizeCapX: 2,
-	autoSaveAfterRestore: true,
+	autoSaveAfterRestore: false,
 	largeFileWarnMb: 50,
 	showSnapshotsInTimeline: 'collapsed',
 	memoSuggestion: 'rules',

@@ -12,6 +12,8 @@
 // 追加の環境変数: HIKAE_TEST_RUNS（既定 8）、HIKAE_TEST_ONLY（例: 6 で入力 6 だけ）、
 // HIKAE_TEST_THREADS（llama-server の -t。未指定はアプリと同じ既定値）。
 // 入力はテスト内で作る（合成データ。リポジトリに大きなファイルを置かない）。
+// テキストの追記（`measure_text_append`）は、追跡中の既存ファイルへの追記と未追跡の新規ファイルの組み合わせ 9 件で、
+// 1 回目の出力が件数だけなら 1 回書き直したあとの内容ヒット 90% 以上を確かめる（評価ノート 13 節）。
 // 内容の評価（`measure_content_understanding`）は評価ノート 11.4 の 12 件を使い、検証通過 95% 以上と
 // 内容ヒット 90% 以上を確かめる（HIKAE_TEST_RUNS 回ずつ。既定 3）。語の一致による判定であり、事実の正否は判定しない。
 
@@ -19,8 +21,9 @@
 #![allow(clippy::unwrap_used)]
 
 use core_llm::{
-    build_messages, cell_line, clean_summary, clean_summary_detail, ChangeInput, ChangeKind,
-    ChangedFile, ChatClient, LlamaServer, LlamaServerOptions, GENERATE_TIMEOUT,
+    build_messages, cell_line, clean_summary, clean_summary_detail, content_retry_messages,
+    needs_content_retry, ChangeInput, ChangeKind, ChangedFile, ChatClient, LlamaServer,
+    LlamaServerOptions, GENERATE_TIMEOUT,
 };
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -719,9 +722,9 @@ async fn measure_content_understanding() {
     let base = server.ensure_started(&model).await.unwrap();
     let chat = ChatClient::new().unwrap();
 
-    // HIKAE_TEST_PROMPT=v0 のとき、比較用に評価の V0 の文面で計測する（既定は現行の V1）
+    // HIKAE_TEST_PROMPT=v0 のとき、比較用に評価の V0 の文面で計測する（既定は現行の文面）
     let v0 = std::env::var("HIKAE_TEST_PROMPT").is_ok_and(|v| v == "v0");
-    let variant = if v0 { "v0" } else { "v1（現行）" };
+    let variant = if v0 { "v0" } else { "現行" };
     println!("内容の評価: threads={threads}, runs={runs}, prompt={variant}");
     println!("| 入力 | 検証通過 | 内容ヒット | 所要 中央値 | 所要 最大 |");
     println!("| --- | --- | --- | --- | --- |");
@@ -816,5 +819,181 @@ async fn measure_content_understanding() {
     assert!(
         pct(passed, total) >= 95.0,
         "検証通過が 95% 未満: {passed}/{total}"
+    );
+}
+
+/// テキストの追記の計測に使う入力（合成データ）。追跡中の `test.txt` に `tracked` を、未追跡の新規ファイルに `new_file` を追記した形。
+struct AppendCase {
+    id: &'static str,
+    tracked: &'static [&'static str],
+    new_file: &'static [&'static str],
+    /// 内容に触れたとみなす語（いずれかが出力に含まれれば内容ヒット）
+    keys: &'static [&'static str],
+}
+
+/// 追記の入力 9 件。(a) 意味のある文、(b) 短く意味の薄い文、(c) 英数字、(d)〜(f) 形式の違い、(g)(h) チェックリストとコード風、(i) 多行（件数だけの文が出やすい）
+const APPEND_CASES: &[AppendCase] = &[
+    AppendCase {
+        id: "a",
+        tracked: &["明日の会議は10時から。", "資料は3部印刷する。"],
+        new_file: &["牛乳と卵を買う"],
+        keys: &["会議", "10時", "資料", "3部", "印刷", "牛乳", "卵", "買う"],
+    },
+    AppendCase {
+        id: "b",
+        tracked: &["テスト", "aaa"],
+        new_file: &["あいうえお"],
+        keys: &["テスト", "aaa", "あいうえお"],
+    },
+    AppendCase {
+        id: "c",
+        tracked: &["Hello world 2026", "12345"],
+        new_file: &["ABC-123"],
+        keys: &["Hello", "world", "2026", "12345", "ABC", "123"],
+    },
+    AppendCase {
+        id: "d",
+        tracked: &["12:00に集合", "会場はA館"],
+        new_file: &["メモ1"],
+        keys: &["集合", "12:00", "A館", "メモ"],
+    },
+    AppendCase {
+        id: "e",
+        tracked: &["ok", "done"],
+        new_file: &["x"],
+        keys: &["ok", "done", "x"],
+    },
+    AppendCase {
+        id: "f",
+        tracked: &["税率を8%から10%に変更"],
+        new_file: &["追記: 2024年度版"],
+        keys: &["税率", "10%", "2024年度", "8%"],
+    },
+    AppendCase {
+        id: "g",
+        tracked: &["- [ ] 牛乳", "- [ ] 卵"],
+        new_file: &["2024/10/12 提出"],
+        keys: &["牛乳", "卵", "提出", "2024"],
+    },
+    AppendCase {
+        id: "h",
+        tracked: &["x = 1", "y = 2"],
+        new_file: &["print(x)"],
+        keys: &["x =", "y =", "print", "x", "y"],
+    },
+    AppendCase {
+        id: "i",
+        tracked: &[
+            "項目A: 準備",
+            "項目B: 実施",
+            "項目C: 報告",
+            "項目D: 次回の予定",
+            "項目E: 費用の精算",
+        ],
+        new_file: &["付録1", "付録2", "付録3"],
+        keys: &["項目", "付録", "準備", "実施", "報告", "精算"],
+    },
+];
+
+/// 追記の入力を、アプリの組み立て（`collect_input` と同じ形: 種別・名前・変更量・本文）で作る
+fn append_input(case: &AppendCase) -> ChangeInput {
+    let body = |lines: &[&str]| lines.iter().map(|l| format!("+ {l}\n")).collect::<String>();
+    input(vec![
+        ChangedFile {
+            kind: ChangeKind::Modified,
+            name: "test.txt".into(),
+            old_name: None,
+            amount: Some(format!("行 +{} / -0", case.tracked.len())),
+            diff_text: Some(body(case.tracked)),
+        },
+        ChangedFile {
+            kind: ChangeKind::Added,
+            name: "新規 テキスト ドキュメント.txt".into(),
+            old_name: None,
+            amount: Some(format!("行 +{} / -0", case.new_file.len())),
+            diff_text: Some(body(case.new_file)),
+        },
+    ])
+}
+
+#[tokio::test]
+#[ignore = "実機の llama-server と GGUF が必要。テキストの追記の計測（HIKAE_TEST_RUNS 回ずつ。既定 5）"]
+async fn measure_text_append() {
+    let Some((exe, model)) = server_env() else {
+        eprintln!("環境変数が未設定のため省略");
+        return;
+    };
+    let runs: usize = std::env::var("HIKAE_TEST_RUNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let server = LlamaServer::new(LlamaServerOptions::new(Some(exe))).unwrap();
+    let base = server.ensure_started(&model).await.unwrap();
+    let chat = ChatClient::new().unwrap();
+
+    // 1 回目の出力と、service と同じ書き直し（件数だけで内容に触れていないときに 1 回）の後の出力を計る
+    println!("| 入力 | 1 回目の内容ヒット | 書き直し | 書き直し後の内容ヒット |");
+    println!("| --- | --- | --- | --- |");
+    let (mut total, mut first_hits, mut final_hits) = (0usize, 0usize, 0usize);
+    for case in APPEND_CASES {
+        let input = append_input(case);
+        let messages = build_messages(&input);
+        let (mut case_first, mut case_final, mut retried) = (0usize, 0usize, 0usize);
+        for i in 0..runs {
+            let raw = chat
+                .chat(&base, "model", &messages, GENERATE_TIMEOUT)
+                .await
+                .unwrap();
+            let first = clean_summary(&raw);
+            let mut result = first.clone();
+            if let Some(text) = first.as_deref() {
+                if needs_content_retry(&input, text) {
+                    retried += 1;
+                    let raw2 = chat
+                        .chat(
+                            &base,
+                            "model",
+                            &content_retry_messages(&input),
+                            GENERATE_TIMEOUT,
+                        )
+                        .await
+                        .unwrap();
+                    if let Some(text2) = clean_summary(&raw2) {
+                        if !needs_content_retry(&input, &text2) {
+                            result = Some(text2);
+                        }
+                    }
+                }
+            }
+            total += 1;
+            let hit = |t: &Option<String>| {
+                t.as_deref()
+                    .is_some_and(|t| case.keys.iter().any(|k| t.contains(k)))
+            };
+            if hit(&first) {
+                case_first += 1;
+                first_hits += 1;
+            }
+            if hit(&result) {
+                case_final += 1;
+                final_hits += 1;
+            }
+            println!("[{}] run {i}: first={first:?} result={result:?}", case.id);
+        }
+        println!(
+            "| {} | {case_first}/{runs} | {retried}/{runs} | {case_final}/{runs} |",
+            case.id
+        );
+    }
+    server.stop().await;
+    assert!(!server.is_running().await);
+
+    println!(
+        "1 回目の内容ヒット {first_hits}/{total}、書き直し後の内容ヒット {final_hits}/{total}"
+    );
+    // 目標: 書き直し後の内容ヒット 90% 以上（件数だけの文が残らないこと）
+    assert!(
+        final_hits * 100 >= total * 90,
+        "書き直し後の内容ヒットが 90% 未満: {final_hits}/{total}"
     );
 }
