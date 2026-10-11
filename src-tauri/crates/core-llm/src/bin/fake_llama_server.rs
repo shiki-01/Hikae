@@ -6,6 +6,7 @@
 // モデルのファイル名で挙動を変える（テストが選ぶ）:
 // - `no-health` を含む: `/health` が 503 を返す（起動待ちのタイムアウト用）
 // - `exit-on-chat` を含む: `/v1/chat/completions` を受けたら応答せずに終了する（異常終了の再現用）
+// - `slow-chat` を含む: `/v1/chat/completions` の応答を 2 秒遅らせる（タイムアウト・取り消しの確認用）
 //
 // 応答はすべて `Connection: close` で返す。
 
@@ -18,6 +19,7 @@ use std::path::PathBuf;
 struct Mode {
     no_health: bool,
     exit_on_chat: bool,
+    slow_chat: bool,
 }
 
 const CHAT_JSON: &str = r#"{"choices":[{"message":{"role":"assistant","content":"保存メモです。"},"finish_reason":"stop"}]}"#;
@@ -66,6 +68,7 @@ fn run() -> Result<(), i32> {
     let mode = Mode {
         no_health: name.contains("no-health"),
         exit_on_chat: name.contains("exit-on-chat"),
+        slow_chat: name.contains("slow-chat"),
     };
     record_start(&model);
 
@@ -104,6 +107,9 @@ fn handle(mut stream: TcpStream, mode: Mode) {
         ("POST", "/v1/chat/completions") => {
             if mode.exit_on_chat {
                 std::process::exit(1);
+            }
+            if mode.slow_chat {
+                std::thread::sleep(std::time::Duration::from_secs(2));
             }
             http_response(200, CHAT_JSON)
         }

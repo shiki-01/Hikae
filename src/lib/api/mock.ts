@@ -12,6 +12,7 @@ import type {
 	AiEndpointCheck,
 	AiModelStatus,
 	AiTestResult,
+	AiSuggestion,
 	FilePreview,
 	PreviewSheet,
 	PreviewSlide,
@@ -1636,20 +1637,29 @@ export const mockApi: ProjectApi = {
 		if (settings.aiModel === id) writeStorage('hikae.settings', { ...settings, aiModel: '' });
 	},
 
-	async aiSuggestMemo(projectId: string): Promise<string | null> {
+	async aiSuggestMemo(projectId: string): Promise<AiSuggestion> {
+		// 新しい要求は進行中の要求を取り消す（実装と同じ）
+		const generation = ++mockSuggestGeneration;
 		await sleep(120);
+		if (generation !== mockSuggestGeneration) return { text: null, failure: 'cancelled' };
 		const overrides = readOverrides()[projectId] ?? {};
 		const settings = {
 			...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS),
 			...overrides
 		};
-		if (settings.memoSuggestion !== 'ai' || settings.aiModel === '') return null;
+		if (settings.memoSuggestion !== 'ai' || settings.aiModel === '') {
+			return { text: null, failure: 'not-ready' };
+		}
 		if (settings.aiRunner === 'builtin' && readAiStore()[settings.aiModel]?.status !== 'ready') {
-			return null;
+			return { text: null, failure: 'not-ready' };
 		}
 		const state = states.get(projectId);
-		if (!state || state.changes.length === 0) return null;
-		return `AI 提案（モック）: ${suggestMemo(state.changes)}`;
+		if (!state || state.changes.length === 0) return { text: null, failure: 'not-ready' };
+		return { text: `AI 提案（モック）: ${suggestMemo(state.changes)}`, failure: null };
+	},
+
+	async aiCancelSuggest(): Promise<void> {
+		mockSuggestGeneration++;
 	},
 
 	async aiListOllamaModels(url: string): Promise<string[]> {
@@ -1718,6 +1728,8 @@ const MOCK_AI_MODELS: Omit<
 ];
 
 const aiListeners = new Set<(notice: AiDownloadNotice) => void>();
+/** モックの提案の要求番号（新しい要求・取り消しで増やし、古い要求の結果を捨てる） */
+let mockSuggestGeneration = 0;
 const aiRunning = new Map<
 	string,
 	{ timer: ReturnType<typeof setInterval>; progress: { received: number; total: number } }

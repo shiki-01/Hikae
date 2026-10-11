@@ -247,3 +247,59 @@ fn fake_server_refuses_non_loopback_host() {
         .unwrap();
     assert!(!status.success());
 }
+
+#[tokio::test]
+async fn timed_out_and_cancelled_chats_keep_the_server_running() {
+    // 設計 10.4: タイムアウトと取り消しでは llama-server を止めない（次の生成は同じサーバーで行う）
+    let dir = tempfile::tempdir().unwrap();
+    let m = model(dir.path(), "slow-chat.gguf");
+    let server = LlamaServer::new(options(ManualClock::new())).unwrap();
+    let base = server.ensure_started(&m).await.unwrap();
+    let chat = ChatClient::new().unwrap();
+
+    // 1. 応答が上限より遅ければタイムアウト
+    let err = chat
+        .chat(
+            &base,
+            "slow-chat.gguf",
+            &user_message(),
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err, LlmError::Timeout);
+    assert!(server.is_running().await);
+
+    // 2. 呼び出しの future を破棄する（取り消し）
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(200),
+        chat.chat(
+            &base,
+            "slow-chat.gguf",
+            &user_message(),
+            Duration::from_secs(10),
+        ),
+    )
+    .await;
+    assert!(cancelled.is_err());
+
+    // 3. 取り消しの後もサーバーは生きていて、起動し直していない
+    assert!(server.is_running().await);
+    assert!(health_ok(&base).await);
+    assert_eq!(starts(dir.path()), 1);
+
+    // 4. 次の生成は同じサーバーで成功する
+    let content = chat
+        .chat(
+            &base,
+            "slow-chat.gguf",
+            &user_message(),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(content, "保存メモです。");
+    assert_eq!(starts(dir.path()), 1);
+
+    server.stop().await;
+}

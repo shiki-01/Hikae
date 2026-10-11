@@ -32,17 +32,55 @@ const QUOTE_PAIRS: [(char, char); 6] = [
     ('`', '`'),
 ];
 
+/// 検証を通った出力。`rescued` は、複数行の出力から最初の空でない 1 行を採ったことを表す
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cleaned {
+    pub text: String,
+    /// 複数行の出力から救済した（1 行の出力をそのまま採った場合は `false`）
+    pub rescued: bool,
+}
+
 /// モデルの生の出力を、保存欄に出せる 1 文に整える。条件を満たさなければ `None`。
 ///
+/// 戻り値の文だけが欲しい場合は `clean_summary` を使う。
+pub fn clean_summary(raw: &str) -> Option<String> {
+    clean_summary_detail(raw).map(|c| c.text)
+}
+
+/// `clean_summary` と同じ検証を行い、救済を使ったかも返す。
+///
+/// - 出力が 1 行（末尾の改行を除く）なら、その行を検証する
+/// - 複数行の出力は、最初の空でない 1 行だけを検証する（救済。その行が通らなければ `None`）。
+///   小型モデルが「ファイルごとに 1 行」で返す出力を、検証で全件落とさないための規則（設計 10.4）
+pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
+    let trimmed = raw.trim();
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        let first = trimmed
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())?;
+        return validate_line(first).map(|text| Cleaned {
+            text,
+            rescued: true,
+        });
+    }
+    validate_line(trimmed).map(|text| Cleaned {
+        text,
+        rescued: false,
+    })
+}
+
+/// 1 行の出力を検証する。条件（前後の整理・文の数・長さ・Git 用語）を満たさなければ `None`。
+///
 /// - 前後の空白・引用符・箇条書き記号を取り除く
-/// - 改行を含むもの、「。」を 2 つ以上含むもの（複数文）、空、100 文字超は `None`
+/// - 「。」を 2 つ以上含むもの（複数文）、空、100 文字超は `None`
 /// - Git 用語を含むものは `None`（英字は大文字小文字を区別しない）
 /// - 日本語と数字の間の半角スペースは詰める（「第 3 章」→「第3章」）
-pub fn clean_summary(raw: &str) -> Option<String> {
-    let s = strip_bullet(raw.trim());
+fn validate_line(line: &str) -> Option<String> {
+    let s = strip_bullet(line.trim());
     let s = strip_quotes(s.trim());
     let s = s.trim();
-    if s.is_empty() || s.contains('\n') || s.contains('\r') {
+    if s.is_empty() {
         return None;
     }
     if s.matches(SENTENCE_END).count() >= 2 {
@@ -170,20 +208,60 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiline_and_multi_sentence() {
-        assert_eq!(
-            clean_summary("報告書に考察を追加した。\n表も追加した。"),
-            None
-        );
+    fn rejects_multi_sentence_on_one_line() {
         assert_eq!(
             clean_summary("予算を変更しました。実施期間も変更しました。"),
             None
         );
-        // 末尾の改行は取り除いたうえで 1 行として扱う
+    }
+
+    #[test]
+    fn trailing_newline_is_not_multiline() {
+        // 末尾の改行は取り除いたうえで 1 行として扱う（救済は使わない）
+        let got = clean_summary_detail("予算を変更しました。\n").unwrap();
+        assert_eq!(got.text, "予算を変更しました。");
+        assert!(!got.rescued);
+    }
+
+    #[test]
+    fn multiline_rescues_the_first_non_empty_line() {
+        let got = clean_summary_detail("\n  \n報告書に考察を追加した。\n表も追加した。").unwrap();
+        assert_eq!(got.text, "報告書に考察を追加した。");
+        assert!(got.rescued);
+        // 行の前後の空白も取り除く
+        let got = clean_summary_detail("  予算を変更しました。  \r\n次の行").unwrap();
+        assert_eq!(got.text, "予算を変更しました。");
+        assert!(got.rescued);
         assert_eq!(
-            clean_summary("予算を変更しました。\n").as_deref(),
-            Some("予算を変更しました。")
+            clean_summary("報告書に考察を追加した。\n表も追加した。").as_deref(),
+            Some("報告書に考察を追加した。")
         );
+    }
+
+    #[test]
+    fn multiline_without_a_valid_first_line_is_none() {
+        // 最初の行が複数文なら、後ろの行が正しくても採らない
+        assert_eq!(
+            clean_summary_detail("予算を変更しました。実施期間も変更しました。\n表を追加した。"),
+            None
+        );
+        // 最初の行が Git 用語を含むなら採らない
+        assert_eq!(
+            clean_summary_detail("README を commit しました。\n表を追加した。"),
+            None
+        );
+        // 空の行だけなら採らない
+        assert_eq!(clean_summary_detail("\n \n"), None);
+        // 最初の行が空でも、次の空でない行を救済の対象にする
+        let got = clean_summary_detail("\n\n表を追加した。\n次の行").unwrap();
+        assert_eq!(got.text, "表を追加した。");
+        assert!(got.rescued);
+    }
+
+    #[test]
+    fn rescue_is_not_used_for_single_line_outputs() {
+        let got = clean_summary_detail("予算を変更しました。").unwrap();
+        assert!(!got.rescued);
     }
 
     #[test]

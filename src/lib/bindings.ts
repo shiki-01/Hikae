@@ -284,12 +284,14 @@ export const commands = {
 	 */
 	aiRemoveModel: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("ai_remove_model", { id })),
 	/**
-	 *  保存メモの提案を 1 文返す（読み取りのみ）。
+	 *  保存メモの提案を 1 文作る（読み取りのみ）。ボタンを押したときだけ呼ばれる。
 	 * 
-	 *  次の場合は `None`（エラーは出さない）: 提案が無効、モデルが選ばれていない、変更がない、
-	 *  内蔵モデルが未導入、Ollama に接続できない、タイムアウト、検証で弾かれた。
+	 *  `fresh` が偽なら、同じ入力の保存済みの結果を返す。真なら保存済みの結果を使わずに作り直し、結果で上書きする。
+	 *  進行中の要求があれば取り消してから始める（同時に走らせる提案は 1 件）。
 	 */
-	aiSuggestMemo: (projectId: string) => __TAURI_INVOKE<string | null>("ai_suggest_memo", { projectId }),
+	aiSuggestMemo: (projectId: string, fresh: boolean) => __TAURI_INVOKE<SuggestResult>("ai_suggest_memo", { projectId, fresh }),
+	/**  進行中の保存メモの提案を取り消す。llama-server は止めない（設計 10.5）。進行中が無ければ何もしない。 */
+	aiCancelSuggest: () => __TAURI_INVOKE<void>("ai_cancel_suggest"),
 	/**  Ollama の一覧（`GET /api/tags`）。失敗は接続の失敗として返す */
 	aiListOllamaModels: (url: string) => typedError<string[], AppError>(__TAURI_INVOKE("ai_list_ollama_models", { url })),
 	/**  接続先の形式と到達性を確認する。形式が正しくないときは `ok` を偽にする（エラーにはしない）。 */
@@ -1427,6 +1429,25 @@ export type SkippedFileItem = {
 /**  プロジェクトの状態が変わった。UI は `[projectId]` 配下のキャッシュを無効化して再取得する。 */
 export type StatusChanged = {
 	project_id: string,
+};
+
+/**  提案が得られなかった理由（画面が文言を選ぶ） */
+export type SuggestFailure = 
+/**  時間内に終わらなかった（入力の収集と生成の合計） */
+"timeout" | 
+/**  モデルの出力が検証で採用されなかった */
+"invalid" | 
+/**  AI の準備ができていない（提案の設定、モデルの未導入、Ollama に接続できない、接続先の指定） */
+"not-ready" | 
+/**  そのほか（起動に失敗した、応答が壊れたなど） */
+"unavailable" | 
+/**  利用者の操作、または新しい要求により取り消された（画面には出さない） */
+"cancelled";
+
+/**  保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由 */
+export type SuggestResult = {
+	text: string | null,
+	failure: SuggestFailure | null,
 };
 
 /**  同期状態が変わった */

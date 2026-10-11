@@ -564,6 +564,15 @@ export interface AiEndpointCheck {
 	externalHost: boolean;
 }
 
+/** 保存メモの提案が得られなかった理由（`cancelled` は画面に出さない） */
+export type AiSuggestFailure = 'timeout' | 'invalid' | 'not-ready' | 'unavailable' | 'cancelled';
+
+/** 保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由 */
+export interface AiSuggestion {
+	text: string | null;
+	failure: AiSuggestFailure | null;
+}
+
 /** 生成の試行が失敗した理由 */
 export type AiTestFailure =
 	| 'not-configured'
@@ -795,8 +804,13 @@ export interface ProjectApi {
 	aiCancelDownload(id: string): Promise<void>;
 	/** モデルを削除する */
 	aiRemoveModel(id: string): Promise<void>;
-	/** 保存メモの提案を 1 文返す。提案が得られないときは null（エラーにはしない） */
-	aiSuggestMemo(projectId: string): Promise<string | null>;
+	/**
+	 * 保存メモの提案を 1 文作る（ボタンで開始する）。`fresh` は保存済みの結果を使わずに作り直す。
+	 * 失敗は `failure` で返す（エラーにはしない）
+	 */
+	aiSuggestMemo(projectId: string, fresh: boolean): Promise<AiSuggestion>;
+	/** 進行中の提案を取り消す（llama-server 自体は止めない） */
+	aiCancelSuggest(): Promise<void>;
 	/** Ollama に導入されているモデル名の一覧 */
 	aiListOllamaModels(url: string): Promise<string[]>;
 	/** 接続先の形式と到達性、外部ホストかどうか */

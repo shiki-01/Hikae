@@ -4,7 +4,7 @@
 // 保存操作は LLM を待たない。このサービスは呼び出し側（app 層）が非同期に呼ぶ。
 
 use crate::catalog::Catalog;
-use crate::client::{check_endpoint, Backend, ChatClient, DEFAULT_GENERATE_TIMEOUT};
+use crate::client::{check_endpoint, Backend, ChatClient};
 use crate::download::{installed, Installed};
 use crate::error::LlmError;
 use crate::prompt::{build_messages, ChangeInput};
@@ -31,7 +31,6 @@ pub struct LlmService {
     catalog: Catalog,
     sidecar: LlamaServer,
     chat: ChatClient,
-    timeout: Duration,
 }
 
 impl LlmService {
@@ -54,7 +53,6 @@ impl LlmService {
             catalog,
             sidecar: LlamaServer::new(options)?,
             chat: ChatClient::new()?,
-            timeout: DEFAULT_GENERATE_TIMEOUT,
         })
     }
 
@@ -99,13 +97,17 @@ impl LlmService {
     /// 保存メモの提案を 1 文生成する。
     ///
     /// - `model_ref`: 内蔵の接続先ではカタログの ID、Ollama ではモデル名
+    /// - `timeout`: 生成（HTTP 要求）の上限。起動待ち（内蔵）は含まず、別に上限がある（`sidecar`）。
+    ///   呼び出し側が全体の上限を管理し、残りの時間を渡す
     /// - 変更ファイルが空なら、サーバーを起動せず `Ok(None)` を返す
     /// - 検証で弾かれた出力は `Ok(None)`。接続・起動・タイムアウトなどは `Err`
-    /// - 内蔵の生成で失敗したときは、次回に起動し直せるよう子プロセスを止める
+    /// - 内蔵の生成で応答が壊れた・接続が切れたときだけ子プロセスを止める（次回に起動し直す）。
+    ///   タイムアウトや呼び出しの取り消しでは止めない（止めると次回の起動が遅くなるため）
     pub async fn suggest(
         &self,
         input: &ChangeInput,
         model_ref: &str,
+        timeout: Duration,
     ) -> Result<Option<String>, LlmError> {
         if input.files.is_empty() {
             return Ok(None);
@@ -125,22 +127,36 @@ impl LlmService {
                 let base_url = self.sidecar.ensure_started(&path).await?;
                 let result = self
                     .chat
-                    .chat(&base_url, &entry.file_name, &messages, self.timeout)
+                    .chat(&base_url, &entry.file_name, &messages, timeout)
                     .await;
-                if result.is_err() {
-                    self.sidecar.stop().await;
+                if let Err(e) = &result {
+                    if breaks_server(e) {
+                        self.sidecar.stop().await;
+                    }
                 }
                 result?
             }
             Backend::Ollama { base_url } => {
                 let endpoint = check_endpoint(base_url)?;
                 self.chat
-                    .chat(&endpoint.base_url, model_ref, &messages, self.timeout)
+                    .chat(&endpoint.base_url, model_ref, &messages, timeout)
                     .await?
             }
         };
         Ok(clean_summary(&raw))
     }
+}
+
+/// 生成の失敗が、サーバーを止めて起動し直す理由になるか。
+/// タイムアウトは含めない（サーバーは正常で、処理が長いだけのことが多いため）。
+fn breaks_server(e: &LlmError) -> bool {
+    matches!(
+        e,
+        LlmError::Network
+            | LlmError::BadStatus
+            | LlmError::BadResponse
+            | LlmError::ResponseTooLarge
+    )
 }
 
 /// 接続先を検査して正規化する。内蔵はそのまま通す。
@@ -156,4 +172,30 @@ fn validated_backend(backend: Backend) -> Result<Backend, LlmError> {
 /// モデル指定の文字列として妥当か（空、制御文字、極端な長さを拒否する）。
 fn is_valid_model_ref(s: &str) -> bool {
     !s.is_empty() && s.len() <= 200 && !s.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_broken_connections_stop_the_server() {
+        // 応答が壊れた・接続が切れたときは止めて起動し直す
+        for e in [
+            LlmError::Network,
+            LlmError::BadStatus,
+            LlmError::BadResponse,
+            LlmError::ResponseTooLarge,
+        ] {
+            assert!(breaks_server(&e), "{e:?}");
+        }
+        // タイムアウトや、そのほかの失敗では止めない（処理が長いだけのことが多く、起動し直すと遅くなる）
+        for e in [
+            LlmError::Timeout,
+            LlmError::ModelNotInstalled,
+            LlmError::ServerNotFound,
+        ] {
+            assert!(!breaks_server(&e), "{e:?}");
+        }
+    }
 }

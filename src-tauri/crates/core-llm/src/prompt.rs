@@ -9,6 +9,8 @@ pub const SYSTEM_PROMPT: &str =
     "あなたは、ファイルの変更内容から「保存メモ」を書く assistant です。
 規則:
 - 出力は日本語で 1 文のみ。40 文字程度まで。
+- 複数のファイルを変更したときも、全体を 1 文にまとめる。ファイルごとに分けて書かない。
+- 変更ファイルが 3 件を超えるときは、ファイル名を並べず、種類と件数でまとめる（例: 文書 35 件を更新し、5 件を追加した）。
 - 与えられた情報にある事実だけを書く。推測や評価は書かない。
 - 専門用語（commit、diff、push、branch、repository など）は使わない。
 - ファイル名や、変更前後の具体的な値が分かる場合は、それを使う。
@@ -16,13 +18,20 @@ pub const SYSTEM_PROMPT: &str =
 
 /// 表に載せるファイルの上限。超えた分は「ほか n 件」にまとめる
 pub const MAX_FILES: usize = 30;
+/// 差分本文を渡すファイルの数（変更量の多い順。それ以外は表の行だけ）
+pub const MAX_DIFF_FILES: usize = 3;
 /// 1 ファイルの差分本文の上限（文字数）
-pub const MAX_FILE_DIFF_CHARS: usize = 800;
+pub const MAX_FILE_DIFF_CHARS: usize = 500;
 /// 差分本文の全体の上限（文字数）
-pub const MAX_TOTAL_DIFF_CHARS: usize = 3000;
+pub const MAX_TOTAL_DIFF_CHARS: usize = 1500;
+/// 表に出すファイル名の上限（文字数）。超えた分は「…」で省略する
+pub const MAX_NAME_CHARS: usize = 60;
 
 const OMITTED_NOTE: &str = "（以下省略）";
 const USER_LEAD: &str = "次の変更の保存メモを書いてください。";
+/// ユーザーメッセージの末尾に添える指示（複数のファイルでも 1 文にまとめさせる）
+const USER_TAIL: &str =
+    "複数のファイルがあっても、全体を 1 文にまとめてください。ファイルが多いときは、ファイル名を並べず件数でまとめてください。";
 
 /// 変更の種別
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,8 +108,10 @@ fn user_message(input: &ChangeInput) -> String {
     out.push_str("\n\n変更ファイル:\n| 種別 | ファイル名 | 変更量 |\n| --- | --- | --- |\n");
     for file in shown {
         let name = match (&file.kind, &file.old_name) {
-            (ChangeKind::Renamed, Some(old)) => format!("{old} → {}", file.name),
-            _ => file.name.clone(),
+            (ChangeKind::Renamed, Some(old)) => {
+                format!("{} → {}", short_name(old), short_name(&file.name))
+            }
+            _ => short_name(&file.name),
         };
         let amount = file.amount.as_deref().unwrap_or("-");
         let _ = writeln!(
@@ -114,11 +125,19 @@ fn user_message(input: &ChangeInput) -> String {
     if input.files.len() > shown_count {
         let _ = writeln!(out, "ほか {} 件", input.files.len() - shown_count);
     }
+    if input.files.len() > COUNT_SUMMARY_FROM {
+        let _ = writeln!(out, "件数: {}", kind_counts(&input.files));
+    }
 
+    // 差分本文は、変更量の多い上位のファイルだけ（表の順に並べる）
+    let bodies = body_indices(shown);
     let mut budget = MAX_TOTAL_DIFF_CHARS;
     let mut diffs = String::new();
-    for file in shown {
-        let Some(text) = file.diff_text.as_deref().filter(|t| !t.trim().is_empty()) else {
+    for (idx, file) in shown.iter().enumerate() {
+        if !bodies.contains(&idx) {
+            continue;
+        }
+        let Some(text) = file.diff_text.as_deref() else {
             continue;
         };
         if budget == 0 {
@@ -129,7 +148,7 @@ fn user_message(input: &ChangeInput) -> String {
         let limit = budget.min(MAX_FILE_DIFF_CHARS);
         let (body, truncated) = truncate_chars(text, limit);
         budget -= body.chars().count();
-        let _ = writeln!(diffs, "[{}]", file.name);
+        let _ = writeln!(diffs, "[{}]", short_name(&file.name));
         diffs.push_str(&body);
         diffs.push('\n');
         if truncated {
@@ -142,7 +161,62 @@ fn user_message(input: &ChangeInput) -> String {
         out.push_str("\n差分（抽出テキスト）:\n");
         out.push_str(&diffs);
     }
+    out.push('\n');
+    out.push_str(USER_TAIL);
+    out.push('\n');
     out
+}
+
+/// 差分本文を渡す表の位置（昇順）。差分の行数（空行を除く）が多い順に `MAX_DIFF_FILES` 件。
+/// 同じ行数のときは表の順を優先する。差分が無いファイルは対象にしない。
+fn body_indices(shown: &[ChangedFile]) -> Vec<usize> {
+    let mut ranked: Vec<(usize, usize)> = shown
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, file)| {
+            let lines = file
+                .diff_text
+                .as_deref()?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count();
+            (lines > 0).then_some((idx, lines))
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    ranked.truncate(MAX_DIFF_FILES);
+    let mut picked: Vec<usize> = ranked.into_iter().map(|(idx, _)| idx).collect();
+    picked.sort_unstable();
+    picked
+}
+
+/// 変更ファイルの数がこれを超えるとき、表の前に種別ごとの件数を添える
+const COUNT_SUMMARY_FROM: usize = 4;
+
+/// 種別ごとの件数（「更新 28 件、追加 7 件」）。0 件の種別は出さない。件数は全件で数える
+fn kind_counts(files: &[ChangedFile]) -> String {
+    [
+        ChangeKind::Added,
+        ChangeKind::Modified,
+        ChangeKind::Deleted,
+        ChangeKind::Renamed,
+    ]
+    .iter()
+    .filter_map(|kind| {
+        let count = files.iter().filter(|f| f.kind == *kind).count();
+        (count > 0).then(|| format!("{} {count} 件", kind.label()))
+    })
+    .collect::<Vec<_>>()
+    .join("、")
+}
+
+/// 表示用のファイル名。`MAX_NAME_CHARS` 文字を超える分は「…」で省略する（文字境界で切る）。
+fn short_name(name: &str) -> String {
+    if name.chars().count() <= MAX_NAME_CHARS {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(MAX_NAME_CHARS - 1).collect();
+    format!("{head}…")
 }
 
 /// 表のセルに入れられるように、区切り記号と改行を空白に置き換える。
@@ -218,35 +292,114 @@ mod tests {
     }
 
     #[test]
-    fn truncates_each_file_at_800_chars_with_note() {
+    fn truncates_each_file_at_500_chars_with_note() {
         let long = "あ".repeat(900);
         let input = ChangeInput {
             files: vec![file("a.txt", Some(&long))],
         };
         let user = user_content(&input);
-        let body = "あ".repeat(800);
+        let body = "あ".repeat(500);
         assert!(user.contains(&format!("[a.txt]\n{body}\n{OMITTED_NOTE}\n")));
-        assert!(!user.contains(&"あ".repeat(801)));
+        assert!(!user.contains(&"あ".repeat(501)));
     }
 
     #[test]
-    fn total_diff_is_capped_at_3000_chars() {
+    fn only_top_three_files_by_diff_lines_get_bodies() {
+        // 差分の行数（空行を除く）: f0=1, f1=5, f2=3, f3=4, f4=2 → 本文は f1・f2・f3 だけ（表の順）
+        let lines = [1usize, 5, 3, 4, 2];
+        let files: Vec<ChangedFile> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| {
+                let text = (0..n).map(|k| format!("+ 行{k}\n")).collect::<String>();
+                file(&format!("f{i}.txt"), Some(&text))
+            })
+            .collect();
+        let user = user_content(&ChangeInput { files });
+        assert!(!user.contains("[f0.txt]"));
+        assert!(!user.contains("[f4.txt]"));
+        let f1 = user.find("[f1.txt]").unwrap();
+        let f2 = user.find("[f2.txt]").unwrap();
+        let f3 = user.find("[f3.txt]").unwrap();
+        assert!(f1 < f2 && f2 < f3, "表の順に並ぶこと");
+        // 表には全件の行が残る
+        assert!(user.contains("| 更新 | f0.txt |"));
+    }
+
+    #[test]
+    fn total_diff_is_capped_at_1500_chars_across_three_files() {
         let text = "い".repeat(800);
         let files: Vec<ChangedFile> = (0..10)
             .map(|i| file(&format!("f{i}.txt"), Some(&text)))
             .collect();
         let user = user_content(&ChangeInput { files });
-        let total: usize = user
+        // 差分の節だけを数える（末尾の指示文にも「い」が含まれるため）
+        let diffs = user
             .split("差分（抽出テキスト）:\n")
             .nth(1)
             .unwrap_or_default()
-            .chars()
-            .filter(|c| *c == 'い')
-            .count();
+            .split(USER_TAIL)
+            .next()
+            .unwrap_or_default();
+        let total: usize = diffs.chars().filter(|c| *c == 'い').count();
         assert_eq!(total, MAX_TOTAL_DIFF_CHARS);
-        // 予算を使い切った後のファイルは本文を含まず、省略の注記を 1 回だけ付ける
-        assert_eq!(user.matches(OMITTED_NOTE).count(), 2);
+        // 本文は同じ行数の先頭 3 件（表の順）。それぞれ 500 文字で切り、省略の注記を付ける
+        assert_eq!(user.matches(OMITTED_NOTE).count(), 3);
+        assert!(user.contains("[f0.txt]"));
+        assert!(user.contains("[f2.txt]"));
+        assert!(!user.contains("[f3.txt]"));
         assert!(!user.contains("[f9.txt]"));
+    }
+
+    #[test]
+    fn long_names_are_shortened_to_60_chars_with_ellipsis() {
+        let long = format!("{}.docx", "あ".repeat(70));
+        let input = ChangeInput {
+            files: vec![file(&long, None)],
+        };
+        let user = user_content(&input);
+        let short = format!("{}…", "あ".repeat(MAX_NAME_CHARS - 1));
+        assert!(user.contains(&format!("| 更新 | {short} | 段落 +1 / -0 |")));
+        assert!(!user.contains(&"あ".repeat(MAX_NAME_CHARS)));
+    }
+
+    #[test]
+    fn renamed_names_are_shortened_each() {
+        let long = "い".repeat(65);
+        let input = ChangeInput {
+            files: vec![ChangedFile {
+                kind: ChangeKind::Renamed,
+                name: format!("{long}_新"),
+                old_name: Some("短い旧名.docx".into()),
+                amount: None,
+                diff_text: None,
+            }],
+        };
+        let user = user_content(&input);
+        let new_short = format!("{}…", "い".repeat(MAX_NAME_CHARS - 1));
+        assert!(user.contains(&format!("| 名前変更 | 短い旧名.docx → {new_short} | - |")));
+    }
+
+    #[test]
+    fn user_message_ends_with_the_one_sentence_instruction() {
+        let files: Vec<ChangedFile> = (0..3).map(|i| file(&format!("f{i}.txt"), None)).collect();
+        let user = user_content(&ChangeInput { files });
+        assert!(user.trim_end().ends_with(USER_TAIL));
+    }
+
+    #[test]
+    fn system_prompt_asks_for_one_sentence_over_many_files() {
+        assert!(SYSTEM_PROMPT.contains("複数のファイルを変更したときも、全体を 1 文にまとめる"));
+    }
+
+    #[test]
+    fn short_name_keeps_names_at_the_limit_and_cuts_at_char_boundary() {
+        let exact = "あ".repeat(MAX_NAME_CHARS);
+        assert_eq!(short_name(&exact), exact);
+        let over = "𠀋".repeat(MAX_NAME_CHARS + 1);
+        let cut = short_name(&over);
+        assert_eq!(cut.chars().count(), MAX_NAME_CHARS);
+        assert!(cut.ends_with('…'));
     }
 
     #[test]
@@ -256,6 +409,22 @@ mod tests {
         assert!(user.contains("| 更新 | f29.txt |"));
         assert!(!user.contains("| 更新 | f30.txt |"));
         assert!(user.contains("ほか 3 件"));
+    }
+
+    #[test]
+    fn summary_line_counts_kinds_only_when_many_files() {
+        let mut files: Vec<ChangedFile> =
+            (0..6).map(|i| file(&format!("f{i}.txt"), None)).collect();
+        files[0].kind = ChangeKind::Added;
+        files[1].kind = ChangeKind::Deleted;
+        let user = user_content(&ChangeInput { files });
+        assert!(user.contains(
+            "件数: 追加 1 件、更新 4 件、削除 1 件
+"
+        ));
+        // 件数が少ないときは出さない
+        let few: Vec<ChangedFile> = (0..3).map(|i| file(&format!("f{i}.txt"), None)).collect();
+        assert!(!user_content(&ChangeInput { files: few }).contains("件数:"));
     }
 
     #[test]

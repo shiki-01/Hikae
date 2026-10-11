@@ -195,9 +195,13 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.aiRemoveModel(id));
 	},
 
-	async aiSuggestMemo(projectId: string) {
-		// 提案は失敗しても null を返す（バックエンドもエラーを返さない）
-		return commands.aiSuggestMemo(projectId);
+	async aiSuggestMemo(projectId: string, fresh: boolean) {
+		// 提案は失敗しても結果の `failure` で返す（バックエンドもエラーを返さない）
+		return commands.aiSuggestMemo(projectId, fresh);
+	},
+
+	async aiCancelSuggest() {
+		await commands.aiCancelSuggest();
 	},
 
 	async aiListOllamaModels(url: string) {

@@ -377,6 +377,8 @@ pub struct AppState {
     pub models_dir: PathBuf,
     /// モデル ID ごとの、ダウンロード・削除の直列化
     pub model_slots: Arc<ai::ModelSlots>,
+    /// 進行中の保存メモの提案（同時に 1 件。新しい要求は進行中の要求を取り消す）
+    pub suggest: core_llm::SuggestSlot,
     /// 拡張ホスト（組み込みの Office 抽出器を含む。設計書 11 章）。起動時に登録し、以後は読み取りだけ
     pub extensions: Arc<core_preview::ExtensionHost>,
 }
@@ -399,6 +401,7 @@ impl AppState {
             llm: Arc::new(tokio::sync::RwLock::new(llm)),
             models_dir,
             model_slots: Arc::new(ai::ModelSlots::default()),
+            suggest: core_llm::SuggestSlot::default(),
             extensions: Arc::new(extensions),
         }
     }
@@ -3479,6 +3482,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             ai::ai_cancel_download,
             ai::ai_remove_model,
             ai::ai_suggest_memo,
+            ai::ai_cancel_suggest,
             ai::ai_list_ollama_models,
             ai::ai_check_endpoint,
             ai::ai_test_generation,

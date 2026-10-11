@@ -15,8 +15,11 @@ use std::time::Duration;
 
 /// 応答本文の上限（バイト）
 pub(crate) const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-/// 生成の既定タイムアウト（設計 10.2）
-pub const DEFAULT_GENERATE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 生成の上限（設計 10.4。入力の収集・生成・検証を含む全体の上限。起動待ちは含めない）。
+/// 呼び出し側（app）が、残りの時間を `chat` の `timeout` として渡す
+pub const GENERATE_TIMEOUT: Duration = Duration::from_secs(90);
+/// モデル一覧（`/api/tags`）の上限
+const TAGS_TIMEOUT: Duration = Duration::from_secs(30);
 
 const TEMPERATURE: f64 = 0.2;
 const TOP_P: f64 = 0.9;
@@ -79,6 +82,19 @@ fn is_loopback(url: &Url) -> bool {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct Usage {
+    prompt_tokens: Option<u64>,
+}
+
+/// 生成の結果。`prompt_tokens` は入力のトークン数（サーバーが返した場合だけ）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatOutput {
+    pub content: String,
+    pub prompt_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -152,7 +168,6 @@ impl ChatClient {
     }
 
     /// `POST {base}/v1/chat/completions` を呼び、最初の選択肢の本文を返す。
-    /// 生成条件は設計 10.4 と評価レポートに従う（temperature 0.2、top_p 0.9、max_tokens 100、stream なし、thinking 無効）。
     pub async fn chat(
         &self,
         base_url: &str,
@@ -160,6 +175,23 @@ impl ChatClient {
         messages: &[Message],
         timeout: Duration,
     ) -> Result<String, LlmError> {
+        self.chat_with_usage(base_url, model, messages, timeout)
+            .await
+            .map(|out| out.content)
+    }
+
+    /// `chat` と同じ呼び出しで、入力のトークン数も返す（評価・計測用）。
+    ///
+    /// 生成条件は設計 10.4 と評価レポートに従う（temperature 0.2、top_p 0.9、max_tokens 100、stream なし、thinking 無効）。
+    /// `timeout` は HTTP 要求の上限。呼び出し側が future を破棄すると、接続は切れる
+    /// （ただし llama-server は切断では処理を止めない。実測は `docs/notes/phase2-llm-evaluation.md` の 9 節）。
+    pub async fn chat_with_usage(
+        &self,
+        base_url: &str,
+        model: &str,
+        messages: &[Message],
+        timeout: Duration,
+    ) -> Result<ChatOutput, LlmError> {
         let body = serde_json::json!({
             "model": model,
             "messages": messages,
@@ -185,13 +217,18 @@ impl ChatClient {
         let raw = read_limited(response).await?;
         let parsed: ChatResponse =
             serde_json::from_slice(&raw).map_err(|_| LlmError::BadResponse)?;
-        parsed
+        let prompt_tokens = parsed.usage.and_then(|u| u.prompt_tokens);
+        let content = parsed
             .choices
             .into_iter()
             .next()
             .and_then(|c| c.message)
             .and_then(|m| m.content)
-            .ok_or(LlmError::BadResponse)
+            .ok_or(LlmError::BadResponse)?;
+        Ok(ChatOutput {
+            content,
+            prompt_tokens,
+        })
     }
 }
 
@@ -201,7 +238,7 @@ pub async fn list_ollama_models(base_url: &str) -> Result<Vec<String>, LlmError>
     let http = http_client()?;
     let response = http
         .get(format!("{}/api/tags", endpoint.base_url))
-        .timeout(DEFAULT_GENERATE_TIMEOUT)
+        .timeout(TAGS_TIMEOUT)
         .send()
         .await
         .map_err(map_request_error)?;

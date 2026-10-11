@@ -5,7 +5,7 @@
 
 use core_llm::{
     check_endpoint, Backend, ChangeInput, ChangeKind, ChangedFile, LlamaServer, LlamaServerOptions,
-    LlmError, LlmService, ServiceConfig,
+    LlmError, LlmService, ServiceConfig, GENERATE_TIMEOUT,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -51,7 +51,11 @@ async fn empty_input_returns_none_without_starting_anything() {
     let service =
         LlmService::with_options(config(dir.path(), Backend::Builtin), fake_options()).unwrap();
     let out = service
-        .suggest(&ChangeInput { files: vec![] }, "gemma-4-e2b-it-q4_k_m")
+        .suggest(
+            &ChangeInput { files: vec![] },
+            "gemma-4-e2b-it-q4_k_m",
+            GENERATE_TIMEOUT,
+        )
         .await
         .unwrap();
     assert_eq!(out, None);
@@ -64,16 +68,20 @@ async fn builtin_without_installed_model_is_reported() {
         LlmService::with_options(config(dir.path(), Backend::Builtin), fake_options()).unwrap();
     assert_eq!(
         service
-            .suggest(&one_file_input(), "gemma-4-e2b-it-q4_k_m")
+            .suggest(&one_file_input(), "gemma-4-e2b-it-q4_k_m", GENERATE_TIMEOUT)
             .await,
         Err(LlmError::ModelNotInstalled)
     );
     assert_eq!(
-        service.suggest(&one_file_input(), "no-such-model").await,
+        service
+            .suggest(&one_file_input(), "no-such-model", GENERATE_TIMEOUT)
+            .await,
         Err(LlmError::UnknownModel)
     );
     assert_eq!(
-        service.suggest(&one_file_input(), "").await,
+        service
+            .suggest(&one_file_input(), "", GENERATE_TIMEOUT)
+            .await,
         Err(LlmError::InvalidModel)
     );
     assert_eq!(service.is_model_ready("gemma-4-e2b-it-q4_k_m"), Ok(false));
@@ -99,7 +107,7 @@ async fn ollama_backend_returns_validated_sentence() {
     )
     .unwrap();
     let out = service
-        .suggest(&one_file_input(), "fake-model")
+        .suggest(&one_file_input(), "fake-model", GENERATE_TIMEOUT)
         .await
         .unwrap();
     assert_eq!(out.as_deref(), Some("保存メモです。"));
@@ -126,7 +134,9 @@ async fn ollama_connection_failure_is_an_error() {
     )
     .unwrap();
     assert_eq!(
-        service.suggest(&one_file_input(), "fake-model").await,
+        service
+            .suggest(&one_file_input(), "fake-model", GENERATE_TIMEOUT)
+            .await,
         Err(LlmError::Network)
     );
 }
@@ -159,4 +169,39 @@ async fn set_backend_rejects_userinfo_and_reports_external_host() {
             base_url: "http://192.168.1.20:11434".into()
         }
     );
+}
+
+#[tokio::test]
+async fn timeout_is_applied_per_call() {
+    // 応答が 2 秒遅れる偽サーバーを接続先にし、呼び出しごとの上限が効くことを確かめる
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("slow-chat.gguf");
+    std::fs::write(&model, b"fake").unwrap();
+    let server = LlamaServer::new(fake_options()).unwrap();
+    let base = server.ensure_started(&model).await.unwrap();
+
+    let service = LlmService::with_options(
+        config(
+            dir.path(),
+            Backend::Ollama {
+                base_url: base.clone(),
+            },
+        ),
+        fake_options(),
+    )
+    .unwrap();
+    // 上限が短ければ時間切れになる
+    let err = service
+        .suggest(&one_file_input(), "fake-model", Duration::from_millis(300))
+        .await
+        .unwrap_err();
+    assert_eq!(err, LlmError::Timeout);
+    // 上限が十分なら結果が返る（同じサーバーのまま）
+    let out = service
+        .suggest(&one_file_input(), "fake-model", Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(out.as_deref(), Some("保存メモです。"));
+
+    server.stop().await;
 }

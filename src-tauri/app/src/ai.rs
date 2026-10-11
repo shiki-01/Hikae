@@ -1,10 +1,15 @@
 // ローカル LLM（設計書 10 章）の app 層。
 //
 // - モデルのカタログ、導入状態、導入できる理由（メモリ・空き容量）、ダウンロード・中止・削除
-// - 保存メモの提案（`ai_suggest_memo`）、接続先の確認、生成の試行（設定の「試す」）
+// - 保存メモの提案（`ai_suggest_memo`・`ai_cancel_suggest`）、接続先の確認、生成の試行（設定の「試す」）
+// - 提案はボタンで開始する。結果が得られない理由（未導入・Ollama 未接続・時間切れ・検証不合格・取り消し）は
+//   `SuggestFailure` で返し、画面がその理由に応じた文言を出す
+// - 提案の上限は `GENERATE_TIMEOUT`（90 秒）の 1 つ。入力の収集の時間を差し引いた残りを生成に渡す。内蔵の起動待ちは別枠
+// - 同時に走らせる提案は 1 件（`core_llm::SuggestSlot`）。新しい要求は進行中の要求を取り消す。切断しても llama-server は
+//   生成を続け、次の要求が待たされる（実測で最大 17 秒）ため、取り消し・時間切れのときは llama-server を止める
+//   （次の要求で起動し直す。新しい要求が始まっていれば止めない）
 // - 提案は読み取りだけ。作業フォルダ・インデックス・refs には書かない。モデルの保存先はアプリのデータフォルダだけ
-// - 提案が得られない理由（未導入・Ollama 未接続・タイムアウト・検証不合格）は画面に出さず `None` を返す。
-//   理由を返すのは設定の「試す」（`ai_test_generation`）だけ（E19）
+// - 設定の「試す」（`ai_test_generation`）だけ、失敗の理由を画面に出す（E19）
 // - ダウンロードと削除は、モデル ID ごとに同時に 1 つだけ（`ModelSlots`）
 // - ログ・エラーに、パス・ファイルの内容・トークンを出さない
 
@@ -15,7 +20,7 @@ use core_llm::{
     cache_key, cell_amount, cell_line, change_input, check_endpoint, installed, list_ollama_models,
     paragraph_amount, signed_line, stage_availability, text_amount, Backend, CatalogEntry,
     ChangeInput, ChangeKind, Downloader, Installed, LlmError, Reason, ServiceConfig, SourceChange,
-    SystemInfo,
+    SuggestFailure, SystemInfo, GENERATE_TIMEOUT,
 };
 use core_ops::{ChangedKind, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES};
 use core_preview::{office_kind, ExtensionHost, OfficeKind};
@@ -27,13 +32,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 use tokio_util::sync::CancellationToken;
 
-/// 提案の全体の上限。内蔵の起動の上限（120 秒）と生成の上限（30 秒）を足したもの
-const SUGGEST_TIMEOUT: Duration = Duration::from_secs(150);
 /// 提案に渡す変更ファイルの上限（これより後ろは渡さない）
 const MAX_INPUT_FILES: usize = 100;
 /// 進捗イベントを出す間隔（バイト）。1 MiB ごと、および完了時
@@ -149,6 +152,29 @@ pub struct GenerationTest {
     pub ok: bool,
     /// 失敗のときの理由
     pub reason: Option<TestFailure>,
+}
+
+/// 保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SuggestResult {
+    pub text: Option<String>,
+    pub failure: Option<SuggestFailure>,
+}
+
+impl SuggestResult {
+    fn ok(text: String) -> Self {
+        Self {
+            text: Some(text),
+            failure: None,
+        }
+    }
+
+    fn failed(failure: SuggestFailure) -> Self {
+        Self {
+            text: None,
+            failure: Some(failure),
+        }
+    }
 }
 
 // ========== ダウンロード・削除の直列化 ==========
@@ -543,22 +569,53 @@ pub async fn ai_remove_model(state: State<'_, AppState>, id: String) -> Result<(
 
 // ========== 保存メモの提案 ==========
 
-/// 保存メモの提案を 1 文返す（読み取りのみ）。
+/// 保存メモの提案を 1 文作る（読み取りのみ）。ボタンを押したときだけ呼ばれる。
 ///
-/// 次の場合は `None`（エラーは出さない）: 提案が無効、モデルが選ばれていない、変更がない、
-/// 内蔵モデルが未導入、Ollama に接続できない、タイムアウト、検証で弾かれた。
+/// `fresh` が偽なら、同じ入力の保存済みの結果を返す。真なら保存済みの結果を使わずに作り直し、結果で上書きする。
+/// 進行中の要求があれば取り消してから始める（同時に走らせる提案は 1 件）。
 #[tauri::command]
 #[specta::specta]
-pub async fn ai_suggest_memo(app: AppHandle, project_id: String) -> Option<String> {
-    // 戻り値を `Option` にするため、状態は引数で借りず、ハンドルから取り出す
+pub async fn ai_suggest_memo(app: AppHandle, project_id: String, fresh: bool) -> SuggestResult {
+    // 戻り値を `SuggestResult` にするため、状態は引数で借りず、ハンドルから取り出す
     let state = app.state::<AppState>();
-    suggest_for_project(&state, project_id).await.ok().flatten()
+    let (seq, cancel) = state.suggest.begin();
+    let outcome = match cancel
+        .run_until_cancelled(suggest_for_project(&state, project_id, fresh))
+        .await
+    {
+        Some(result) => result,
+        None => Err(SuggestFailure::Cancelled),
+    };
+    let latest = state.suggest.finish(seq);
+    // 取り消し・時間切れのとき、llama-server は切断しても生成を続け、次の要求が待たされる（実測で最大 17 秒）。
+    // 止めれば次の要求は起動し直すだけ（3〜6 秒）で済む。新しい要求が始まっていれば、それが使うため止めない
+    if latest
+        && matches!(
+            outcome,
+            Err(SuggestFailure::Cancelled | SuggestFailure::Timeout)
+        )
+    {
+        state.llm.read().await.stop().await;
+    }
+    match outcome {
+        Ok(text) => SuggestResult::ok(text),
+        Err(failure) => SuggestResult::failed(failure),
+    }
+}
+
+/// 進行中の保存メモの提案を取り消す。進行中の要求の側が、後始末として llama-server を止める
+/// （`ai_suggest_memo`）。進行中が無ければ何もしない。
+#[tauri::command]
+#[specta::specta]
+pub fn ai_cancel_suggest(state: State<'_, AppState>) {
+    state.suggest.cancel_current();
 }
 
 async fn suggest_for_project(
     state: &AppState,
     project_id: String,
-) -> Result<Option<String>, AppError> {
+    fresh: bool,
+) -> Result<String, SuggestFailure> {
     let store = state.store_clone();
     let (settings, repo) = run_blocking(move || {
         // 有効・無効（memo_suggestion）はプロジェクト別に上書きできるため、そのプロジェクトの実効値を使う
@@ -571,14 +628,18 @@ async fn suggest_for_project(
         let project = load_project(&store, &project_id)?;
         Ok((settings, project.path))
     })
-    .await?;
+    .await
+    .map_err(|_| SuggestFailure::Unavailable)?;
     if settings.memo_suggestion != MemoSuggestion::Ai || settings.ai_model.is_empty() {
-        return Ok(None);
+        return Err(SuggestFailure::NotReady);
     }
     let model = settings.ai_model.clone();
-    apply_backend(&state.llm, &settings).await?;
+    let ollama = settings.ai_runner == AiRunner::Ollama;
+    apply_backend(&state.llm, &settings)
+        .await
+        .map_err(|_| SuggestFailure::NotReady)?;
 
-    // 内蔵のモデルは導入済みのものだけ使う（未導入なら何もしない）
+    // 内蔵のモデルは導入済みのものだけ使う（未導入なら準備ができていない）
     let ready = {
         let llm = state.llm.read().await;
         match llm.backend() {
@@ -587,47 +648,67 @@ async fn suggest_for_project(
         }
     };
     if !ready {
-        return Ok(None);
+        return Err(SuggestFailure::NotReady);
     }
 
     // 接続先が外部ホストの Ollama のときは、ファイルの内容（差分の本文）を外へ送らない
     // （設計書 10.5 のプライバシー）。ファイル名と変更の種類だけを渡す
-    let external_ollama = settings.ai_runner == AiRunner::Ollama
-        && check_endpoint(&settings.ai_ollama_url).is_ok_and(|e| e.external_host);
+    let external_ollama =
+        ollama && check_endpoint(&settings.ai_ollama_url).is_ok_and(|e| e.external_host);
     let scope = if external_ollama {
         AiScope::FileNames
     } else {
         settings.ai_scope
     };
+
+    // 上限（90 秒）は入力の収集から始まる。内蔵の起動待ちは別枠
+    let started = Instant::now();
     let extensions = state.extensions.clone();
-    let input = run_blocking(move || collect_input(&extensions, &repo, scope)).await?;
+    let input = tokio::time::timeout(
+        GENERATE_TIMEOUT,
+        run_blocking(move || collect_input(&extensions, &repo, scope)),
+    )
+    .await
+    .map_err(|_| SuggestFailure::Timeout)?
+    .map_err(|_| SuggestFailure::Unavailable)?;
     if input.files.is_empty() {
-        return Ok(None);
+        return Err(SuggestFailure::NotReady);
     }
     let key = cache_key(&input, &model);
 
-    let store = state.store_clone();
-    let lookup_key = key.clone();
-    if let Some(hit) = run_blocking(move || cached_message(&store, &lookup_key)).await? {
-        return Ok(Some(hit));
+    if !fresh {
+        let store = state.store_clone();
+        let lookup_key = key.clone();
+        // キャッシュの読み取りの失敗は、作り直しで扱う（提案の成否に影響させない）
+        if let Ok(Some(hit)) = run_blocking(move || cached_message(&store, &lookup_key)).await {
+            return Ok(hit);
+        }
     }
 
-    let text = {
+    // 生成の上限は、入力の収集の時間を差し引いた残り
+    let budget = GENERATE_TIMEOUT.saturating_sub(started.elapsed());
+    if budget.is_zero() {
+        return Err(SuggestFailure::Timeout);
+    }
+    let generated = {
         let llm = state.llm.read().await;
-        match tokio::time::timeout(SUGGEST_TIMEOUT, llm.suggest(&input, &model)).await {
-            Ok(Ok(Some(text))) => text,
-            _ => return Ok(None),
-        }
+        llm.suggest(&input, &model, budget).await
     };
+    let text = match generated {
+        Ok(Some(text)) => text,
+        Ok(None) => return Err(SuggestFailure::Invalid),
+        Err(e) => return Err(core_llm::failure_of(e, ollama)),
+    };
+
     let store = state.store_clone();
     let stored = text.clone();
-    // キャッシュへの保存の失敗は提案の成否に影響させない
+    // 結果は上書きで保存する（作り直しの結果も次回から使う）。保存の失敗は提案の成否に影響させない
     let _ = run_blocking(move || {
         store_message(&store, &key, &model, &stored);
         Ok(())
     })
     .await;
-    Ok(Some(text))
+    Ok(text)
 }
 
 fn cached_message(store: &Arc<Mutex<Store>>, key: &str) -> Result<Option<String>, AppError> {
@@ -821,11 +902,10 @@ pub async fn ai_test_generation(app: AppHandle) -> GenerationTest {
     }
     let model = settings.ai_model.clone();
     let llm = state.llm.read().await;
-    match tokio::time::timeout(SUGGEST_TIMEOUT, llm.suggest(&test_input(), &model)).await {
-        Err(_) => failed(TestFailure::Timeout),
-        Ok(Err(e)) => failed(test_failure_of(e)),
-        Ok(Ok(None)) => failed(TestFailure::Rejected),
-        Ok(Ok(Some(_))) => GenerationTest {
+    match llm.suggest(&test_input(), &model, GENERATE_TIMEOUT).await {
+        Err(e) => failed(test_failure_of(e)),
+        Ok(None) => failed(TestFailure::Rejected),
+        Ok(Some(_)) => GenerationTest {
             ok: true,
             reason: None,
         },

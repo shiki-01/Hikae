@@ -1173,6 +1173,19 @@ const messages = {
 	'mock.remote.novel': '小説の原稿',
 	'mock.remote.minutes': 'ゼミの議事録',
 	'save_bar.ai_use': '提案をメモに入れる',
+	'save_bar.ai_request': '提案を作る',
+	'save_bar.ai_cancel': '中止',
+	'save_bar.ai_regenerate': '作り直す',
+	'save_bar.ai_retry': 'もう一度',
+	'save_bar.ai_use_button': '使う',
+	'save_bar.ai_failed.timeout':
+		'提案を作れませんでした（時間がかかりすぎました）。変更は無事です。',
+	'save_bar.ai_failed.invalid':
+		'提案を作れませんでした（出力が検査で採用されませんでした）。変更は無事です。',
+	'save_bar.ai_failed.not-ready':
+		'提案を作れませんでした（AI の準備ができていません。設定の AI を確かめてください）。変更は無事です。',
+	'save_bar.ai_failed.unavailable':
+		'提案を作れませんでした（AI を起動できませんでした）。変更は無事です。',
 	'ai.intro': 'AI は、この PC の中だけで動きます。ファイルの内容は外に出ません。',
 	'ai.enabled': '保存メモを AI で提案する',
 	'ai.enabled_text': 'オフのときは、ルールに従ったメモだけを提案します。',

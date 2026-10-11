@@ -14,10 +14,13 @@ pub mod prompt;
 pub mod requirements;
 pub mod service;
 pub mod sidecar;
+pub mod suggestion;
 pub mod validate;
 
 pub use catalog::{Catalog, CatalogEntry, CatalogError};
-pub use client::{check_endpoint, list_ollama_models, Backend, ChatClient, Endpoint};
+pub use client::{
+    check_endpoint, list_ollama_models, Backend, ChatClient, ChatOutput, Endpoint, GENERATE_TIMEOUT,
+};
 pub use download::{installed, is_allowed_url, remove, DownloadError, Downloader, Installed};
 pub use error::LlmError;
 pub use input::{
@@ -28,4 +31,5 @@ pub use prompt::{build_messages, ChangeInput, ChangeKind, ChangedFile, Message, 
 pub use requirements::{required_disk_bytes, stage_availability, Availability, Reason, SystemInfo};
 pub use service::{LlmService, ServiceConfig};
 pub use sidecar::{Clock, LlamaServer, LlamaServerOptions, SystemClock};
-pub use validate::clean_summary;
+pub use suggestion::{failure_of, SuggestFailure, SuggestSlot};
+pub use validate::{clean_summary, clean_summary_detail, Cleaned};
