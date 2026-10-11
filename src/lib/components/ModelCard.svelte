@@ -5,6 +5,8 @@
 		formatBytes,
 		modelButtons,
 		progressPercent,
+		stageLevelKey,
+		stageNoteKey,
 		unavailableMessage,
 		type ModelAction
 	} from '#lib/features/ai/model-view.js';
@@ -34,6 +36,8 @@
 	}: Props = $props();
 
 	const buttons = $derived(modelButtons(model, selected));
+	/** 段階 1 だけ、内容の理解が限定的であることの説明を出す */
+	const stageNote = $derived(stageNoteKey(model.stage));
 	const unavailable = $derived(
 		model.unavailableReason ? unavailableMessage(model.unavailableReason) : null
 	);
@@ -67,10 +71,13 @@
 	</div>
 
 	<p class="m:0 type-small fg:fg-muted">
-		{t('ai.stage', { stage: model.stage })} ・ {t('ai.size', {
+		{t('ai.stage', { stage: model.stage, level: t(stageLevelKey(model.stage)) })} ・ {t('ai.size', {
 			size: formatBytes(model.sizeBytes)
 		})} ・ {t('ai.memory_need', { memory: formatBytes(model.minMemoryBytes) })}
 	</p>
+	{#if stageNote}
+		<p class="m:0 type-small fg:fg-muted">{t(stageNote)}</p>
+	{/if}
 	<p class="m:0 type-small fg:fg-muted">{t('ai.license', { name: model.licenseName })}</p>
 
 	{#if progress}

@@ -284,9 +284,21 @@ describe('設定の変換', () => {
 			memoSuggestion: 'rules',
 			aiRunner: 'builtin',
 			aiModel: '',
+			aiModelSource: 'catalog',
+			aiCustomGgufPath: '',
 			aiScope: 'text-diff',
 			aiOllamaUrl: 'http://localhost:11434'
 		});
+	});
+
+	it('入手元と GGUF のパスを、設定の名前で受け取る（バックエンドの名前との対応）', () => {
+		const mapped = mapSettings({
+			...backend,
+			ai_model_source: 'custom-gguf' as const,
+			ai_custom_gguf_path: 'C:\\models\\mine.gguf'
+		});
+		expect(mapped.aiModelSource).toBe('custom-gguf');
+		expect(mapped.aiCustomGgufPath).toBe('C:\\models\\mine.gguf');
 	});
 
 	it('上書きしている項目のキー名を画面側の名前に戻し、扱わない項目は除く', () => {

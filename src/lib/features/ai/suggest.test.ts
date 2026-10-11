@@ -38,7 +38,13 @@ function catalog(status: AiModel['status']): AiCatalog {
 	};
 }
 
-const aiOn = { memoSuggestion: 'ai', aiRunner: 'builtin', aiModel: 'gemma' } as const;
+const aiOn = {
+	memoSuggestion: 'ai',
+	aiRunner: 'builtin',
+	aiModel: 'gemma',
+	aiModelSource: 'catalog',
+	aiCustomGgufPath: ''
+} as const;
 
 function ok(text: string): AiSuggestion {
 	return { text, failure: null };
@@ -73,6 +79,23 @@ describe('提案の機能が使えるか', () => {
 		expect(aiSuggestionReady(aiOn, catalog('ready'))).toBe(true);
 		expect(aiSuggestionReady(aiOn, catalog('missing'))).toBe(false);
 		expect(aiSuggestionReady(aiOn, undefined)).toBe(false);
+	});
+
+	it('自分で用意した GGUF は、パスが入っていれば使える（カタログの導入状態は見ない）', () => {
+		const custom = {
+			...aiOn,
+			aiModelSource: 'custom-gguf',
+			aiCustomGgufPath: 'C:\\models\\mine.gguf'
+		} as const;
+		expect(aiSuggestionReady(custom, catalog('missing'))).toBe(true);
+		expect(aiSuggestionReady(custom, undefined)).toBe(true);
+		expect(aiSuggestionReady({ ...custom, aiCustomGgufPath: '' }, catalog('ready'))).toBe(false);
+	});
+
+	it('Ollama はモデル名があれば使える（入手元の設定には関係しない）', () => {
+		const ollama = { ...aiOn, aiRunner: 'ollama', aiModel: 'gemma3:4b' } as const;
+		expect(aiSuggestionReady(ollama, undefined)).toBe(true);
+		expect(aiSuggestionReady({ ...ollama, aiModel: '' }, undefined)).toBe(false);
 	});
 
 	it('Ollama は接続の確かめを生成のときに行うため、ここでは見ない', () => {

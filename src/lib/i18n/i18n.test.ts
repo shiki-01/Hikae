@@ -60,7 +60,8 @@ describe('i18n', () => {
 			'needed',
 			'have',
 			'received',
-			'stage'
+			'stage',
+			'level'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

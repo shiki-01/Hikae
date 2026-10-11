@@ -17,14 +17,22 @@ export function changesKey(changes: Change[]): string {
 /**
  * 提案の機能が使える状態か。
  * 提案が「AI を使う」以外、モデルが未選択、内蔵のモデルが導入済みでない場合は使わない。
+ * 内蔵で自分で用意した GGUF を使うときは、パスが入っていれば使える扱いにする（検査は生成のときに行う）。
  * Ollama は接続の成否を生成のときに確かめるため、ここでは接続先を見ない。
  */
 export function aiSuggestionReady(
-	settings: Pick<AppSettings, 'memoSuggestion' | 'aiRunner' | 'aiModel'> | undefined,
+	settings:
+		| Pick<
+				AppSettings,
+				'memoSuggestion' | 'aiRunner' | 'aiModel' | 'aiModelSource' | 'aiCustomGgufPath'
+		  >
+		| undefined,
 	catalog: AiCatalog | undefined
 ): boolean {
-	if (!settings || settings.memoSuggestion !== 'ai' || settings.aiModel === '') return false;
-	if (settings.aiRunner === 'ollama') return true;
+	if (!settings || settings.memoSuggestion !== 'ai') return false;
+	if (settings.aiRunner === 'ollama') return settings.aiModel !== '';
+	if (settings.aiModelSource === 'custom-gguf') return settings.aiCustomGgufPath !== '';
+	if (settings.aiModel === '') return false;
 	const model = catalog?.models.find((m) => m.id === settings.aiModel);
 	return model?.status === 'ready';
 }

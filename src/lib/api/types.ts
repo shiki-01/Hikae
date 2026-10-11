@@ -588,8 +588,30 @@ export type AiTestFailure =
 	| 'bad-status'
 	| 'bad-response'
 	| 'invalid-endpoint'
+	| 'custom-invalid'
 	| 'rejected'
 	| 'other';
+
+/** 内蔵のモデルの入手元 */
+export type AiModelSource = 'catalog' | 'custom-gguf';
+
+/** カスタム GGUF の検査が拒否した理由（パス・内容は含まない） */
+export type CustomGgufReason =
+	| 'empty'
+	| 'control-char'
+	| 'not-found'
+	| 'link'
+	| 'not-a-file'
+	| 'wrong-extension'
+	| 'too-large'
+	| 'not-gguf'
+	| 'unreadable';
+
+/** カスタム GGUF の検査の結果 */
+export interface AiCustomGgufCheck {
+	ok: boolean;
+	reason: CustomGgufReason | null;
+}
 
 /** 生成の試行の結果 */
 export interface AiTestResult {
@@ -625,6 +647,10 @@ export interface AppSettings {
 	aiRunner: AiRunnerMode;
 	/** 使用するモデル（内蔵はカタログの ID、Ollama はモデル名）。空は未選択 */
 	aiModel: string;
+	/** 内蔵のモデルの入手元（カタログ、または自分で用意した GGUF） */
+	aiModelSource: AiModelSource;
+	/** 自分で用意した GGUF ファイルのパス（入手元が `custom-gguf` のとき）。空は未指定 */
+	aiCustomGgufPath: string;
 	/** AI に渡す範囲 */
 	aiScope: AiScopeMode;
 	/** Ollama の接続先 URL */
@@ -689,6 +715,8 @@ export interface ProjectApi {
 	pickFolder(): Promise<string | null>;
 	/** ファイル選択（アプリ上のみ実パスを得られる）。キャンセル時は null */
 	pickFiles(): Promise<string[] | null>;
+	/** 自分で用意した GGUF ファイルを 1 つ選ぶ（キャンセルは null） */
+	pickGgufFile(): Promise<string | null>;
 	/** GitHub から取得する場合、`onProgress` に取得の段階が通知される */
 	addProject(
 		input: AddProjectInput,
@@ -827,6 +855,8 @@ export interface ProjectApi {
 	aiCheckEndpoint(url: string): Promise<AiEndpointCheck>;
 	/** 固定の入力で生成を試す（結果は保存しない） */
 	aiTestGeneration(): Promise<AiTestResult>;
+	/** 自分で用意した GGUF ファイルを検査する（読み取りのみ。パスは返さない） */
+	aiCheckCustomGguf(path: string): Promise<AiCustomGgufCheck>;
 	/** ダウンロードの通知を購読する。戻り値は購読の解除 */
 	onAiDownload(listener: (notice: AiDownloadNotice) => void): () => void;
 }

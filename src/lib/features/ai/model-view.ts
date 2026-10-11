@@ -1,5 +1,10 @@
 // AI モデルの表示と操作の判定（純関数）。文言は i18n キーで返し、画面で t() に通す。
-import type { AiModel, AiUnavailableReason } from '#lib/api/types.js';
+import type {
+	AiModel,
+	AiScopeMode,
+	AiUnavailableReason,
+	CustomGgufReason
+} from '#lib/api/types.js';
 import type { MessageKey, MessageParams } from '#lib/i18n/index.js';
 
 const GB = 1024 ** 3;
@@ -34,6 +39,29 @@ export function unavailableMessage(reason: AiUnavailableReason): {
 		key: 'ai.unavailable_disk',
 		params: { needed: formatBytes(reason.needed), have: formatBytes(reason.have) }
 	};
+}
+
+/** 段階の名前（軽量・標準）の文言キー。段階 1 は軽量、段階 2 以上は標準（設計 10.2） */
+export function stageLevelKey(stage: number): MessageKey {
+	return stage <= 1 ? 'ai.level_light' : 'ai.level_standard';
+}
+
+/** 段階 1 の説明の文言キー（段階 1 のときだけ） */
+export function stageNoteKey(stage: number): MessageKey | null {
+	return stage === 1 ? 'ai.stage_light_note' : null;
+}
+
+/**
+ * AI に渡す範囲の注意（段階 1 のモデルで「テキスト差分まで」のときだけ、「ファイル名まで」を勧める）。
+ * 勧めるだけで、利用者が選ぶことは妨げない。
+ */
+export function scopeHintKey(stage: number | null, scope: AiScopeMode): MessageKey | null {
+	return stage === 1 && scope === 'text-diff' ? 'ai.scope_light_hint' : null;
+}
+
+/** カスタム GGUF の検査の理由の文言キー */
+export function customGgufMessageKey(reason: CustomGgufReason): MessageKey {
+	return `ai.custom_reason.${reason}` as MessageKey;
 }
 
 /** モデルの行の操作 */

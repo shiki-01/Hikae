@@ -691,6 +691,8 @@ export const SETTING_BACKEND_KEYS = {
 	memoSuggestion: 'memo_suggestion',
 	aiRunner: 'ai_runner',
 	aiModel: 'ai_model',
+	aiModelSource: 'ai_model_source',
+	aiCustomGgufPath: 'ai_custom_gguf_path',
 	aiScope: 'ai_scope',
 	aiOllamaUrl: 'ai_ollama_url'
 } as const satisfies Record<SettingKey, keyof BackendSettings>;
@@ -713,6 +715,8 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		memoSuggestion: settings.memo_suggestion,
 		aiRunner: settings.ai_runner,
 		aiModel: settings.ai_model,
+		aiModelSource: settings.ai_model_source,
+		aiCustomGgufPath: settings.ai_custom_gguf_path,
 		aiScope: settings.ai_scope,
 		aiOllamaUrl: settings.ai_ollama_url
 	};

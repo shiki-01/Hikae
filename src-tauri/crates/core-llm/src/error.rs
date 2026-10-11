@@ -46,4 +46,7 @@ pub enum LlmError {
 
     #[error("ファイル操作に失敗しました")]
     Io,
+
+    #[error("自分で用意したモデルファイルが使えません")]
+    CustomModelInvalid,
 }

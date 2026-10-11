@@ -18,15 +18,15 @@ use crate::office::{self, ParagraphRow};
 use crate::{git_runner, load_project, run_blocking, AppError, AppState};
 use core_llm::{
     cache_key, cell_amount, cell_line, change_input, check_endpoint, installed, list_ollama_models,
-    paragraph_amount, signed_line, stage_availability, text_amount, Backend, CatalogEntry,
-    ChangeInput, ChangeKind, Downloader, Installed, LlmError, Reason, ServiceConfig, SourceChange,
-    SuggestFailure, SystemInfo, GENERATE_TIMEOUT,
+    paragraph_amount, signed_line, stage_availability, text_amount, validate_custom_gguf, Backend,
+    CatalogEntry, ChangeInput, ChangeKind, CustomGgufError, Downloader, Installed, LlmError,
+    ModelChoice, Reason, ServiceConfig, SourceChange, SuggestFailure, SystemInfo, GENERATE_TIMEOUT,
 };
 use core_ops::{ChangedKind, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES};
 use core_preview::{office_kind, ExtensionHost, OfficeKind};
 use core_store::{
-    now_rfc3339, AiRunner, AiScope, AppSettings, LlmModelRecord, MemoSuggestion, SettingsPatch,
-    Store,
+    now_rfc3339, AiModelSource, AiRunner, AiScope, AppSettings, LlmModelRecord, MemoSuggestion,
+    SettingsPatch, Store,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,10 +140,45 @@ pub enum TestFailure {
     BadResponse,
     /// 接続先の URL が正しくない
     InvalidEndpoint,
+    /// 自分で用意した GGUF ファイルが使えない（存在・形式・サイズの検査で拒否された）
+    CustomInvalid,
     /// 生成されたが検証で弾かれた
     Rejected,
     /// そのほか
     Other,
+}
+
+/// カスタム GGUF の検査が拒否した理由（画面が文言を選ぶ。パス・ファイルの内容は返さない）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum CustomGgufReason {
+    /// パスが空
+    Empty,
+    /// パスに使えない文字がある
+    ControlChar,
+    /// ファイルが見つからない
+    NotFound,
+    /// リンクは使えない
+    Link,
+    /// ファイルではない（フォルダなど）
+    NotAFile,
+    /// 拡張子が .gguf ではない
+    WrongExtension,
+    /// 12GB を超える
+    TooLarge,
+    /// GGUF の形式ではない
+    NotGguf,
+    /// 読めない（権限など）
+    Unreadable,
+}
+
+/// カスタム GGUF の検査の結果（読み取りのみ）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub struct CustomGgufCheck {
+    /// 使える
+    pub ok: bool,
+    /// 使えないときの理由
+    pub reason: Option<CustomGgufReason>,
 }
 
 /// 生成の試行の結果
@@ -292,6 +327,56 @@ pub(crate) async fn apply_backend(
         .set_backend(want)
         .await
         .map_err(|e| llm_error("llm_backend_failed", e))
+}
+
+/// 設定から提案に使うモデルの指定を決める（判定は `core_llm::ModelChoice` が行う）。
+/// 指定が空（未選択・パス未入力）なら `None`
+fn model_choice(settings: &AppSettings) -> Option<ModelChoice> {
+    ModelChoice::from_parts(
+        settings.ai_runner == AiRunner::Ollama,
+        settings.ai_model_source == AiModelSource::CustomGguf,
+        &settings.ai_model,
+        &settings.ai_custom_gguf_path,
+    )
+}
+
+/// カスタム GGUF の検査エラーを画面の理由に変える
+fn custom_reason(e: CustomGgufError) -> CustomGgufReason {
+    match e {
+        CustomGgufError::Empty => CustomGgufReason::Empty,
+        CustomGgufError::ControlChar => CustomGgufReason::ControlChar,
+        CustomGgufError::NotFound => CustomGgufReason::NotFound,
+        CustomGgufError::Link => CustomGgufReason::Link,
+        CustomGgufError::NotAFile => CustomGgufReason::NotAFile,
+        CustomGgufError::WrongExtension => CustomGgufReason::WrongExtension,
+        CustomGgufError::TooLarge => CustomGgufReason::TooLarge,
+        CustomGgufError::NotGguf => CustomGgufReason::NotGguf,
+        CustomGgufError::Unreadable => CustomGgufReason::Unreadable,
+    }
+}
+
+/// 利用者が用意した GGUF ファイルを検査する（読み取りのみ）。
+/// ファイルはコピー・移動・書き換えしない。SHA-256 は検証しない（画面に注意書きを出す）。
+/// 結果にはパスを含めない。
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_check_custom_gguf(path: String) -> CustomGgufCheck {
+    let checked =
+        tauri::async_runtime::spawn_blocking(move || validate_custom_gguf(Path::new(&path))).await;
+    match checked {
+        Ok(Ok(_)) => CustomGgufCheck {
+            ok: true,
+            reason: None,
+        },
+        Ok(Err(e)) => CustomGgufCheck {
+            ok: false,
+            reason: Some(custom_reason(e)),
+        },
+        Err(_) => CustomGgufCheck {
+            ok: false,
+            reason: Some(CustomGgufReason::Unreadable),
+        },
+    }
 }
 
 fn store_settings(store: &Arc<Mutex<Store>>) -> Result<AppSettings, AppError> {
@@ -630,22 +715,29 @@ async fn suggest_for_project(
     })
     .await
     .map_err(|_| SuggestFailure::Unavailable)?;
-    if settings.memo_suggestion != MemoSuggestion::Ai || settings.ai_model.is_empty() {
+    if settings.memo_suggestion != MemoSuggestion::Ai {
         return Err(SuggestFailure::NotReady);
     }
-    let model = settings.ai_model.clone();
+    let choice = model_choice(&settings).ok_or(SuggestFailure::NotReady)?;
+    let model = choice.key();
     let ollama = settings.ai_runner == AiRunner::Ollama;
     apply_backend(&state.llm, &settings)
         .await
         .map_err(|_| SuggestFailure::NotReady)?;
 
-    // 内蔵のモデルは導入済みのものだけ使う（未導入なら準備ができていない）
-    let ready = {
-        let llm = state.llm.read().await;
-        match llm.backend() {
-            Backend::Builtin => llm.is_model_ready(&model).unwrap_or(false),
-            Backend::Ollama { .. } => true,
+    // 内蔵のモデルは導入済みのものだけ使う。カスタムは検査を通るものだけ使う（未導入・不備なら準備ができていない）
+    let ready = match &choice {
+        ModelChoice::Catalog(id) => {
+            let llm = state.llm.read().await;
+            llm.is_model_ready(id).unwrap_or(false)
         }
+        ModelChoice::Custom(path) => {
+            let path = path.clone();
+            run_blocking(move || Ok(validate_custom_gguf(&path).is_ok()))
+                .await
+                .unwrap_or(false)
+        }
+        ModelChoice::Ollama(_) => true,
     };
     if !ready {
         return Err(SuggestFailure::NotReady);
@@ -692,7 +784,12 @@ async fn suggest_for_project(
     }
     let generated = {
         let llm = state.llm.read().await;
-        llm.suggest(&input, &model, budget).await
+        match &choice {
+            ModelChoice::Custom(path) => llm.suggest_custom(&input, path, budget).await,
+            ModelChoice::Catalog(_) | ModelChoice::Ollama(_) => {
+                llm.suggest(&input, &model, budget).await
+            }
+        }
     };
     let text = match generated {
         Ok(Some(text)) => text,
@@ -894,15 +991,24 @@ pub async fn ai_test_generation(app: AppHandle) -> GenerationTest {
             }
         }
     };
-    if settings.ai_model.is_empty() {
+    let Some(choice) = model_choice(&settings) else {
         return failed(TestFailure::NotConfigured);
-    }
+    };
     if apply_backend(&state.llm, &settings).await.is_err() {
         return failed(TestFailure::InvalidEndpoint);
     }
-    let model = settings.ai_model.clone();
     let llm = state.llm.read().await;
-    match llm.suggest(&test_input(), &model, GENERATE_TIMEOUT).await {
+    let result = match &choice {
+        ModelChoice::Custom(path) => {
+            llm.suggest_custom(&test_input(), path, GENERATE_TIMEOUT)
+                .await
+        }
+        ModelChoice::Catalog(_) | ModelChoice::Ollama(_) => {
+            llm.suggest(&test_input(), &choice.key(), GENERATE_TIMEOUT)
+                .await
+        }
+    };
+    match result {
         Err(e) => failed(test_failure_of(e)),
         Ok(None) => failed(TestFailure::Rejected),
         Ok(Some(_)) => GenerationTest {
@@ -937,6 +1043,7 @@ fn test_failure_of(e: LlmError) -> TestFailure {
     match e {
         LlmError::ModelNotInstalled | LlmError::UnknownModel => TestFailure::NotInstalled,
         LlmError::InvalidModel => TestFailure::NotConfigured,
+        LlmError::CustomModelInvalid => TestFailure::CustomInvalid,
         LlmError::InvalidEndpoint => TestFailure::InvalidEndpoint,
         LlmError::ServerNotFound => TestFailure::ServerNotFound,
         LlmError::ServerStartFailed => TestFailure::ServerStartFailed,

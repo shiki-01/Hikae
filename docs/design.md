@@ -762,7 +762,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | 新規リポジトリの既定の公開範囲 | 非公開 / 公開 | 非公開 | Phase 1 |
 | 元に戻した後に自動で保存 | オン / オフ | オン（通常設定と同じ項目を再掲） | Phase 1 |
 | 自動保存の容量上限 | なし / プロジェクトサイズの 1倍 / 2倍 / 5倍 | 2倍 | Phase 2（実装済み。6.2） |
-| AI モデルの指定 | カタログから選ぶ / 任意の GGUF ファイルを指定 | カタログから選ぶ | Phase 2（カタログから選ぶ方式のみ実装。任意の GGUF は未実装） |
+| AI モデルの指定 | カタログから選ぶ / 任意の GGUF ファイルを指定 | カタログから選ぶ | Phase 2（実装済み。カタログから選ぶ方式と、自分で用意した GGUF のパス指定。10.5） |
 | 作業コピー機能の表示 | オフ / オン | オフ | Phase 3 |
 | 拡張機能の開発者モード（署名なしの手動導入） | オフ / オン | オフ | Phase 3 |
 | 拡張機能の追加索引 | 公式のみ / URL を追加 | 公式のみ | Phase 4 |
@@ -781,7 +781,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブに項目があり（「保存しないファイル」はプロジェクトの画面から開いたときだけ項目を出す（S6。4.8）。「AI」は S7。内容は 10.5）、「拡張機能」は案内だけを出し、「詳細設定」は空（案内のみ）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブに項目があり（「保存しないファイル」はプロジェクトの画面から開いたときだけ項目を出す（S6。4.8）。「AI」は S7。内容は 10.5）、「拡張機能」は案内だけを出し、「詳細設定」は空（案内のみ）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_model_source`、`ai_custom_gguf_path`、`ai_scope`、`ai_ollama_url`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
@@ -799,7 +799,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `memo_suggestion` | 反映済み（Phase 2）。`ai` のとき保存欄に AI の提案を出す（10.4）。プロジェクト別に上書きできる。AI タブの「保存メモを AI で提案する」に対応 |
 | `open_action`、`show_technical_info`、`default_visibility`、`term_display` | 保存のみ。「開く」の既定動作は常に既定のアプリ（`vs-code` は実装しない。4.7）。技術情報の欄の展開状態、新規リポジトリの公開範囲、用語の併記は画面に反映していない |
 | `ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url` | 反映済み（Phase 2）。提案の実行方式（内蔵 / Ollama）、使うモデル（内蔵はカタログの ID、Ollama はモデル名）、AI に渡す範囲に使う（10.5）。`ai_scope` の `with-images` は段階 3 まで画像の本文を渡さず、テキストの差分は `text-diff` と同じに扱う |
-| `ai_model_source`、`ai_custom_gguf_path` | 保存のみ。カスタム GGUF は今回は実装せず、画面にも出さない |
+| `ai_model_source`、`ai_custom_gguf_path` | 反映済み（Phase 2。カスタム GGUF）。内蔵のモデルの入手元（`catalog` / `custom-gguf`）と、GGUF のパス。AI タブの詳細設定に「モデルの入手元」として置く。パスは参照するだけで、コピー・移動・書き換えはしない（10.5）。保存時の検証は、長さと制御文字だけ。ファイルの検査は画面の「確かめる」（`ai_check_custom_gguf`）と生成のときに行う |
 | `git_executable` | 保存のみ。git の探索は設定ではなく `GitRunner::bundled` が行う（`HIKAE_GIT_PATH` → 同梱 → PATH。8.2） |
 | `work_copy_enabled`、`extension_dev_mode`、`extension_index_urls`、`git_lfs` | 保存のみ（Phase 3 / 4） |
 
@@ -998,7 +998,7 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
   - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
   - 設定: `get_settings`、`update_settings`、`complete_onboarding`
   - 設計の `create_repo` は `add_project`（新規作成・既存フォルダの登録で `remote` を渡す）と `connect_remote`（あとから接続）で実装済み（4.6）。`open_with` に相当するものは未実装（4.7）
-- **AI（Phase 2）のコマンド**（`app/src/ai.rs`）: `ai_catalog`（カタログと導入状態・可否）、`ai_download_model`（バックグラウンド。即座に戻る）、`ai_cancel_download`、`ai_remove_model`、`ai_suggest_memo`（`Option<String>`。失敗はすべて `None`）、`ai_list_ollama_models`、`ai_check_endpoint`、`ai_test_generation`。設定は既存の `get_settings` / `update_settings` を使う
+- **AI（Phase 2）のコマンド**（`app/src/ai.rs`）: `ai_catalog`（カタログと導入状態・可否）、`ai_download_model`（バックグラウンド。即座に戻る）、`ai_cancel_download`、`ai_remove_model`、`ai_suggest_memo`（`Option<String>`。失敗はすべて `None`）、`ai_list_ollama_models`、`ai_check_endpoint`、`ai_test_generation`、`ai_check_custom_gguf`（自分で用意した GGUF の検査。読み取りのみで、結果にパスを含めない）。設定は既存の `get_settings` / `update_settings` を使う
 - **イベント**（Rust → UI。名前は kebab-case）: `status-changed`、`files-changed`、`op-progress`、`op-finished`、`sync-state-changed`、`needs-attention`、`clone-progress`、`llm-download-progress`（受信済み・総量のバイト数）、`llm-download-finished`（`ready` / `failed` / `canceled`）
 - 状態を変える操作は `run_op`（直列キューの内側）で実行し、読み取りは `run_blocking` でキューを通さずに実行する
 - TanStack Query のキーは、実装では `['changes', projectId]`、`['history', projectId]`、`['compare', projectId, ...]` のように**種別を先頭**にしている（`src/lib/api/keys.ts`）。操作の完了後は `status-changed` を受けて、プロジェクトに関わるキーをまとめて無効化する
@@ -1029,6 +1029,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - 段階3は Phase 3 とし、画像は「追加・削除・差し替え」の事実だけならルールで十分なことを UI で示します
 - PDF・psd・動画などは、抽出器がない限りどの段階でもファイル名と種別の情報のみになります。11章の拡張機能が抽出器を提供すれば、段階2の入力に加わります
 - 具体的なモデル名は実装時点で日本語の要約品質を評価して決めます。カタログを外部 JSON として配信し、アプリ更新なしで差し替えられるようにします
+- **段階 1 のカタログ（2026-10-12）**: Qwen3.5-2B（Q4_K_M、約 1.28GB、Apache 2.0）を段階 1 として追加した。ファイル名と変更の種類から文を作る段階で、内容の理解は限定的（評価ノート 11.8 の「段階 1 候補」。出力は表の「変更量」の言い換えが中心）。画面では「軽量」と表示し、説明を添える。既定のモデルは段階 2 の Gemma 4 E2B のまま。段階 1 のモデルを選んだときは、AI に渡す範囲の欄で「ファイル名まで」を勧める（利用者が「テキスト差分まで」を選ぶことは妨げない）。段階 2 のモデルは Gemma 4 E2B・Qwen3-4B-Instruct-2507 の 2 つ（評価ノート 11.3 の残りの候補は未採用）
 
 ### 10.3 ルールベース生成（段階0、常に動作）
 
@@ -1044,8 +1045,8 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 
 1. 保存欄には常にルールベースの文を先に入れる。LLM の提案は、**「提案を作る」ボタンを押したときだけ生成する**（自動では生成しない。2026-10-11 に変更）。結果は保存欄に出し、「使う」を押したときだけメモ欄に入る。「作り直す」は保存済みの結果を使わずに生成し直す。保存操作は LLM を待たない。生成中は「中止」を押せる
 2. 入力の構造化: 変更ファイルを「種別・ファイル名・変更量」の表として渡す。表は 30 件まで、ファイル名は 60 文字を超える分を「…」で省略する。5 件を超えるときは、表の後に種別ごとの件数（「件数: 更新 28 件、追加 7 件」）を添える。差分本文は、差分の行数（空行を除く）が多い上位 3 ファイルだけに付け、1 ファイル 500 文字、全体で 1,500 文字まで切り詰める（それ以外は表の行だけ）。docx は段落の差分、xlsx は「Sheet1!B4: 120000 → 135000」の形のセル差分を、既存の文書比較の抽出から作る（`core-llm` の `input` と `prompt`）
-3. 出力の形式: **plain の 1 文**を生成する（実装時点の決定。2026-10-10）。JSON Schema 制約（`{ "summary": …, "details": […] }`）は採用しない。評価（`docs/notes/phase2-llm-evaluation.md` の 4.2・7）で、schema モードは小型モデルが JSON を閉じずに途中で切れる例（`finish_reason=length`）が複数あり、plain の方が安定したため。複数のファイルを変更したときも全体を 1 文にまとめるよう、システムプロンプトに規則を置き、ユーザーメッセージの末尾にも同趣旨の指示を添える（2026-10-11）
-4. 検証（`core-llm` の `clean_summary_detail`）: 改行・「。」が 2 つ以上（複数文）・100 文字超・Git 用語を含むものは採用しない。**改行を含む出力は、最初の空でない 1 行だけを検証する**（救済。その行が検証を通ったときだけ採用し、救済を使ったかは内部のフラグで分かる）。ただし最初の行が**前置き**（末尾が `:` または `：` の行、または「以下」「次の」「保存メモ」「メモ」「Here」「Sure」「回答」で始まる 40 文字未満の行）のときは、本文ではないため採らない。1 行の出力（改行なし）には前置きの判定を適用しない。これは、小型モデルが変更ファイルごとに 1 行ずつ返す出力を全件落とさないための規則で、救済で採った文は 1 ファイル分しか書かれないことがある。画面に出す文は 1 文に限る
+3. 出力の形式: **plain の 1 文**を生成する（実装時点の決定。2026-10-10）。JSON Schema 制約（`{ "summary": …, "details": […] }`）は採用しない。評価（`docs/notes/phase2-llm-evaluation.md` の 4.2・7）で、schema モードは小型モデルが JSON を閉じずに途中で切れる例（`finish_reason=length`）が複数あり、plain の方が安定したため。**プロンプトの方針（V1。2026-10-12 に採用）**: 最優先の規則は「何のファイルかではなく、何がどう変わったか（変更前後の値、追加・削除された内容、変更の目的）を書く」こと。ファイル名は必要なときだけ添え、「〜を更新した」だけの文は書かない。ファイル名の列挙をやめる閾値は **10 件超**（件数の行は 5 件以上で添える。これは入力の事実の補足で、出力の方針とは別）。同じ目的の複数ファイルは、その目的と変更内容を 1 文で書く。差分から分からない内容（画像など）は推測せず、事実だけを書く。良い例・悪い例の 3 組を入れる（評価入力と同じ内容の例は使わない）。文字数の目安は 60 文字程度（検証の上限 100 文字は変えない）。ユーザーメッセージの末尾も V1 の指示に合わせる。文面は `core-llm/src/prompt.rs` にあり、評価ノート 11.5 の V1 と一致する。評価の結果は評価ノート 11.6 と 12 節（V0 は内容ヒットが 80%、V1 は 100%）。文面を変えたら評価を取り直す
+4. 検証（`core-llm` の `clean_summary_detail`）: 改行・「。」が 2 つ以上（複数文）・100 文字超・Git 用語を含むものは採用しない。**改行を含む出力は、2〜4 行なら行ごとに整え（箇条書き記号・引用符・末尾の句点を外す）、「、」でつないで 1 文にして検証する**（救済。つないだ文は 160 文字まで許す。単一の文の上限は 100 文字）。つなぐと検証を通らない（長すぎる等）ときや 5 行以上のときは、最初の空でない 1 行だけを検証する。どちらも検証を通ったときだけ採用し、救済を使ったかは内部のフラグで分かる。ただし最初の行が**前置き**（末尾が `:` または `：` の行、または「以下」「次の」「保存メモ」「メモ」「Here」「Sure」「回答」で始まる 40 文字未満の行）のとき、およびつなぐ行のどれかが前置きのときは、本文ではないため、つながない（最初の行が前置きなら採用しない）。1 行の出力（改行なし）には前置きの判定を適用しない。これは、小型モデルが変更ファイルごとに 1 行ずつ返す出力を全件落とさず、かつ最初の 1 ファイル分だけに縮まないための規則（実測: 5 ファイルの混在で、最初の 1 行だけだと 1 ファイル分になった）。画面に出す文は 1 文に限る
 5. 失敗の理由（`SuggestFailure`）: `timeout`（時間切れ）、`invalid`（検証で不採用）、`not-ready`（モデル未導入・Ollama 未接続・設定の不備）、`unavailable`（起動の失敗など）、`cancelled`（取り消し。画面には何も出さず待機に戻る）。失敗の文言は「何が起きたか」「変更は無事であること」の 2 要素を示し、次の行動は「もう一度」ボタンで示す。ルールベースのメモは常に使える
 6. 上限と取り消し: 生成の上限は **90 秒**（入力の収集・生成・検証の合計。内蔵の起動待ち 120 秒は別枠。`app` の `ai.rs` で 1 か所に定める）。取り消し（中止・新しい要求・変更一覧や設定の変化）は HTTP 要求の破棄で行う。ただし、切断しても llama-server は生成を続け、`--parallel 1` のため次の要求が処理の完了まで待たされる（評価レポート 9 節の実測で最大 17 秒）。そのため、**中止と時間切れのときは llama-server を止め**、次の要求で起動し直す（3〜6 秒）。新しい要求が既に始まっているときは、その要求が使うため止めない。応答が壊れた・接続が切れたときも止めて、次回に起動し直す
 7. キャッシュ: 同じ入力に対する結果は `message_cache` から返す。キーは「入力から組み立てたメッセージ（system と user の内容）＋モデル ID」の SHA-256（`core-llm` の `cache_key`）。**設計当初の「ツリーの OID」は使わない**。差分の構築が作業フォルダの未保存の内容（監視の結果や文書の抽出）に依存し、同じツリーでも入力が変わりうるため、入力そのものを基準にする。保持は 500 件まで（作成の古いものから削除）。検証で弾かれた結果（None）は保存しない。「作り直す」は、キャッシュを使わずに生成し、結果で上書きする
@@ -1069,6 +1070,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
   - 設定の「試す」は固定の入力で生成を試し、失敗の理由（未導入・起動失敗・タイムアウト・接続・応答の形式・検証で不採用）を返す。これだけがエラーの理由を画面に出す（E19）
   - 読み取り専用: 提案の入力は `list_changes` と差分の読み取りだけで作る。作業フォルダ・インデックス・refs には書かない
   - テスト: `core-store` の `message_cache`（再利用・500 件の剪定）と `llm_models`、`core-llm` の入力の組み立てとキー、`core-ops` の `memo_text_diff`（作業フォルダの変更の反映と、読み取りの前後で状態が変わらないこと）。モデルの実ダウンロード、llama-server の実起動、Ollama の実機は未確認。提案については、`core-llm` の検証の救済・プロンプトの上限・取り消しと停止の条件（偽のサーバーで確認）、`src/lib/features/ai/suggest.ts` の状態遷移（vitest）
+  - **自分で用意した GGUF（2026-10-12）**: 設定 `ai_model_source` が `custom-gguf` のとき（内蔵の実行方式のときだけ。Ollama では入手元の設定は無関係）、`ai_custom_gguf_path` のファイルを使う。ファイルは**参照するだけ**で、コピー・移動・書き換えはしない。SHA-256 は検証しない（画面に「SHA-256 は検証されません。モデルの内容とライセンスはご自身の責任で確認してください。」を出す）。検証（`core-llm` の `validate_custom_gguf`、読み取りのみ）: パスが空でなく制御文字を含まない、存在する通常ファイル（リンクは拒否）、拡張子が `.gguf`（大文字小文字を問わない）、サイズが 12GB 以下、先頭 4 バイトが `GGUF`。理由は列挙値で返し、画面が文言を選ぶ（パス・内容は返さない）。画面の「選ぶ」はファイル選択ダイアログ（既存の `tauri-plugin-dialog`）で GGUF を選ぶ。生成は、検証を通ったパスで `llama-server -m <パス>` を起動する（`LlmService::suggest_custom`）。キャッシュのキーのモデル ID は `custom:<パスの SHA-256 の先頭 12 桁>`（パスそのものはキーにもログにも出さない）。モデルの入れ替え（入手元・パス・モデルの変更）は、設定の更新で起動中のサーバーを止める。カタログのモデルを「使う」と、入手元もカタログに戻る
 
 ## 11. プレビュー拡張機能の設計
 

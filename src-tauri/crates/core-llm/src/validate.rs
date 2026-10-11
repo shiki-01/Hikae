@@ -38,7 +38,7 @@ const PREAMBLE_MAX_CHARS: usize = 40;
 /// 前置きの先頭語（英字は大文字小文字を区別しない）。小型モデルが本文の前に付ける定型の言い回し
 const PREAMBLE_PREFIXES: [&str; 7] = ["以下", "次の", "保存メモ", "メモ", "Here", "Sure", "回答"];
 
-/// 検証を通った出力。`rescued` は、複数行の出力から最初の空でない 1 行を採ったことを表す
+/// 検証を通った出力。`rescued` は、複数行の出力を 1 文に整えて（行をつなぐか、最初の 1 行を採って）採ったことを表す
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cleaned {
     pub text: String,
@@ -56,19 +56,32 @@ pub fn clean_summary(raw: &str) -> Option<String> {
 /// `clean_summary` と同じ検証を行い、救済を使ったかも返す。
 ///
 /// - 出力が 1 行（末尾の改行を除く）なら、その行を検証する
-/// - 複数行の出力は、最初の空でない 1 行だけを検証する（救済。その行が通らなければ `None`）。
+/// - 複数行の出力は、2〜4 行なら「、」でつないで 1 文にして検証する。つなぐと検証を通らない（長すぎる等）
+///   ときや行数が多いときは、最初の空でない 1 行だけを検証する（救済。その行も通らなければ `None`）。
 ///   小型モデルが「ファイルごとに 1 行」で返す出力を、検証で全件落とさないための規則（設計 10.4）。
 ///   ただし最初の行が前置き（`is_preamble`）なら、本文ではないため採らない
 /// - 1 行の出力（改行なし）には、前置きの判定を適用しない
 pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
     let trimmed = raw.trim();
     if trimmed.contains('\n') || trimmed.contains('\r') {
-        let first = trimmed
+        let lines: Vec<&str> = trimmed
             .lines()
             .map(str::trim)
-            .find(|line| !line.is_empty())?;
+            .filter(|line| !line.is_empty())
+            .collect();
+        let first = *lines.first()?;
         if is_preamble(first) {
             return None;
+        }
+        // 複数ファイルの変更で「ファイルごとに 1 行」と返ったとき、最初の 1 行だけでは他のファイルの内容が
+        // 落ちる。行を「、」でつないで 1 文にし、検証を通ればそれを採る。通らなければ最初の 1 行だけを採る
+        if let Some(text) =
+            join_lines(&lines).and_then(|joined| validate_line_max(&joined, JOIN_MAX_CHARS))
+        {
+            return Some(Cleaned {
+                text,
+                rescued: true,
+            });
         }
         return validate_line(first).map(|text| Cleaned {
             text,
@@ -81,6 +94,36 @@ pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
     })
 }
 
+/// つなぐ行数の上限（これを超える出力は、つながずに最初の 1 行だけを採る）
+const JOIN_MAX_LINES: usize = 4;
+
+/// つないだ出力の長さの上限（文字数）。複数ファイルの変更を 1 文にまとめると、1 ファイル 1 行の
+/// 出力を足して 100 文字を超えやすい（実測: 5 ファイルの混在で 4 行・約 130 文字）。
+/// 1 行の出力の上限（`MAX_CHARS`）より長くしてよいのは、行ごとの内容が落ちないことを優先するため
+const JOIN_MAX_CHARS: usize = 160;
+
+/// 複数行の出力を、行ごとに整えて「、」でつなぎ、末尾を 1 つの「。」で終える。
+/// 2〜`JOIN_MAX_LINES` 行のときだけつなぐ（それ以外は `None`）。途中に前置きの行があれば `None`。
+fn join_lines(lines: &[&str]) -> Option<String> {
+    if lines.len() < 2 || lines.len() > JOIN_MAX_LINES {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if is_preamble(line) {
+            return None;
+        }
+        let s = strip_bullet(line.trim());
+        let s = strip_quotes(s.trim()).trim();
+        let s = s.trim_end_matches(['。', '.', '、', ',']).trim();
+        if s.is_empty() {
+            return None;
+        }
+        parts.push(s.to_string());
+    }
+    Some(format!("{}。", parts.join("、")))
+}
+
 /// 1 行の出力を検証する。条件（前後の整理・文の数・長さ・Git 用語）を満たさなければ `None`。
 ///
 /// - 前後の空白・引用符・箇条書き記号を取り除く
@@ -88,6 +131,11 @@ pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
 /// - Git 用語を含むものは `None`（英字は大文字小文字を区別しない）
 /// - 日本語と数字の間の半角スペースは詰める（「第 3 章」→「第3章」）
 fn validate_line(line: &str) -> Option<String> {
+    validate_line_max(line, MAX_CHARS)
+}
+
+/// `validate_line` の、長さの上限（文字数）を指定する版
+fn validate_line_max(line: &str, max_chars: usize) -> Option<String> {
     let s = strip_bullet(line.trim());
     let s = strip_quotes(s.trim());
     let s = s.trim();
@@ -98,7 +146,7 @@ fn validate_line(line: &str) -> Option<String> {
         return None;
     }
     let s = close_japanese_digit_gaps(s);
-    if s.chars().count() > MAX_CHARS {
+    if s.chars().count() > max_chars {
         return None;
     }
     if contains_git_term(&s) {
@@ -256,18 +304,42 @@ mod tests {
     }
 
     #[test]
-    fn multiline_rescues_the_first_non_empty_line() {
+    fn multiline_lines_are_joined_into_one_sentence() {
+        // ファイルごとに 1 行で返った出力は、行を「、」でつないで 1 文にする（他のファイルの内容を落とさない）
         let got = clean_summary_detail("\n  \n報告書に考察を追加した。\n表も追加した。").unwrap();
-        assert_eq!(got.text, "報告書に考察を追加した。");
+        assert_eq!(got.text, "報告書に考察を追加した、表も追加した。");
         assert!(got.rescued);
-        // 行の前後の空白も取り除く
+        // 箇条書き記号・行の前後の空白・末尾の句点はそろえてつなぐ
+        let got = clean_summary_detail("- 予算を150万円に変更  \r\n・期間を5月からにした").unwrap();
+        assert_eq!(got.text, "予算を150万円に変更、期間を5月からにした。");
+        assert!(got.rescued);
+        assert_eq!(
+            clean_summary("報告書に考察を追加した。\n表も追加した。\n図を差し替えた。").as_deref(),
+            Some("報告書に考察を追加した、表も追加した、図を差し替えた。")
+        );
+    }
+
+    #[test]
+    fn multiline_falls_back_to_the_first_line_when_joining_does_not_work() {
+        // 前置きに当たる行が混ざる（前置きの判定は短い行の先頭語）ときは、最初の 1 行だけを採る
         let got = clean_summary_detail("  予算を変更しました。  \r\n次の行").unwrap();
         assert_eq!(got.text, "予算を変更しました。");
         assert!(got.rescued);
+        // つなぐと 100 文字を超えても、160 文字以内ならつなぐ（行ごとの内容を落とさない）
+        let mid = format!("{}。\n{}。", "あ".repeat(60), "い".repeat(60));
+        let got = clean_summary_detail(&mid).unwrap();
         assert_eq!(
-            clean_summary("報告書に考察を追加した。\n表も追加した。").as_deref(),
-            Some("報告書に考察を追加した。")
+            got.text,
+            format!("{}、{}。", "あ".repeat(60), "い".repeat(60))
         );
+        // つなぐと 160 文字を超えるときは、最初の 1 行だけを採る
+        let long = format!("{}。\n{}。", "あ".repeat(90), "い".repeat(90));
+        let got = clean_summary_detail(&long).unwrap();
+        assert_eq!(got.text, format!("{}。", "あ".repeat(90)));
+        // 5 行以上はつながず、最初の 1 行だけを採る
+        let many = "a1を更新\nb2を更新\nc3を更新\nd4を更新\ne5を更新";
+        let got = clean_summary_detail(many).unwrap();
+        assert_eq!(got.text, "a1を更新");
     }
 
     #[test]
@@ -421,7 +493,7 @@ mod tests {
     fn multiline_first_line_that_is_content_is_still_rescued() {
         // 前置きの語を含んでいても、先頭でなければ本文
         let got = clean_summary_detail("報告書に保存メモを追加した。\n表も追加した。").unwrap();
-        assert_eq!(got.text, "報告書に保存メモを追加した。");
+        assert_eq!(got.text, "報告書に保存メモを追加した、表も追加した。");
         assert!(got.rescued);
         // 前置きの語で始まっても、長い行は本文として採る（40 文字以上）
         let long = format!("メモ{}。\n次の行", "あ".repeat(40));

@@ -31,6 +31,8 @@ const current: AppSettings = {
 	memoSuggestion: 'rules',
 	aiRunner: 'builtin',
 	aiModel: '',
+	aiModelSource: 'catalog',
+	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
 	aiOllamaUrl: 'http://localhost:11434'
 };

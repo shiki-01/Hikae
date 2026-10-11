@@ -1203,7 +1203,13 @@ const messages = {
 	'ai.system': 'この PC: メモリ {memory}、空き容量 {disk}',
 	'ai.models_heading': 'モデル',
 	'ai.models_text': '推奨は段階 2 です。どのモデルも、導入後はこの PC の中で動きます。',
-	'ai.stage': '段階 {stage}',
+	'ai.stage': '段階 {stage}（{level}）',
+	'ai.level_light': '軽量',
+	'ai.level_standard': '標準',
+	'ai.stage_light_note':
+		'ファイル名と変更の種類から文を作ります。内容の理解は限定的です。ふつうは「標準」をおすすめします。',
+	'ai.scope_light_hint':
+		'段階 1 のモデルは内容を読む力が限定的です。「ファイル名まで」を選ぶと、結果が安定しやすくなります。',
 	'ai.recommended': '推奨',
 	'ai.size': '約 {size}',
 	'ai.memory_need': '必要メモリ {memory}',
@@ -1236,6 +1242,8 @@ const messages = {
 	'ai.reason.bad-status': '接続先が正常な応答を返しませんでした。',
 	'ai.reason.bad-response': '応答の形式が正しくありませんでした。',
 	'ai.reason.invalid-endpoint': '接続先の URL が正しくありません。',
+	'ai.reason.custom-invalid':
+		'自分で用意した GGUF ファイルを使えませんでした。パスと形式を確かめてください。',
 	'ai.reason.rejected': '出力が検査で採用されませんでした。',
 	'ai.reason.other': '原因を特定できませんでした。',
 	'ai.advanced': '詳細設定',
@@ -1250,7 +1258,26 @@ const messages = {
 	'ai.ollama_list': 'モデル一覧を取得',
 	'ai.ollama_list_failed': 'モデル一覧を取得できませんでした。',
 	'ai.external_warning': 'この接続先はこの PC の外にあります。テキストの差分が外へ送られます。',
-	'ai.none_selected': '未選択'
+	'ai.none_selected': '未選択',
+	'ai.source': 'モデルの入手元',
+	'ai.source_catalog': 'カタログから選ぶ（アプリが取得します）',
+	'ai.source_custom': '自分で用意した GGUF ファイル',
+	'ai.custom_path': 'GGUF ファイルのパス',
+	'ai.custom_pick': '選ぶ',
+	'ai.custom_ok': 'このファイルは使えます。',
+	'ai.custom_caution':
+		'SHA-256 は検証されません。モデルの内容とライセンスはご自身の責任で確認してください。',
+	'ai.custom_active': '自分で用意した GGUF を使っています。カタログのモデルは使われません。',
+	'ai.custom_reason.empty': 'パスを入力してください。',
+	'ai.custom_reason.control-char': 'パスに使えない文字が含まれています。',
+	'ai.custom_reason.not-found': 'ファイルが見つかりません。',
+	'ai.custom_reason.link': 'リンクは使えません。ファイルを直接指定してください。',
+	'ai.custom_reason.not-a-file':
+		'ファイルではありません。フォルダではなく、ファイルを指定してください。',
+	'ai.custom_reason.wrong-extension': '拡張子が .gguf のファイルを指定してください。',
+	'ai.custom_reason.too-large': 'ファイルが大きすぎます（12GB まで使えます）。',
+	'ai.custom_reason.not-gguf': 'GGUF 形式のファイルではありません。',
+	'ai.custom_reason.unreadable': 'ファイルを読めませんでした。権限を確かめてください。'
 } as const;
 
 export default messages;

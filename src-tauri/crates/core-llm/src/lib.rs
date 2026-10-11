@@ -6,7 +6,9 @@
 // - ファイル内容・パスはログやエラーメッセージに出さない（このクレートはログ出力を持たない）
 
 pub mod catalog;
+pub mod choice;
 pub mod client;
+pub mod custom;
 pub mod download;
 pub mod error;
 pub mod input;
@@ -18,9 +20,11 @@ pub mod suggestion;
 pub mod validate;
 
 pub use catalog::{Catalog, CatalogEntry, CatalogError};
+pub use choice::ModelChoice;
 pub use client::{
     check_endpoint, list_ollama_models, Backend, ChatClient, ChatOutput, Endpoint, GENERATE_TIMEOUT,
 };
+pub use custom::{custom_model_id, validate_custom_gguf, CustomGguf, CustomGgufError};
 pub use download::{installed, is_allowed_url, remove, DownloadError, Downloader, Installed};
 pub use error::LlmError;
 pub use input::{

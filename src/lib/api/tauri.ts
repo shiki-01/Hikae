@@ -217,6 +217,11 @@ export const tauriApi: ProjectApi = {
 		return mapTestResult(await commands.aiTestGeneration());
 	},
 
+	async aiCheckCustomGguf(path: string) {
+		// 結果は型が同じ（パスは含まない）ため、そのまま渡す
+		return commands.aiCheckCustomGguf(path);
+	},
+
 	onAiDownload(listener: (notice: AiDownloadNotice) => void) {
 		// 進捗と終了は同じ購読で受ける。解除は両方のイベントをまとめて外す
 		const unlisteners: Promise<() => void>[] = [
@@ -244,6 +249,15 @@ export const tauriApi: ProjectApi = {
 		const selected = await open({ directory: false, multiple: true });
 		if (selected === null) return null;
 		return Array.isArray(selected) ? selected : [selected];
+	},
+
+	async pickGgufFile(): Promise<string | null> {
+		const selected = await open({
+			directory: false,
+			multiple: false,
+			filters: [{ name: 'GGUF', extensions: ['gguf'] }]
+		});
+		return typeof selected === 'string' ? selected : null;
 	},
 
 	async addProject(

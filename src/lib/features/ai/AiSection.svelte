@@ -3,8 +3,10 @@
 	import { api } from '#lib/api/index.js';
 	import { keys } from '#lib/api/keys.js';
 	import type {
+		AiCustomGgufCheck,
 		AiDownloadNotice,
 		AiEndpointCheck,
+		AiModelSource,
 		AiRunnerMode,
 		AiScopeMode,
 		AiTestFailure,
@@ -20,7 +22,7 @@
 	import Toggle from '#lib/components/Toggle.svelte';
 	import { useSettings, useUpdateSettings } from '#lib/features/settings/queries.js';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
-	import { formatBytes, type ModelAction } from './model-view';
+	import { customGgufMessageKey, formatBytes, scopeHintKey, type ModelAction } from './model-view';
 	import { useAiCatalog } from './queries';
 
 	const catalog = useAiCatalog();
@@ -43,9 +45,37 @@
 	}>({ checking: false, result: null, models: null, listFailed: false });
 	/** Ollama の URL の入力中の値。空なら保存された値を表示する */
 	let urlDraft = $state<string | null>(null);
+	/** 自分で用意した GGUF のパスの入力中の値。空なら保存された値を表示する */
+	let pathDraft = $state<string | null>(null);
+	/** パスの検査の結果（検査した時点のパスと一緒に持ち、今のパスと違う結果は表示しない） */
+	let customCheck = $state<{ path: string; result: AiCustomGgufCheck } | null>(null);
 
 	const current = $derived(settings.data?.settings);
 	const urlValue = $derived(urlDraft ?? current?.aiOllamaUrl ?? '');
+	const pathValue = $derived(pathDraft ?? current?.aiCustomGgufPath ?? '');
+	/** 内蔵で自分で用意した GGUF を使うか */
+	const usingCustom = $derived(
+		current?.aiRunner === 'builtin' && current?.aiModelSource === 'custom-gguf'
+	);
+	/** 内蔵のカタログのモデルの段階（選ばれていないとき、Ollama のときは null） */
+	const selectedStage = $derived(
+		current && current.aiRunner === 'builtin' && current.aiModelSource === 'catalog'
+			? (catalog.data?.models.find((m) => m.id === current.aiModel)?.stage ?? null)
+			: null
+	);
+	const scopeHint = $derived(scopeHintKey(selectedStage, current?.aiScope ?? 'text-diff'));
+	/** 保存されているパスの検査の結果（パスが変わった後の古い結果は出さない） */
+	const pathResult = $derived(
+		customCheck && current && customCheck.path === current.aiCustomGgufPath
+			? customCheck.result
+			: null
+	);
+
+	// 保存されている GGUF のパスを、カスタムの入手元のときに検査する（読み取りのみ）
+	$effect(() => {
+		const path = usingCustom ? (current?.aiCustomGgufPath ?? '') : '';
+		if (path !== '') void checkCustomPath(path);
+	});
 
 	// ダウンロードの通知（進捗・終了）を、この画面が開いている間だけ受ける
 	$effect(() => api.onAiDownload((notice) => onDownloadNotice(notice)));
@@ -78,8 +108,46 @@
 				void client.invalidateQueries({ queryKey: keys.aiCatalog });
 				void client.invalidateQueries({ queryKey: keys.settingsAll });
 			} else {
-				patch({ aiModel: id });
+				// カタログのモデルを選んだときは、入手元もカタログに戻す
+				patch({ aiModel: id, aiModelSource: 'catalog' });
 			}
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	/** 自分で用意した GGUF のパスを検査する（読み取りのみ）。結果はパスと一緒に持つ */
+	async function checkCustomPath(path: string) {
+		try {
+			const result = await api.aiCheckCustomGguf(path);
+			customCheck = { path, result };
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	/** 入力中のパスを保存し、検査する。変わっていなければ何もしない */
+	function saveCustomPath() {
+		const next = (pathDraft ?? '').trim();
+		pathDraft = null;
+		if (next !== (current?.aiCustomGgufPath ?? '')) {
+			patch({ aiCustomGgufPath: next });
+			if (next !== '') void checkCustomPath(next);
+		}
+	}
+
+	function setSource(value: AiModelSource) {
+		patch({ aiModelSource: value });
+	}
+
+	/** 「選ぶ」: ファイル選択で GGUF を 1 つ選び、保存して検査する */
+	async function pickCustom() {
+		try {
+			const picked = await api.pickGgufFile();
+			if (picked === null) return;
+			pathDraft = null;
+			patch({ aiCustomGgufPath: picked });
+			await checkCustomPath(picked);
 		} catch (error) {
 			reportError(error);
 		}
@@ -133,6 +201,10 @@
 		{ value: 'file-names', label: t('ai.scope_file_names') },
 		{ value: 'text-diff', label: t('ai.scope_text_diff') }
 	]);
+	const sourceOptions = $derived([
+		{ value: 'catalog', label: t('ai.source_catalog') },
+		{ value: 'custom-gguf', label: t('ai.source_custom') }
+	]);
 	const runnerOptions = $derived([
 		{ value: 'builtin', label: t('ai.runner_builtin') },
 		{ value: 'ollama', label: t('ai.runner_ollama') }
@@ -180,6 +252,10 @@
 		</div>
 	</div>
 
+	{#if scopeHint}
+		<p class="m:0 type-small fg:fg-muted">{t(scopeHint)}</p>
+	{/if}
+
 	{#if current && current.memoSuggestion !== 'ai'}
 		<p class="m:0 type-body fg:fg-muted">{t('ai.rules_only_note')}</p>
 	{/if}
@@ -199,13 +275,16 @@
 	<section class="flex flex-direction:column gap:3" aria-label={t('ai.models_heading')}>
 		<h3 class="m:0 type-body font-weight:600">{t('ai.models_heading')}</h3>
 		<p class="m:0 type-small fg:fg-muted">{t('ai.models_text')}</p>
+		{#if usingCustom}
+			<p class="m:0 type-small" role="status">{t('ai.custom_active')}</p>
+		{/if}
 		{#if catalog.isPending}
 			<Skeleton class="h:96px" />
 		{:else if catalog.data}
 			{#each catalog.data.models as model (model.id)}
 				<ModelCard
 					{model}
-					selected={current?.aiModel === model.id}
+					selected={!usingCustom && current?.aiModel === model.id}
 					progress={progress[model.id] ?? null}
 					failed={failed[model.id] ?? false}
 					onaction={(action) => void act(model.id, action)}
@@ -248,6 +327,45 @@
 						onchange={(value) => patch({ aiRunner: value as AiRunnerMode })}
 					/>
 				</div>
+
+				{#if current.aiRunner === 'builtin'}
+					<div class="flex align-items:center justify-content:space-between gap:6">
+						<span class="type-body">{t('ai.source')}</span>
+						<Select
+							class="w:240px flex-shrink:0"
+							ariaLabel={t('ai.source')}
+							value={current.aiModelSource}
+							options={sourceOptions}
+							onchange={(value) => setSource(value as AiModelSource)}
+						/>
+					</div>
+					{#if current.aiModelSource === 'custom-gguf'}
+						<div class="flex align-items:flex-end gap:3 flex-wrap:wrap">
+							<div class="flex-grow:1 min-w:0">
+								<TextField
+									label={t('ai.custom_path')}
+									value={pathValue}
+									oninput={(value) => (pathDraft = value)}
+									onblur={saveCustomPath}
+								/>
+							</div>
+							<Button variant="secondary" size="sm" onclick={() => void pickCustom()}>
+								{t('ai.custom_pick')}
+							</Button>
+						</div>
+						{#if pathResult}
+							<p
+								class={`m:0 type-small ${pathResult.ok ? 'fg:fg-muted' : 'fg:state-danger'}`}
+								role="status"
+							>
+								{pathResult.ok
+									? t('ai.custom_ok')
+									: t(customGgufMessageKey(pathResult.reason ?? 'unreadable'))}
+							</p>
+						{/if}
+						<p class="m:0 type-small fg:fg-muted">{t('ai.custom_caution')}</p>
+					{/if}
+				{/if}
 
 				{#if current.aiRunner === 'ollama'}
 					<TextField

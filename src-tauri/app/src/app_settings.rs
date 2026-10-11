@@ -82,6 +82,11 @@ pub async fn update_settings(
 ) -> Result<SettingsView, AppError> {
     let store = state.store_clone();
     let touches_ai_backend = patch.ai_runner.is_some() || patch.ai_ollama_url.is_some();
+    // モデルの指定（カタログの ID・入手元・カスタムのパス）が変わったら、起動中の内蔵サーバーを止める。
+    // 次の提案で新しいモデルを起動し直す（メモリを先に解放する）
+    let touches_ai_model = patch.ai_model.is_some()
+        || patch.ai_model_source.is_some()
+        || patch.ai_custom_gguf_path.is_some();
     let result = run_blocking(move || {
         let guard = store.lock().map_err(|_| lock_error())?;
         match project_id.as_deref() {
@@ -107,6 +112,12 @@ pub async fn update_settings(
         let settings = result.settings.clone();
         tauri::async_runtime::spawn(async move {
             let _ = crate::ai::apply_backend(&llm, &settings).await;
+        });
+    }
+    if touches_ai_model {
+        let llm = state.llm.clone();
+        tauri::async_runtime::spawn(async move {
+            llm.read().await.stop().await;
         });
     }
     Ok(result)

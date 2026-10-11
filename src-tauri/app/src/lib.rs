@@ -3549,6 +3549,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             ai::ai_list_ollama_models,
             ai::ai_check_endpoint,
             ai::ai_test_generation,
+            ai::ai_check_custom_gguf,
         ])
         .events(collect_events![
             events::StatusChanged,

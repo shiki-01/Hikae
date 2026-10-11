@@ -149,13 +149,18 @@ mod tests {
     #[test]
     fn builtin_catalog_is_valid() {
         let catalog = Catalog::builtin().unwrap();
-        assert_eq!(catalog.models.len(), 2);
+        assert_eq!(catalog.models.len(), 3);
         let gemma = catalog.get("gemma-4-e2b-it-q4_k_m").unwrap();
         assert!(gemma.recommended);
         assert_eq!(gemma.stage, 2);
         assert_eq!(gemma.size_bytes, 3_106_738_272);
         assert_eq!(catalog.stage(2).count(), 2);
-        assert_eq!(catalog.stage(1).count(), 0);
+        // 段階 1 は Qwen3.5-2B（設計 10.2。評価ノート 11.3）。既定は段階 2 の Gemma 4 E2B のまま
+        assert_eq!(catalog.stage(1).count(), 1);
+        let light = catalog.get("qwen3.5-2b-q4_k_m").unwrap();
+        assert_eq!(light.stage, 1);
+        assert!(!light.recommended);
+        assert_eq!(light.size_bytes, 1_280_835_840);
     }
 
     #[test]
@@ -168,6 +173,10 @@ mod tests {
         assert_eq!(
             catalog.get("qwen3-4b-instruct-2507-q4_k_m").unwrap().sha256,
             "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+        );
+        assert_eq!(
+            catalog.get("qwen3.5-2b-q4_k_m").unwrap().sha256,
+            "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
         );
     }
 

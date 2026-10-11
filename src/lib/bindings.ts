@@ -312,6 +312,12 @@ export const commands = {
 	aiCheckEndpoint: (url: string) => __TAURI_INVOKE<EndpointCheck>("ai_check_endpoint", { url }),
 	/**  固定の短い入力で生成を試す（設定の「試す」）。結果は保存しない。 */
 	aiTestGeneration: () => __TAURI_INVOKE<GenerationTest>("ai_test_generation"),
+	/**
+	 *  利用者が用意した GGUF ファイルを検査する（読み取りのみ）。
+	 *  ファイルはコピー・移動・書き換えしない。SHA-256 は検証しない（画面に注意書きを出す）。
+	 *  結果にはパスを含めない。
+	 */
+	aiCheckCustomGguf: (path: string) => __TAURI_INVOKE<CustomGgufCheck>("ai_check_custom_gguf", { path }),
 };
 
 /** Events */
@@ -653,6 +659,35 @@ export type ConflictMode =
 "show-dialog" | 
 /**  通知だけ出す */
 "notify-only";
+
+/**  カスタム GGUF の検査の結果（読み取りのみ） */
+export type CustomGgufCheck = {
+	/**  使える */
+	ok: boolean,
+	/**  使えないときの理由 */
+	reason: CustomGgufReason | null,
+};
+
+/**  カスタム GGUF の検査が拒否した理由（画面が文言を選ぶ。パス・ファイルの内容は返さない） */
+export type CustomGgufReason = 
+/**  パスが空 */
+"empty" | 
+/**  パスに使えない文字がある */
+"control-char" | 
+/**  ファイルが見つからない */
+"not-found" | 
+/**  リンクは使えない */
+"link" | 
+/**  ファイルではない（フォルダなど） */
+"not-a-file" | 
+/**  拡張子が .gguf ではない */
+"wrong-extension" | 
+/**  12GB を超える */
+"too-large" | 
+/**  GGUF の形式ではない */
+"not-gguf" | 
+/**  読めない（権限など） */
+"unreadable";
 
 /**  新規リポジトリの既定の公開範囲 */
 export type DefaultVisibility = "private" | "public";
@@ -1548,6 +1583,8 @@ export type TestFailure =
 "bad-response" | 
 /**  接続先の URL が正しくない */
 "invalid-endpoint" | 
+/**  自分で用意した GGUF ファイルが使えない（存在・形式・サイズの検査で拒否された） */
+"custom-invalid" | 
 /**  生成されたが検証で弾かれた */
 "rejected" | 
 /**  そのほか */

@@ -2,6 +2,19 @@
   "version": 1,
   "models": [
     {
+      "id": "qwen3.5-2b-q4_k_m",
+      "display_name": "Qwen3.5-2B（Q4_K_M）",
+      "stage": 1,
+      "file_name": "Qwen3.5-2B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+      "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+      "size_bytes": 1280835840,
+      "license_name": "Apache License 2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_total_memory_bytes": 7516192768,
+      "recommended": false
+    },
+    {
       "id": "gemma-4-e2b-it-q4_k_m",
       "display_name": "Gemma 4 E2B it（Q4_K_M）",
       "stage": 2,

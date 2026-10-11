@@ -188,7 +188,7 @@
 	const aiSettings = $derived(settingsQuery.data?.settings);
 	const aiReady = $derived(aiSuggestionReady(aiSettings, aiCatalogQuery.data));
 	const aiKey = $derived(
-		`${projectId}|${changesKey(changes)}|${aiReady}|${aiSettings?.memoSuggestion}|${aiSettings?.aiRunner}|${aiSettings?.aiModel}|${aiSettings?.aiScope}`
+		`${projectId}|${changesKey(changes)}|${aiReady}|${aiSettings?.memoSuggestion}|${aiSettings?.aiRunner}|${aiSettings?.aiModel}|${aiSettings?.aiModelSource}|${aiSettings?.aiCustomGgufPath}|${aiSettings?.aiScope}`
 	);
 	let suggest = $state<SuggestState>(SUGGEST_IDLE);
 	let suggestSeq = 0;

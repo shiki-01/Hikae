@@ -5,6 +5,7 @@
 
 use crate::catalog::Catalog;
 use crate::client::{check_endpoint, Backend, ChatClient};
+use crate::custom::validate_custom_gguf;
 use crate::download::{installed, Installed};
 use crate::error::LlmError;
 use crate::prompt::{build_messages, ChangeInput};
@@ -145,7 +146,43 @@ impl LlmService {
         };
         Ok(clean_summary(&raw))
     }
+
+    /// 利用者が用意した GGUF（カスタム）で保存メモの提案を 1 文生成する（内蔵の接続先だけ）。
+    ///
+    /// - 先に `validate_custom_gguf` で検査する（読み取りのみ。拒否は `CustomModelInvalid`）
+    /// - ファイルはコピー・移動しない。`-m` に渡すパスを内蔵のサーバーに与えるだけ
+    /// - 停止・再起動の扱いは `suggest` と同じ（応答が壊れたときだけ止める）
+    /// - 変更ファイルが空なら、サーバーを起動せず `Ok(None)` を返す
+    pub async fn suggest_custom(
+        &self,
+        input: &ChangeInput,
+        gguf_path: &Path,
+        timeout: Duration,
+    ) -> Result<Option<String>, LlmError> {
+        if input.files.is_empty() {
+            return Ok(None);
+        }
+        if self.backend != Backend::Builtin {
+            return Err(LlmError::InvalidModel);
+        }
+        validate_custom_gguf(gguf_path).map_err(|_| LlmError::CustomModelInvalid)?;
+        let messages = build_messages(input);
+        let base_url = self.sidecar.ensure_started(gguf_path).await?;
+        let result = self
+            .chat
+            .chat(&base_url, CUSTOM_MODEL_NAME, &messages, timeout)
+            .await;
+        if let Err(e) = &result {
+            if breaks_server(e) {
+                self.sidecar.stop().await;
+            }
+        }
+        Ok(clean_summary(&result?))
+    }
 }
+
+/// カスタム GGUF のとき、接続先へ渡すモデル名。パスは渡さない（ログや要求の内容に残さないため）
+const CUSTOM_MODEL_NAME: &str = "custom-gguf";
 
 /// 生成の失敗が、サーバーを止めて起動し直す理由になるか。
 /// タイムアウトは含めない（サーバーは正常で、処理が長いだけのことが多いため）。

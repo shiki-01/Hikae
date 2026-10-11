@@ -8,6 +8,7 @@ import type {
 	InterruptedRecovery,
 	OfficeDiff,
 	AiCatalog,
+	AiCustomGgufCheck,
 	AiModel,
 	AiDownloadNotice,
 	AiEndpointCheck,
@@ -491,6 +492,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 	memoSuggestion: 'rules',
 	aiRunner: 'builtin',
 	aiModel: '',
+	aiModelSource: 'catalog',
+	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
 	aiOllamaUrl: 'http://localhost:11434'
 };
@@ -793,6 +796,11 @@ export const mockApi: ProjectApi = {
 	async pickFolder(): Promise<string | null> {
 		await sleep(150);
 		return 'C:\\Users\\student\\Documents\\NewFolder';
+	},
+
+	async pickGgufFile(): Promise<string | null> {
+		await sleep(150);
+		return 'C:\\Users\\student\\Models\\my-model.gguf';
 	},
 
 	async addProject(
@@ -1658,10 +1666,7 @@ export const mockApi: ProjectApi = {
 			...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS),
 			...overrides
 		};
-		if (settings.memoSuggestion !== 'ai' || settings.aiModel === '') {
-			return { text: null, failure: 'not-ready' };
-		}
-		if (settings.aiRunner === 'builtin' && readAiStore()[settings.aiModel]?.status !== 'ready') {
+		if (settings.memoSuggestion !== 'ai' || !mockModelReady(settings)) {
 			return { text: null, failure: 'not-ready' };
 		}
 		const state = states.get(projectId);
@@ -1690,11 +1695,22 @@ export const mockApi: ProjectApi = {
 	async aiTestGeneration(): Promise<AiTestResult> {
 		await sleep(300);
 		const settings = readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS);
+		if (settings.aiRunner === 'builtin' && settings.aiModelSource === 'custom-gguf') {
+			if (settings.aiCustomGgufPath === '') return { ok: false, reason: 'not-configured' };
+			return mockCustomGgufCheck(settings.aiCustomGgufPath).ok
+				? { ok: true, reason: null }
+				: { ok: false, reason: 'custom-invalid' };
+		}
 		if (settings.aiModel === '') return { ok: false, reason: 'not-configured' };
 		if (settings.aiRunner === 'builtin' && readAiStore()[settings.aiModel]?.status !== 'ready') {
 			return { ok: false, reason: 'not-installed' };
 		}
 		return { ok: true, reason: null };
+	},
+
+	async aiCheckCustomGguf(path: string): Promise<AiCustomGgufCheck> {
+		await sleep(120);
+		return mockCustomGgufCheck(path);
 	},
 
 	onAiDownload(listener: (notice: AiDownloadNotice) => void): () => void {
@@ -1711,11 +1727,39 @@ const GIB = 1024 * 1024 * 1024;
 const MOCK_AI_MEMORY = 16 * GIB;
 const MOCK_AI_DISK = 120 * GIB;
 
-/** カタログの内容（バックエンドの catalog.json と同じ値） */
+/** モックのモデルが使えるか（内蔵はカタログの導入済み、またはカスタムのパス。Ollama はモデル名）。 */
+function mockModelReady(settings: AppSettings): boolean {
+	if (settings.aiRunner === 'ollama') return settings.aiModel !== '';
+	if (settings.aiModelSource === 'custom-gguf') return settings.aiCustomGgufPath !== '';
+	return settings.aiModel !== '' && readAiStore()[settings.aiModel]?.status === 'ready';
+}
+
+/** モックのカスタム GGUF の検査（実装の順序に近い形。ファイルは読まない） */
+function mockCustomGgufCheck(path: string): AiCustomGgufCheck {
+	if (path === '') return { ok: false, reason: 'empty' };
+	if (path.split('').some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) {
+		return { ok: false, reason: 'control-char' };
+	}
+	if (path.includes('missing')) return { ok: false, reason: 'not-found' };
+	if (!path.toLowerCase().endsWith('.gguf')) return { ok: false, reason: 'wrong-extension' };
+	return { ok: true, reason: null };
+}
+
+/** カタログの内容（バックエンドの catalog.json と同じ値・同じ順） */
 const MOCK_AI_MODELS: Omit<
 	AiModel,
 	'status' | 'partialBytes' | 'available' | 'unavailableReason' | 'downloading'
 >[] = [
+	{
+		id: 'qwen3.5-2b-q4_k_m',
+		displayName: 'Qwen3.5-2B（Q4_K_M）',
+		stage: 1,
+		sizeBytes: 1280835840,
+		licenseName: 'Apache License 2.0',
+		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+		minMemoryBytes: 7516192768,
+		recommended: false
+	},
 	{
 		id: 'gemma-4-e2b-it-q4_k_m',
 		displayName: 'Gemma 4 E2B it（Q4_K_M）',

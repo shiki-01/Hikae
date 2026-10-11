@@ -35,6 +35,7 @@ pub fn failure_of(e: LlmError, ollama: bool) -> SuggestFailure {
         LlmError::ModelNotInstalled
         | LlmError::UnknownModel
         | LlmError::InvalidModel
+        | LlmError::CustomModelInvalid
         | LlmError::InvalidEndpoint => SuggestFailure::NotReady,
         LlmError::Network if ollama => SuggestFailure::NotReady,
         _ => SuggestFailure::Unavailable,
