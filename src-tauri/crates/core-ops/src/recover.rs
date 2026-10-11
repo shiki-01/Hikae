@@ -8,11 +8,13 @@
 // - 途中で止まった取り込み（`MERGE_HEAD` が残っている）は、先に `merge --abort` で取り込みを取り消す
 //   （これも復元点を作ってから行う）
 // - 復元点は journal に残っていない（操作が完了しなかったため）。そのため、操作の名前と開始時刻から
-//   `refs/hikae/backup/<操作名>/<時刻>` を探す。見つからなければ何も変更せず `RestorePointNotFound`
+//   `refs/hikae/backup/<操作名>/<時刻>` を探す。見つからなければ、何も起きていないと確かめられたときだけ
+//   `NothingChanged`、そうでなければ何も変更せず `RestorePointNotFound`（設計書 6.3）
+// - 何も起きていないかの判定（`check_interrupted`）は読み取りだけで行う。起動時の自動確定にも使う
 // - 未追跡ファイルは消さない
 
-use crate::models::{OpsError, SkipWorktreeReport};
-use crate::operations::{abort_merge, current_branch};
+use crate::models::{OpsError, RecoverDiagnosis, RecoverOutcome, SkipWorktreeReport};
+use crate::operations::{abort_merge, conflicts, current_branch};
 use crate::pc_name::Meta;
 use crate::restore_file::undo_restore;
 use crate::skip_worktree::reapply_skip_worktree;
@@ -161,19 +163,136 @@ fn merge_in_progress(runner: &GitRunner, repo: &Path) -> Result<bool, OpsError> 
     Ok(out.code == 0)
 }
 
-/// 中断された操作の直前の復元点へ作業フォルダを戻す。戻した復元点の ref 名を返す。
+/// 作業フォルダの HEAD（完全な OID）。コミットが無ければ None。読み取りのみ。
+pub(crate) fn current_head(runner: &GitRunner, repo: &Path) -> Result<Option<String>, OpsError> {
+    let out = runner.run(repo, &["rev-parse", "--verify", "--quiet", "HEAD"])?;
+    if out.code != 0 {
+        return Ok(None);
+    }
+    let oid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((!oid.is_empty()).then_some(oid))
+}
+
+/// 中断された操作の記録のうち、復旧と判定に使う項目（ジャーナルから取り出したもの）
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InterruptedOp<'a> {
+    /// ジャーナルの操作名（`pull` など）
+    pub operation: &'a str,
+    /// 操作の開始時刻（Unix 秒）
+    pub started_at_unix: i64,
+    /// 操作の開始時点の HEAD。記録が無ければ None
+    pub head_before: Option<&'a str>,
+}
+
+/// 中断された操作が「何も変えていない」と言えるかの判定の内訳（読み取りのみ）。
+pub struct InterruptedCheck {
+    /// 技術詳細に出す内訳
+    pub diagnosis: RecoverDiagnosis,
+    /// 未解決の変更のぶつかりが残っているか
+    pub unresolved_conflicts: bool,
+}
+
+impl InterruptedCheck {
+    /// 作業フォルダ・インデックス・履歴に何も起きていないと確かめられたか（設計書 6.3 の自動確定の条件）。
+    /// 次の (a)〜(c) がすべて真のとき。
+    /// - (a) 開始時刻以降に作られた backup ref と snapshot ref が 1 件もない
+    /// - (b) 開始時の HEAD の記録があり、いまの HEAD と一致する
+    /// - (c) `MERGE_HEAD` が無く、未解決の変更のぶつかりも無い
+    pub fn no_change_proven(&self) -> bool {
+        let d = &self.diagnosis;
+        d.backup_refs_after_start == 0
+            && d.snapshot_refs_after_start == 0
+            && d.head_changed() == Some(false)
+            && !d.merge_head
+            && !self.unresolved_conflicts
+    }
+}
+
+/// 開始時刻以降に作られた復元点（backup ref と snapshot ref）の件数を数える。
+/// 時刻を読めない ref は、安全側に「作られた」として数える。
+fn restore_points_since(
+    runner: &GitRunner,
+    repo: &Path,
+    started_at_unix: i64,
+) -> Result<(usize, usize), OpsError> {
+    let out = runner.run_ok(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            BACKUP_REF_PREFIX,
+            SNAPSHOT_REF_PREFIX,
+        ],
+    )?;
+    let (mut backups, mut snapshots) = (0, 0);
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let name = line.trim();
+        let is_recent = name
+            .rsplit('/')
+            .next()
+            .and_then(parse_ref_timestamp)
+            .is_none_or(|ts| ts >= started_at_unix);
+        if !is_recent {
+            continue;
+        }
+        if name.starts_with(BACKUP_REF_PREFIX) {
+            backups += 1;
+        } else if name.starts_with(SNAPSHOT_REF_PREFIX) {
+            snapshots += 1;
+        }
+    }
+    Ok((backups, snapshots))
+}
+
+/// 中断された操作が、作業フォルダ・インデックス・履歴を変えていないかを調べる（読み取りのみ）。
+/// 復旧の前にも、起動時の自動確定の前にも使う。何も変更しない。
+pub(crate) fn check_interrupted(
+    runner: &GitRunner,
+    repo: &Path,
+    started_at_unix: i64,
+    head_before: Option<&str>,
+) -> Result<InterruptedCheck, OpsError> {
+    let (backups, snapshots) = restore_points_since(runner, repo, started_at_unix)?;
+    let diagnosis = RecoverDiagnosis {
+        backup_refs_after_start: backups,
+        snapshot_refs_after_start: snapshots,
+        head_before: head_before.map(str::to_string),
+        head_now: current_head(runner, repo)?,
+        merge_head: merge_in_progress(runner, repo)?,
+    };
+    let unresolved_conflicts = !conflicts(runner, repo)?.is_empty();
+    Ok(InterruptedCheck {
+        diagnosis,
+        unresolved_conflicts,
+    })
+}
+
+/// 中断された操作の直前の復元点へ作業フォルダを戻す。
+///
+/// 復元点が見つからないときは、`check_interrupted` で何も起きていないと確かめられれば
+/// `NothingChanged`（作業フォルダには触れない）、確かめられなければ `RestorePointNotFound`（内訳つき）を返す。
+/// どちらの場合も、戻す・書き換える処理は行わない。
 pub(crate) fn recover_interrupted(
     runner: &GitRunner,
     repo: &Path,
-    operation: &str,
-    started_at_unix: i64,
+    interrupted: InterruptedOp<'_>,
     now: OffsetDateTime,
     meta: Meta,
     skip: &mut SkipWorktreeReport,
-) -> Result<String, OpsError> {
-    // 見つからなければ、ここで何も変更せずに終わる
-    let restore_point = select_restore_point(runner, repo, operation, started_at_unix)?
-        .ok_or(OpsError::RestorePointNotFound)?;
+) -> Result<RecoverOutcome, OpsError> {
+    let InterruptedOp {
+        operation,
+        started_at_unix,
+        head_before,
+    } = interrupted;
+    let Some(restore_point) = select_restore_point(runner, repo, operation, started_at_unix)?
+    else {
+        let check = check_interrupted(runner, repo, started_at_unix, head_before)?;
+        if check.no_change_proven() && is_recoverable_operation(operation) {
+            return Ok(RecoverOutcome::NothingChanged);
+        }
+        return Err(OpsError::RestorePointNotFound(check.diagnosis));
+    };
 
     // 途中で止まった取り込みを先に取り消す（復元点を作ってから merge --abort）
     if merge_in_progress(runner, repo)? {
@@ -184,7 +303,7 @@ pub(crate) fn recover_interrupted(
     undo_restore(runner, repo, &restore_point, now, meta)?;
     // 無視中のファイルの退避を書き戻し、印を付け直す（設計書 4.8）。取り消しの後に行う
     skip.absorb(reapply_skip_worktree(runner, repo)?);
-    Ok(restore_point)
+    Ok(RecoverOutcome::Restored { restore_point })
 }
 
 #[cfg(test)]

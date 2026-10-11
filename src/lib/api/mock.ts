@@ -5,6 +5,7 @@ import { diffLines } from './diff-lines';
 import { officeKindOf } from '#lib/features/compare/office-diff.js';
 import { classifyDropped, LARGE_WARN_BYTES, MAX_FILE_BYTES } from '#lib/features/changes/files.js';
 import type {
+	InterruptedRecovery,
 	OfficeDiff,
 	AiCatalog,
 	AiModel,
@@ -1550,9 +1551,19 @@ export const mockApi: ProjectApi = {
 		await sleep(80);
 	},
 
-	async recoverInterrupted(projectId: string): Promise<void> {
+	async recoverInterrupted(projectId: string): Promise<InterruptedRecovery> {
 		await sleep(WAIT_LONG);
 		stateOf(projectId).project.interruptedOperation = null;
+		return 'recovered';
+	},
+
+	async dismissInterrupted(projectId: string): Promise<void> {
+		await sleep(WAIT_LONG);
+		stateOf(projectId).project.interruptedOperation = null;
+	},
+
+	async takeClosedInterruptedNotices(): Promise<string[]> {
+		return [];
 	},
 
 	async getSettings(projectId: string | null): Promise<SettingsView> {

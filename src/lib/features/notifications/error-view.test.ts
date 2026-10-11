@@ -57,7 +57,7 @@ describe('バックエンドのエラーコードによる文言', () => {
 		expect(view.message).toBe(
 			`${t('errcode.not_logged_in.safe')}\n${t('errcode.not_logged_in.next')}`
 		);
-		expect(view.technical).toBe('raw');
+		expect(view.technical).toBe('code=not_logged_in\nraw');
 	});
 
 	it('params がプレースホルダに差し込まれる', () => {
@@ -320,5 +320,48 @@ describe('バックエンドのコードによる次の行動ボタン', () => {
 		});
 		expect(noRetry.primaryKind).toBe('close');
 		expect(noRetry.primaryLabel).toBe(t('error.close'));
+	});
+});
+
+describe('中断された操作の復旧（E15）の表示', () => {
+	const raw = {
+		what_happened: 'RUST_WHAT',
+		data_is_safe: 'RUST_SAFE',
+		next_action: 'RUST_NEXT',
+		technical_info: null
+	};
+
+	it('復元点が無いときは「このまま続ける」を主ボタンにする（案内の行き先がある場合）', () => {
+		const view = describeError(mapError({ ...raw, code: 'restore_point_not_found', params: [] }), {
+			retry: false,
+			guide: true
+		});
+		expect(view.primaryKind).toBe('dismiss');
+		expect(view.primaryLabel).toBe(t('errbtn.dismiss_interrupted'));
+	});
+
+	it('行き先が無いときは、「このまま続ける」を出さず閉じるだけにする', () => {
+		const view = describeError(mapError({ ...raw, code: 'restore_point_not_found', params: [] }), {
+			retry: false,
+			guide: false
+		});
+		expect(view.primaryKind).toBe('close');
+	});
+
+	it('技術情報には、技術情報が空でもエラーコードが必ず入る', () => {
+		const view = describeError(mapError({ ...raw, code: 'restore_point_not_found', params: [] }));
+		expect(view.technical).toBe('code=restore_point_not_found');
+	});
+
+	it('技術情報には、コードの次の行に既存の技術情報が続く', () => {
+		const view = describeError(
+			mapError({
+				...raw,
+				code: 'restore_point_not_found',
+				params: [],
+				technical_info: 'operation=pull'
+			})
+		);
+		expect(view.technical).toBe('code=restore_point_not_found\noperation=pull');
 	});
 });

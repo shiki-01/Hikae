@@ -206,7 +206,8 @@ describe('エラーの 3 要素の変換', () => {
 		expect(view.title).toBe('保存に失敗しました');
 		expect(view.message).toBe('ファイルは無事です\nもう一度試してください');
 		expect(view.autoRecovering).toBe(false);
-		expect(view.technical).toBe('git: boom');
+		// 技術情報の先頭には、バックエンドのエラーコードが必ず入る（設計書 5.1）
+		expect(view.technical).toBe('code=test_unknown_code\ngit: boom');
 	});
 });
 

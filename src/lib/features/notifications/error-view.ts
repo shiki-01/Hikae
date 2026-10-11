@@ -14,9 +14,10 @@ import {
  * - `login`: ログインし直す画面へ移る
  * - `copy`: 管理者向けの説明をクリップボードへコピーする
  * - `guide`: 対応する画面へ誘導する（呼び出し側が行き先を渡したときだけ）
+ * - `dismiss`: 中断された操作を「このまま続ける」で閉じる（呼び出し側が行き先を渡したときだけ）
  * - `close`: 閉じるだけ
  */
-export type PrimaryKind = 'retry' | 'login' | 'copy' | 'guide' | 'close';
+export type PrimaryKind = 'retry' | 'login' | 'copy' | 'guide' | 'dismiss' | 'close';
 
 export interface ErrorView {
 	code: AppErrorCode | 'generic';
@@ -35,7 +36,7 @@ export interface ErrorView {
 export interface AvailableActions {
 	/** 元の操作を再実行できる */
 	retry: boolean;
-	/** 対応する画面へ誘導できる */
+	/** 対応する画面へ誘導できる（主ボタンの行き先 `onprimary` が渡されている。中断の「このまま続ける」にも使う） */
 	guide: boolean;
 }
 
@@ -77,7 +78,9 @@ const BACKEND_ACTIONS: Record<string, Exclude<PrimaryKind, 'close'>> = {
 	remote_owner_invalid: 'guide',
 	remote_public_not_confirmed: 'guide',
 	remote_conflict: 'guide',
-	remote_orphaned: 'guide'
+	remote_orphaned: 'guide',
+	// 中断された操作の復元点が無い（E15）: 何も起きていないと確かめられなかったときは、そのまま続けるよう案内する
+	restore_point_not_found: 'dismiss'
 };
 
 /** バックエンドのエラーコードに対する次の行動の種類。対応表に無ければ close */
@@ -89,7 +92,8 @@ const KIND_LABELS: Record<Exclude<PrimaryKind, 'close'>, MessageKey> = {
 	retry: 'errbtn.retry',
 	login: 'errbtn.login',
 	copy: 'errbtn.copy_admin',
-	guide: 'errbtn.guide_remote'
+	guide: 'errbtn.guide_remote',
+	dismiss: 'errbtn.dismiss_interrupted'
 };
 
 /** 文言の差し込み位置が残っている（値が足りなかった）か */
@@ -116,7 +120,16 @@ export function resolveBackendMessage(message: BackendMessage): BackendMessage {
 function withAvailable(kind: PrimaryKind, available: AvailableActions): PrimaryKind {
 	if (kind === 'retry' && !available.retry) return 'close';
 	if (kind === 'guide' && !available.guide) return 'close';
+	if (kind === 'dismiss' && !available.guide) return 'close';
 	return kind;
+}
+
+/**
+ * 技術情報の先頭に、バックエンドのエラーコードを必ず付ける（`code=<コード>`）。
+ * 技術情報が空でもコードは残る。パスやトークンは含めない（コードと既存の技術情報だけ）
+ */
+export function technicalWithCode(code: string, technical: string): string {
+	return [`code=${code}`, technical].filter((line) => line.length > 0).join('\n');
 }
 
 function describeBackend(
@@ -141,7 +154,7 @@ function describeBackend(
 		primaryKind: kind,
 		toastMessage: autoCode ? t(`error.${autoCode}.toast` as MessageKey) : undefined,
 		copyText: kind === 'copy' ? t('error.E02.copy_text') : undefined,
-		technical,
+		technical: technicalWithCode(message.code, technical),
 		autoRecovering: autoCode !== undefined
 	};
 }

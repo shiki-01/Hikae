@@ -178,19 +178,39 @@ export function useCompleteOnboarding() {
 	}));
 }
 
-/** 中断された操作の前の状態へ戻す。成功で関連するクエリを更新し、失敗は 3 要素のエラーで表示する */
-export function useRecoverInterrupted(getProjectId: () => string, onDone?: () => void) {
+/**
+ * 途中で止まった操作（中断）への対応の 2 つ。「操作前の状態に戻す」と「このまま続ける」。
+ * 成功で関連するクエリを更新する。失敗は 3 要素のエラーで表示し、復元点が無いときは
+ * 「このまま続ける」を主ボタンとして出す（設計書 6.3）
+ */
+export function useInterruptedActions(getProjectId: () => string, onDone?: () => void) {
 	const client = useQueryClient();
 	const retry = { run: () => {} };
-	const mutation = createMutation(() => ({
-		mutationFn: () => api.recoverInterrupted(getProjectId()),
+	const dismiss = createMutation(() => ({
+		mutationFn: () => api.dismissInterrupted(getProjectId()),
 		onSuccess: async () => {
 			await invalidateProject(client, getProjectId());
-			pushToast({ type: 'success', message: t('toast.recovered') });
 			onDone?.();
 		},
-		onError: (error) => reportError(error, { retry: () => retry.run() })
+		onError: (error) => reportError(error)
 	}));
-	retry.run = () => mutation.mutate();
-	return mutation;
+	const recover = createMutation(() => ({
+		mutationFn: () => api.recoverInterrupted(getProjectId()),
+		onSuccess: async (result) => {
+			await invalidateProject(client, getProjectId());
+			pushToast(
+				result === 'nothing-changed'
+					? { type: 'info', message: t('interrupted.nothing_changed') }
+					: { type: 'success', message: t('toast.recovered') }
+			);
+			onDone?.();
+		},
+		onError: (error) =>
+			reportError(error, {
+				retry: () => retry.run(),
+				onprimary: () => dismiss.mutate()
+			})
+	}));
+	retry.run = () => recover.mutate();
+	return { recover, dismiss };
 }

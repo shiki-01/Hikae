@@ -11,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use core_git::GitRunner;
-use core_ops::{Ops, OpsError, SaveOptions};
+use core_ops::{Ops, OpsError, RecoverDiagnosis, RecoverOutcome, SaveOptions};
 use core_store::{Project, ProjectLocks, Store};
 use core_watch::SyncTask;
 
@@ -23,6 +23,7 @@ mod events;
 mod ext_protocol;
 mod github;
 mod health;
+mod interrupted;
 mod maintenance;
 mod office;
 mod ops_runner;
@@ -37,7 +38,7 @@ mod watch;
 use events::{OpTrigger, StatusChanged};
 use ops_runner::{
     memo_labels, pull_outcome_name, push_outcome_name, run_op, size_limits_for, summarize_pull,
-    summarize_push, unsaved_policy_for, OpContext, OpSpec, OpSummary,
+    summarize_push, unsaved_policy_for, OpContext, OpFailure, OpSpec, OpSummary,
 };
 use remote::{AddProjectResult, RemoteConnectResult, RemoteRequest};
 use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
@@ -323,13 +324,10 @@ impl AppError {
                     Some(format!("{reason:?}")),
                 )
             }
-            OpsError::RestorePointNotFound => (
-                "restore_point_not_found",
-                "中断された操作の前の状態が見つかりませんでした".to_string(),
-                "ファイルは変更されていません。データは無事です。".to_string(),
-                "取り込み直すか、履歴から元に戻したい時点を選んでください".to_string(),
-                None,
-            ),
+            // 中断された操作（E15）の復元点が無い。ジャーナルの情報は呼び出し側（復旧）が補う
+            OpsError::RestorePointNotFound(diagnosis) => {
+                return AppError::restore_point_not_found(&diagnosis, "unknown", None, "unknown");
+            }
             OpsError::Unexpected(msg) => (
                 "unexpected",
                 "予期しないエラーが発生しました".to_string(),
@@ -346,6 +344,26 @@ impl AppError {
             data_is_safe,
             next_action,
             technical_info,
+        }
+    }
+}
+
+impl AppError {
+    /// 中断された操作（E15）の復元点が見つからない。技術詳細には判定の内訳（安全な項目だけ）を載せる。
+    /// `journal_id` と `started_at` は、分かるときだけ渡す（分からなければ `unknown`）
+    pub(crate) fn restore_point_not_found(
+        diagnosis: &RecoverDiagnosis,
+        operation: &str,
+        journal_id: Option<i64>,
+        started_at: &str,
+    ) -> Self {
+        AppError {
+            code: "restore_point_not_found".to_string(),
+            params: Vec::new(),
+            what_happened: "中断された操作の前の状態が見つかりませんでした".to_string(),
+            data_is_safe: "ファイルは変更されていません。データは無事です。".to_string(),
+            next_action: "このまま続けるか、履歴から元に戻したい時点を選んでください".to_string(),
+            technical_info: Some(diagnosis.technical_line(operation, journal_id, started_at)),
         }
     }
 }
@@ -381,6 +399,8 @@ pub struct AppState {
     pub suggest: core_llm::SuggestSlot,
     /// 拡張ホスト（組み込みの Office 抽出器を含む。設計書 11 章）。起動時に登録し、以後は読み取りだけ
     pub extensions: Arc<core_preview::ExtensionHost>,
+    /// 起動時に自動で閉じた、途中で止まった操作の名前。画面へ一度だけ知らせる（設計書 6.3）
+    pub closed_interrupted: Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -403,6 +423,7 @@ impl AppState {
             model_slots: Arc::new(ai::ModelSlots::default()),
             suggest: core_llm::SuggestSlot::default(),
             extensions: Arc::new(extensions),
+            closed_interrupted: Mutex::new(Vec::new()),
         }
     }
 
@@ -2581,20 +2602,31 @@ async fn open_file_at(
         })
 }
 
+/// 中断された操作の復旧の結果（画面はトーストを出し分ける）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecoverResult {
+    /// 中断された操作の直前の復元点へ戻した
+    Recovered,
+    /// 復元点は無いが、何も起きていないと確かめられた。作業フォルダは変えず、中断の記録だけ閉じた
+    NothingChanged,
+}
+
 /// 中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
 ///
 /// 対象は保存・取り込み系（`save` / `pull` / `push` / `resolve`）。復元点は
 /// `refs/hikae/backup/` の、その操作が始まった後に作られた最新のもの。戻す前にいまの状態の
 /// 復元点を作り、`restore --source` で戻す（`reset --hard` / `checkout -f` は使わない）。
-/// 実行は直列キューとジャーナルを通す。復元点が見つからなければ何も変更せずエラーを返し、
-/// 中断の印は残る。成功すると中断の印を解除する。
+/// 復元点が無いときは、何も起きていないと確かめられれば `NothingChanged`（何も変えずに中断の記録を閉じる）。
+/// 確かめられなければ何も変更せずエラーを返し、中断の印は残る。
+/// 実行は直列キューとジャーナルを通す。成功すると中断の印を解除する。
 #[tauri::command]
 #[specta::specta]
 async fn recover_interrupted(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
-) -> Result<(), AppError> {
+) -> Result<RecoverResult, AppError> {
     let store = state.store_clone();
     let lookup_id = id.clone();
     let entry = run_blocking(move || {
@@ -2641,13 +2673,21 @@ async fn recover_interrupted(
     }
     // 開始時刻が読めなければ復元点を特定できない（古い復元点を使わない）
     let Some(started_at) = entry.started_at_unix() else {
-        return Err(AppError::from_ops_error(OpsError::RestorePointNotFound));
+        return Err(AppError::restore_point_not_found(
+            &RecoverDiagnosis::default(),
+            &entry.operation,
+            Some(entry.id),
+            &entry.started_at,
+        ));
     };
 
     let ctx = OpContext::new(app, &state);
     let operation = entry.operation.clone();
-    let target = entry.operation;
-    run_op(
+    let target = entry.operation.clone();
+    let head_before = entry.head_before.clone();
+    let journal_id = entry.id;
+    let started_text = entry.started_at.clone();
+    let outcome = run_op(
         &ctx,
         &id,
         OpSpec {
@@ -2656,14 +2696,34 @@ async fn recover_interrupted(
             target: Some(target),
             data_is_safe: "ファイルは変更されていません",
         },
-        move |ops, path| ops.recover_interrupted(path, &operation, started_at),
-        |_| OpSummary {
-            detail: "recovered".to_string(),
+        move |ops, path| {
+            ops.recover_interrupted(path, &operation, started_at, head_before.as_deref())
+        },
+        |o| OpSummary {
+            detail: match o {
+                RecoverOutcome::Restored { .. } => "recovered",
+                RecoverOutcome::NothingChanged => "nothing-changed",
+            }
+            .to_string(),
             quiet: false,
         },
     )
-    .await?;
-    Ok(())
+    .await
+    .map_err(|failure| match failure {
+        OpFailure::Ops(OpsError::RestorePointNotFound(diagnosis)) => {
+            AppError::restore_point_not_found(
+                &diagnosis,
+                &entry.operation,
+                Some(journal_id),
+                &started_text,
+            )
+        }
+        other => AppError::from(other),
+    })?;
+    Ok(match outcome {
+        RecoverOutcome::Restored { .. } => RecoverResult::Recovered,
+        RecoverOutcome::NothingChanged => RecoverResult::NothingChanged,
+    })
 }
 
 /// フォルダが見つからないプロジェクトの登録パスを付け替える。
@@ -3464,6 +3524,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             preview::preview_file,
             preview::list_renderers,
             recover_interrupted,
+            interrupted::dismiss_interrupted,
+            interrupted::take_closed_interrupted_notices,
             github::get_session,
             github::start_login,
             github::wait_login,
@@ -3580,12 +3642,9 @@ pub fn run() {
 
             // 前回のアプリ終了で途中で止まった操作（ジャーナルが「実行中」のまま）を検出する。
             // 画面が開く前に通知しても届かないため、状態（project_status）にも載せる
-            let interrupted = store
-                .recover_interrupted(&core_store::now_rfc3339())
-                .unwrap_or_else(|e| {
-                    eprintln!("操作ジャーナルの確認に失敗しました: {e:?}");
-                    Vec::new()
-                });
+            if let Err(e) = store.recover_interrupted(&core_store::now_rfc3339()) {
+                eprintln!("操作ジャーナルの確認に失敗しました: {e:?}");
+            }
 
             // ローカル LLM。保存先はアプリのデータフォルダの models/、同梱の llama-server は resources/llama/。
             // 接続先は保存されている設定から決める（内蔵か Ollama）
@@ -3609,10 +3668,26 @@ pub fn run() {
             // 拡張ホスト。同梱の拡張（resources/extensions/<id>/）を登録する。失敗してもアプリは起動を続ける
             let extensions = load_extensions(resource_dir.as_deref());
             let state = AppState::new(store, llm, models_dir, extensions);
+            // 中断された操作のうち、何も変わっていないと確かめられたものを自動で閉じる（設計書 6.3）。
+            // スケジューラの自動実行より前に行い、判定を変える復元点を作らせない
+            if health::probe_app_git().0.is_available() {
+                let closed = interrupted::close_unchanged_at_startup(&state);
+                if let Ok(mut g) = state.closed_interrupted.lock() {
+                    g.extend(closed);
+                }
+            }
             app.manage(state);
 
+            // 閉じていない中断を通知する（自動で閉じたものは含まない）
+            let open_interrupted = app
+                .state::<AppState>()
+                .store
+                .lock()
+                .ok()
+                .and_then(|g| g.list_interrupted().ok())
+                .unwrap_or_default();
             let mut notified = std::collections::HashSet::new();
-            for entry in interrupted {
+            for entry in open_interrupted {
                 if notified.insert(entry.project_id.clone()) {
                     let _ = events::NeedsAttention {
                         project_id: entry.project_id,

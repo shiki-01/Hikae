@@ -173,6 +173,68 @@ pub struct SyncState {
     pub dirty: bool,
 }
 
+/// 中断された操作の復旧の結果（設計書 6.3）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoverOutcome {
+    /// 中断された操作の直前の復元点へ戻した。戻した復元点の ref 名
+    Restored { restore_point: String },
+    /// 復元点が無く、HEAD も変わらず、取り込みの途中でもない。作業フォルダには何も起きていない
+    NothingChanged,
+}
+
+/// 中断された操作の判定の内訳。技術詳細の欄に載せる（パス・ファイル名・内容は含めない）
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RecoverDiagnosis {
+    /// 開始時刻以降に作られた、この操作の backup ref の件数（操作名は問わない）
+    pub backup_refs_after_start: usize,
+    /// 開始時刻以降に作られた自動保存（snapshot ref）の件数
+    pub snapshot_refs_after_start: usize,
+    /// 操作の開始時点の HEAD。記録が無ければ None
+    pub head_before: Option<String>,
+    /// いまの HEAD。コミットが無ければ None
+    pub head_now: Option<String>,
+    /// 取り込みの途中（`MERGE_HEAD` が残っている）か
+    pub merge_head: bool,
+}
+
+impl RecoverDiagnosis {
+    /// HEAD が開始時と変わったか。開始時の記録が無ければ `None`（不明）
+    pub fn head_changed(&self) -> Option<bool> {
+        self.head_before
+            .as_ref()
+            .map(|before| self.head_now.as_ref() != Some(before))
+    }
+
+    /// 技術詳細の 1 行。項目名は英字、値は安全なものだけ（OID は先頭 12 桁）。
+    /// `operation` と `started_at` は呼び出し側（app 層）がジャーナルから渡す
+    pub fn technical_line(
+        &self,
+        operation: &str,
+        journal_id: Option<i64>,
+        started_at: &str,
+    ) -> String {
+        let short = |oid: &Option<String>| {
+            oid.as_deref()
+                .map(|o| o.chars().take(12).collect::<String>())
+                .unwrap_or_else(|| "none".to_string())
+        };
+        let head_changed = match self.head_changed() {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "unknown",
+        };
+        let journal = journal_id.map_or_else(|| "unknown".to_string(), |id| id.to_string());
+        format!(
+            "operation={operation} journal_id={journal} started_at={started_at} backup_refs_after_start={} snapshot_refs_after_start={} head_before={} head_now={} head_changed={head_changed} merge_head={}",
+            self.backup_refs_after_start,
+            self.snapshot_refs_after_start,
+            short(&self.head_before),
+            short(&self.head_now),
+            self.merge_head,
+        )
+    }
+}
+
 /// 高層操作のエラー型
 #[derive(Error, Debug)]
 pub enum OpsError {
@@ -220,9 +282,10 @@ pub enum OpsError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
-    /// 中断された操作の直前に作られた復元点が見つからない（何も変更していない）
+    /// 中断された操作の直前に作られた復元点が見つからない（何も変更していない）。
+    /// 技術詳細の欄に出す安全な項目（件数・先頭 12 桁の HEAD・有無）を持つ
     #[error("restore point for the interrupted operation was not found")]
-    RestorePointNotFound,
+    RestorePointNotFound(RecoverDiagnosis),
 
     /// 新規ファイルを「作成しない」状態に戻せなかった（何も削除していない）
     #[error("new file cannot be discarded: {reason:?}")]
@@ -634,7 +697,7 @@ impl OpsError {
             OpsError::UnsupportedFileNames(_) => "unsupported-file-names",
             OpsError::Conflict(_) => "conflict",
             OpsError::InvalidInput(_) => "invalid-input",
-            OpsError::RestorePointNotFound => "restore-point-not-found",
+            OpsError::RestorePointNotFound(_) => "restore-point-not-found",
             OpsError::DiscardRefused { .. } => "discard-refused",
             OpsError::AddRefused(_) => "add-refused",
             OpsError::SkipStashPending => "skip-stash-pending",

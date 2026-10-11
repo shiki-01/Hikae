@@ -218,10 +218,21 @@ export const commands = {
 	 *  対象は保存・取り込み系（`save` / `pull` / `push` / `resolve`）。復元点は
 	 *  `refs/hikae/backup/` の、その操作が始まった後に作られた最新のもの。戻す前にいまの状態の
 	 *  復元点を作り、`restore --source` で戻す（`reset --hard` / `checkout -f` は使わない）。
-	 *  実行は直列キューとジャーナルを通す。復元点が見つからなければ何も変更せずエラーを返し、
-	 *  中断の印は残る。成功すると中断の印を解除する。
+	 *  復元点が無いときは、何も起きていないと確かめられれば `NothingChanged`（何も変えずに中断の記録を閉じる）。
+	 *  確かめられなければ何も変更せずエラーを返し、中断の印は残る。
+	 *  実行は直列キューとジャーナルを通す。成功すると中断の印を解除する。
 	 */
-	recoverInterrupted: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("recover_interrupted", { id })),
+	recoverInterrupted: (id: string) => typedError<RecoverResult, AppError>(__TAURI_INVOKE("recover_interrupted", { id })),
+	/**
+	 *  利用者が「このまま続ける」を選んだ。プロジェクトの中断の印を閉じる。
+	 *  ファイル・インデックス・履歴は変えない。閉じた理由は `interrupted-dismissed` として記録する。
+	 */
+	dismissInterrupted: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("dismiss_interrupted", { id })),
+	/**
+	 *  起動時に自動で閉じた中断の操作名を、一度だけ取り出す（画面の準備ができたあとに呼ぶ）。
+	 *  取り出したら空にするため、トーストは一度しか出ない。
+	 */
+	takeClosedInterruptedNotices: () => __TAURI_INVOKE<string[]>("take_closed_interrupted_notices"),
 	/**  ログイン状態を返す。 */
 	getSession: () => typedError<SessionInfo, AppError>(__TAURI_INVOKE("get_session")),
 	/**  ログインを始める（Device Flow）。確認コードと確認ページの URL を返す。 */
@@ -1066,6 +1077,13 @@ export type PushResult = {
 	/**  取り込み前の自動保存に大きいファイルがあり、何も変更せず見送った場合の内容。なければ null */
 	size_check: SizeCheckResult | null,
 };
+
+/**  中断された操作の復旧の結果（画面はトーストを出し分ける） */
+export type RecoverResult = 
+/**  中断された操作の直前の復元点へ戻した */
+"recovered" | 
+/**  復元点は無いが、何も起きていないと確かめられた。作業フォルダは変えず、中断の記録だけ閉じた */
+"nothing-changed";
 
 /**  追加しなかったファイル */
 export type RejectedFileItem = {

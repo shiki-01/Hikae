@@ -79,6 +79,7 @@ import type {
 	RestoreResult,
 	RestoreScope,
 	RendererInfo,
+	InterruptedRecovery,
 	SaveOutcome,
 	SavePoint,
 	SizeChoice
@@ -522,7 +523,15 @@ export const tauriApi: ProjectApi = {
 		await unwrap(commands.openFileAt(projectId, savePointId, path));
 	},
 
-	async recoverInterrupted(projectId: string): Promise<void> {
-		await unwrap(commands.recoverInterrupted(projectId));
+	async recoverInterrupted(projectId: string): Promise<InterruptedRecovery> {
+		return unwrap(commands.recoverInterrupted(projectId));
+	},
+
+	async dismissInterrupted(projectId: string): Promise<void> {
+		await unwrap(commands.dismissInterrupted(projectId));
+	},
+
+	async takeClosedInterruptedNotices(): Promise<string[]> {
+		return commands.takeClosedInterruptedNotices();
 	}
 };

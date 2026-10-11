@@ -66,18 +66,18 @@ pub use models::{
     new_restore_points, AddConflictAction, AddConflictDecision, AddConflictPolicy, AddFilesOutcome,
     AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave, Choice, ConflictFile, ConflictKind,
     DiffLine, DiffLineKind, DiscardRefusal, FileInHistory, HistoryEntry, HistoryKind, Identity,
-    Labels, NameConflict, OpsError, PointChange, PointChangeKind, PullOutcome, RejectedFile,
-    RelocateCheck, ResolveOutcome, RestoreAndSave, RestoreFileAndSave, RestoreFileChange,
-    RestoreFileKind, RestoreFileOutcome, RestoreFilePreview, RestorePointInfo, RestorePreview,
-    SaveOutcome, SkipReason, SkipWorktreeReport, SkippedItem, SyncState, UnsavedPolicy,
-    UploadOutcome,
+    Labels, NameConflict, OpsError, PointChange, PointChangeKind, PullOutcome, RecoverDiagnosis,
+    RecoverOutcome, RejectedFile, RelocateCheck, ResolveOutcome, RestoreAndSave,
+    RestoreFileAndSave, RestoreFileChange, RestoreFileKind, RestoreFileOutcome, RestoreFilePreview,
+    RestorePointInfo, RestorePreview, SaveOutcome, SkipReason, SkipWorktreeReport, SkippedItem,
+    SyncState, UnsavedPolicy, UploadOutcome,
 };
 pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};
 pub use pc_name::{local_pc_name, sanitize_pc_name, MAX_PC_NAME_CHARS};
 pub use preview_file::{cleanup_old_previews, PREVIEW_MAX_AGE};
 pub use project_tree::{ProjectTree, ProjectTreeEntry, PROJECT_TREE_MAX_ENTRIES};
-pub use recover::is_recoverable_operation;
+pub use recover::{is_recoverable_operation, InterruptedCheck};
 pub use remote::{
     project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
     RemoteConnection,
@@ -730,27 +730,50 @@ impl Ops {
         point::resolve_point(self.runner(), repo, point)
     }
 
-    /// 中断された操作（`operation`、開始は Unix 秒 `started_at_unix`）の直前に作られた復元点へ、
-    /// 作業フォルダを戻す。戻す前に、いまの状態の復元点を新たに作る。
-    /// 復元点が見つからなければ何も変更せず `RestorePointNotFound`。戻した復元点の ref 名を返す。
+    /// 中断された操作（`operation`、開始は Unix 秒 `started_at_unix`、開始時の HEAD は `head_before`）の
+    /// 直前に作られた復元点へ、作業フォルダを戻す。戻す前に、いまの状態の復元点を新たに作る。
+    /// 復元点が無いときは、何も起きていないと確かめられれば `NothingChanged`（何も変えない）、
+    /// 確かめられなければ何も変更せず `RestorePointNotFound`（内訳つき）を返す（設計書 6.3）。
     pub fn recover_interrupted(
         &self,
         repo: &Path,
         operation: &str,
         started_at_unix: i64,
-    ) -> Result<String, OpsError> {
+        head_before: Option<&str>,
+    ) -> Result<RecoverOutcome, OpsError> {
         let mut skip = SkipWorktreeReport::default();
+        let interrupted = recover::InterruptedOp {
+            operation,
+            started_at_unix,
+            head_before,
+        };
         let outcome = recover::recover_interrupted(
             self.runner(),
             repo,
-            operation,
-            started_at_unix,
+            interrupted,
             self.now(),
             self.meta(),
             &mut skip,
         );
         self.record_skip(skip);
         outcome
+    }
+
+    /// 中断された操作が作業フォルダ・インデックス・履歴を変えていないかを調べる（読み取りのみ）。
+    /// 起動時の自動確定（設計書 6.3）に使う。何も変更しない。
+    pub fn check_interrupted(
+        &self,
+        repo: &Path,
+        started_at_unix: i64,
+        head_before: Option<&str>,
+    ) -> Result<InterruptedCheck, OpsError> {
+        recover::check_interrupted(self.runner(), repo, started_at_unix, head_before)
+    }
+
+    /// 作業フォルダの HEAD（完全な OID）。コミットが無ければ None（読み取りのみ）。
+    /// 操作の開始時に記録する HEAD（設計書 6.3）に使う。
+    pub fn current_head(&self, repo: &Path) -> Result<Option<String>, OpsError> {
+        recover::current_head(self.runner(), repo)
     }
 
     /// 無視中（skip-worktree）のパスを返す（読み取りのみ。設計書 4.8）。

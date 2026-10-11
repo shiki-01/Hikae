@@ -11,11 +11,23 @@
 		operation: string | null;
 		/** 操作の前の状態へ戻している間は true */
 		recovering?: boolean;
+		/** 「このまま続ける」を実行している間は true */
+		dismissing?: boolean;
 		onrecover: () => void;
+		ondismiss: () => void;
 		onclose: () => void;
 	}
 
-	let { open, operation, recovering = false, onrecover, onclose }: Props = $props();
+	let {
+		open,
+		operation,
+		recovering = false,
+		dismissing = false,
+		onrecover,
+		ondismiss,
+		onclose
+	}: Props = $props();
+	const busy = $derived(recovering || dismissing);
 </script>
 
 <Dialog
@@ -23,12 +35,13 @@
 	variant="warning"
 	title={t('interrupted.title')}
 	description={t('interrupted.description', { name: interruptedOperationName(operation) })}
-	busy={recovering}
+	{busy}
 	{onclose}
 >
 	<div class="flex flex-direction:column gap:2">
 		<p class="m:0 type-body">{t('interrupted.next')}</p>
 		<p class="m:0 type-small fg:fg-muted">{t('interrupted.recover_hint')}</p>
+		<p class="m:0 type-small fg:fg-muted">{t('interrupted.dismiss_hint')}</p>
 	</div>
 
 	{#snippet footerNote()}
@@ -39,10 +52,13 @@
 	{/snippet}
 
 	{#snippet actions()}
-		<Button variant="secondary" disabled={recovering} onclick={onclose}>
+		<Button variant="secondary" disabled={busy} onclick={onclose}>
 			{t('interrupted.close')}
 		</Button>
-		<Button loading={recovering} disabled={recovering} onclick={onrecover}>
+		<Button variant="secondary" loading={dismissing} disabled={busy} onclick={ondismiss}>
+			{t('interrupted.dismiss')}
+		</Button>
+		<Button loading={recovering} disabled={busy} onclick={onrecover}>
 			{t('interrupted.recover')}
 		</Button>
 	{/snippet}

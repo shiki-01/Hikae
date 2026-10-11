@@ -48,15 +48,21 @@ describe('ダイアログのスモークテスト', () => {
 		expect(screen.getByText('photo.psd')).toBeTruthy();
 	});
 
-	it('InterruptedDialog: 途中で止まった操作の案内が出る', async () => {
+	it('InterruptedDialog: 途中で止まった操作の案内が出て、このまま続ける・戻すを選べる', async () => {
+		const onrecover = vi.fn();
+		const ondismiss = vi.fn();
 		renderWithClient(InterruptedDialog, {
 			open: true,
 			operation: 'pull',
-			onrecover: noop,
+			onrecover,
+			ondismiss,
 			onclose: noop
 		});
 		expect(await screen.findByText(t('interrupted.title'))).toBeTruthy();
 		expect(screen.getByText(t('interrupted.recover'))).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: t('interrupted.dismiss') }));
+		expect(ondismiss).toHaveBeenCalledTimes(1);
+		expect(onrecover).not.toHaveBeenCalled();
 	});
 
 	it('PullSaveDialog: 未保存の件数つきの確認が出る', async () => {

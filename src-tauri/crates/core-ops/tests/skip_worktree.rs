@@ -402,7 +402,7 @@ fn recover_after_an_interrupted_pull_restores_the_ignore() -> TestResult {
         PullOutcome::Conflicted { .. }
     ));
     // 解消される前に（アプリが終了した状況を想定して）復旧する
-    pair.ops_a.recover_interrupted(repo, "pull", 0)?;
+    pair.ops_a.recover_interrupted(repo, "pull", 0, None)?;
 
     assert!(run_git(repo, &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).0 != 0);
     assert!(is_skipped(repo, "big.psd"));

@@ -130,6 +130,11 @@ pub struct JournalEntry {
     pub snapshot_ref: Option<String>,
     pub backup_ref: Option<String>,
     pub target: Option<String>,
+    /// 操作の開始時点の HEAD（完全な OID）。記録できなかった行（この機能より前の行を含む）は None。
+    /// 中断された操作を復旧せずに閉じてよいか（自動確定）の判定に使う（設計書 6.3）
+    pub head_before: Option<String>,
+    /// 記録の理由コード（例: `interrupted-no-change`、`interrupted-dismissed`）。画面には出さない
+    pub error_code: Option<String>,
 }
 
 impl JournalEntry {
@@ -140,6 +145,12 @@ impl JournalEntry {
             .ok()
             .map(|d| d.timestamp())
     }
+}
+
+/// 完全な Git オブジェクト ID（SHA-1 の 40 桁、SHA-256 の 64 桁の 16 進数）か。
+/// ジャーナルに記録する HEAD は、この形のものだけを受け付ける。
+pub fn is_full_oid(text: &str) -> bool {
+    (text.len() == 40 || text.len() == 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 現在時刻（RFC3339）。ジャーナルの日時に使う。

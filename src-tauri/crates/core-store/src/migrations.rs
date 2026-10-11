@@ -28,6 +28,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 7 {
         migrate_to_v7(conn)?;
     }
+    if current_version < 8 {
+        migrate_to_v8(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -294,6 +297,24 @@ fn migrate_to_v7(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v8: 操作ジャーナルに、操作の開始時の HEAD（`head_before`）と、記録の理由コード（`error_code`）を足す。
+/// 既存の行は両方とも空（NULL）のまま残す。`head_before` が空の行は、復旧の自動確定の対象にならない（設計書 6.3）。
+fn migrate_to_v8(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        BEGIN;
+
+        ALTER TABLE journal ADD COLUMN head_before TEXT;
+        ALTER TABLE journal ADD COLUMN error_code TEXT;
+
+        PRAGMA user_version = 8;
+        COMMIT;
+        "#,
+    )?;
+
+    Ok(())
+}
+
 /// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
 /// 壊れた JSON、null、選択肢にない値は取り込まない。
 fn legacy_overrides(config: &str) -> Vec<(String, String)> {
@@ -347,7 +368,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         let (outcome, finished, backup): (String, Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT outcome, finished_at, backup_ref FROM journal WHERE id = 1",
@@ -401,7 +422,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",
@@ -440,7 +461,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         let (path, dismissed): (String, i64) = conn
             .query_row(
                 "SELECT path, dismissed FROM skip_worktree WHERE project_id = 'p1'",
@@ -452,6 +473,45 @@ mod tests {
         assert_eq!(dismissed, 0);
 
         // 2 回目の実行は何も変えない
+        run_migrations(&conn).expect("rerun");
+    }
+
+    #[test]
+    fn v8_adds_head_before_and_error_code_and_keeps_existing_journal_rows() {
+        let conn = Connection::open_in_memory().expect("open");
+        migrate_to_v1(&conn).expect("v1");
+        migrate_to_v2(&conn).expect("v2");
+        migrate_to_v3(&conn).expect("v3");
+        migrate_to_v4(&conn).expect("v4");
+        migrate_to_v5(&conn).expect("v5");
+        migrate_to_v6(&conn).expect("v6");
+        migrate_to_v7(&conn).expect("v7");
+        // v7 までの行（開始時の HEAD の記録が無い）
+        conn.execute(
+            "INSERT INTO journal (project_id, operation, started_at, finished_at, outcome)
+             VALUES ('p1', 'pull', '2026-01-01T00:00:00Z', NULL, 'running')",
+            [],
+        )
+        .expect("insert old running row");
+
+        run_migrations(&conn).expect("migrate");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(version, 8);
+        let (outcome, head, code): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT outcome, head_before, error_code FROM journal WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("old row");
+        assert_eq!(outcome, "running");
+        assert_eq!(head, None);
+        assert_eq!(code, None);
+
+        // 2 回目の実行は何も変えない（列を二重に足さない）
         run_migrations(&conn).expect("rerun");
     }
 }

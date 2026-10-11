@@ -222,6 +222,15 @@ where
                 })
                 .ok()
             });
+            // 開始時の HEAD を記録する（本体より前。中断の自動確定の判定に使う。設計書 6.3）。
+            // 取得・記録に失敗しても操作は止めない（記録は空のまま）
+            if let Some(jid) = journal_id {
+                if let Ok(Some(head)) = ops.current_head(&project.path) {
+                    if let Ok(g) = store.lock() {
+                        let _ = g.set_journal_head_before(jid, &head);
+                    }
+                }
+            }
             let before = ops.restore_point_refs(&project.path).unwrap_or_default();
 
             // 他の操作が index.lock を持っていれば待つ（E14）。自動実行は待たずに見送る
@@ -306,7 +315,7 @@ where
             // 起動直後の自動実行では解除しない（画面に出す前に消えてしまうため）
             if !auto && result.is_ok() {
                 if let Ok(g) = store.lock() {
-                    let _ = g.resolve_interrupted(&id_owned);
+                    let _ = g.resolve_interrupted(&id_owned, None);
                 }
             }
 

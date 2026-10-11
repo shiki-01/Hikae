@@ -78,7 +78,12 @@
 	import PullSaveDialog from './PullSaveDialog.svelte';
 	import SyncSizeDialog from './SyncSizeDialog.svelte';
 	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
-	import { useRecoverInterrupted } from './mutations';
+	import {
+		interruptedDialogStep,
+		type InterruptedAction,
+		type InterruptedPhase
+	} from './interrupted';
+	import { useInterruptedActions } from './mutations';
 	import type { SyncSizeRequest } from './sync-size';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
@@ -243,10 +248,24 @@
 		() => projectId,
 		(request) => (syncSize = request)
 	);
-	const recover = useRecoverInterrupted(
+	const interruptedActions = useInterruptedActions(
 		() => projectId,
 		() => (interruptedOpen = false)
 	);
+	const interruptedPhase = $derived<InterruptedPhase>(
+		interruptedActions.recover.isPending
+			? 'recovering'
+			: interruptedActions.dismiss.isPending
+				? 'dismissing'
+				: 'idle'
+	);
+	/** 中断ダイアログの操作。処理の開始・閉じるは状態遷移の純関数に従う */
+	function interruptedAct(action: InterruptedAction) {
+		const step = interruptedDialogStep(interruptedPhase, action);
+		if (step.run === 'recover') interruptedActions.recover.mutate();
+		if (step.run === 'dismiss') interruptedActions.dismiss.mutate();
+		if (step.close) interruptedOpen = false;
+	}
 	const addFiles = useAddFiles(
 		() => projectId,
 		(outcome) => {
@@ -689,9 +708,11 @@
 <InterruptedDialog
 	open={interruptedOpen}
 	operation={project.data?.interruptedOperation ?? null}
-	recovering={recover.isPending}
-	onrecover={() => recover.mutate()}
-	onclose={() => (interruptedOpen = false)}
+	recovering={interruptedPhase === 'recovering'}
+	dismissing={interruptedPhase === 'dismissing'}
+	onrecover={() => interruptedAct('recover')}
+	ondismiss={() => interruptedAct('dismiss')}
+	onclose={() => interruptedAct('close')}
 />
 
 <SkipDriftDialog {projectId} />

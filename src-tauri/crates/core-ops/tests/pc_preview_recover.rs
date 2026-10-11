@@ -75,6 +75,14 @@ fn two_pcs() -> Result<TwoPcs, Box<dyn std::error::Error>> {
     })
 }
 
+/// 復旧の結果が「復元点へ戻した」だったときの復元点の ref 名。それ以外はテストを失敗させる
+fn restored_point(outcome: core_ops::RecoverOutcome) -> String {
+    match outcome {
+        core_ops::RecoverOutcome::Restored { restore_point } => restore_point,
+        core_ops::RecoverOutcome::NothingChanged => panic!("復元点へ戻すはずだった"),
+    }
+}
+
 fn head_message(repo: &Path) -> String {
     run_git(repo, &["log", "-1", "--format=%B"]).1
 }
@@ -320,7 +328,7 @@ fn recover_restores_the_working_folder_from_before_an_interrupted_pull() -> Test
     assert!(b.join("a-new.txt").exists());
     let head_after_pull = get_head_commit(b);
 
-    let restored = ops_b.recover_interrupted(b, "pull", FIXED_UNIX)?;
+    let restored = restored_point(ops_b.recover_interrupted(b, "pull", FIXED_UNIX, None)?);
     // 取り込み前の未保存の変更を含む自動保存へ戻る
     assert!(restored.starts_with("refs/hikae/snapshots/"), "{restored}");
     assert_eq!(
@@ -351,7 +359,7 @@ fn recover_uses_the_head_backup_when_nothing_was_unsaved() -> TestResult {
         "keep v2 (A)\n"
     );
 
-    let restored = ops_b.recover_interrupted(b, "pull", FIXED_UNIX)?;
+    let restored = restored_point(ops_b.recover_interrupted(b, "pull", FIXED_UNIX, None)?);
     assert!(
         restored.starts_with("refs/hikae/backup/pull/"),
         "{restored}"
@@ -376,7 +384,7 @@ fn recover_aborts_a_half_finished_merge_and_returns_to_the_pre_pull_state() -> T
     assert!(matches!(ops_b.pull(b)?, PullOutcome::Conflicted { .. }));
     assert!(std::fs::read_to_string(b.join("conflict.txt"))?.contains("<<<<<<<"));
 
-    ops_b.recover_interrupted(b, "pull", FIXED_UNIX)?;
+    ops_b.recover_interrupted(b, "pull", FIXED_UNIX, None)?;
     assert_eq!(
         std::fs::read_to_string(b.join("conflict.txt"))?,
         "line1 from B\nline2\nline3\n"
@@ -402,12 +410,12 @@ fn recover_does_nothing_without_a_restore_point_or_for_other_operations() -> Tes
 
     // この操作の復元点がない
     assert!(matches!(
-        ops_b.recover_interrupted(b, "pull", FIXED_UNIX),
-        Err(OpsError::RestorePointNotFound)
+        ops_b.recover_interrupted(b, "pull", FIXED_UNIX, None),
+        Err(OpsError::RestorePointNotFound(_))
     ));
     // 復旧の対象でない操作
     assert!(matches!(
-        ops_b.recover_interrupted(b, "restore", FIXED_UNIX),
+        ops_b.recover_interrupted(b, "restore", FIXED_UNIX, None),
         Err(OpsError::InvalidInput(_))
     ));
     // 失敗した呼び出しは復元点も作らない
@@ -418,8 +426,8 @@ fn recover_does_nothing_without_a_restore_point_or_for_other_operations() -> Tes
     ops_named(Some("PC-A")).upload(&pcs.pc_a)?;
     ops_b.pull(b)?;
     assert!(matches!(
-        ops_b.recover_interrupted(b, "pull", FIXED_UNIX + 1),
-        Err(OpsError::RestorePointNotFound)
+        ops_b.recover_interrupted(b, "pull", FIXED_UNIX + 1, None),
+        Err(OpsError::RestorePointNotFound(_))
     ));
 
     // 何も変更していない: 失敗した呼び出しは復元点も作らず、ファイルもそのまま

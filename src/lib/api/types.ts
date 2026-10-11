@@ -43,6 +43,9 @@ export interface SizeCheck {
 }
 
 /** 保存しないファイルのパターンの種類（追加するとき） */
+/** 中断された操作の復旧の結果。`nothing-changed` は、復元点は無いが何も起きていないと確かめられた場合 */
+export type InterruptedRecovery = 'recovered' | 'nothing-changed';
+
 export type IgnoreKind = 'extension' | 'folder' | 'file';
 
 /** 「今後の変更だけ無視する」の記録 1 件（設計書 4.8、S6） */
@@ -788,8 +791,15 @@ export interface ProjectApi {
 	openFile(projectId: string, path: string, target: OpenAction): Promise<void>;
 	/** 過去の保存時点の版を、読み取り専用で既定のアプリで開く。現在のファイルは変更しない */
 	openFileAt(projectId: string, savePointId: string, path: string): Promise<void>;
-	/** 中断された操作の直前の状態へ戻す。戻せない場合はエラー（何も変更しない） */
-	recoverInterrupted(projectId: string): Promise<void>;
+	/**
+	 * 中断された操作の直前の状態へ戻す。戻せない場合はエラー（何も変更しない）。
+	 * 復元点は無いが何も起きていないと確かめられたときは `nothing-changed`（中断の記録だけ閉じる）
+	 */
+	recoverInterrupted(projectId: string): Promise<InterruptedRecovery>;
+	/** 中断された操作を、このまま続ける（中断の印を閉じる。ファイル・履歴は変えない） */
+	dismissInterrupted(projectId: string): Promise<void>;
+	/** 起動時に自動で閉じた中断の操作名を一度だけ取り出す（取り出すと空になる） */
+	takeClosedInterruptedNotices(): Promise<string[]>;
 
 	/** `projectId` を指定すると、そのプロジェクトの上書きを反映した設定を返す */
 	getSettings(projectId: string | null): Promise<SettingsView>;

@@ -170,7 +170,7 @@ fn rows_left_running_are_detected_as_interrupted_on_the_next_start() -> TestResu
         .is_empty());
 
     // 対応が済んだら、中断の扱いは外れる（記録は残る）
-    assert_eq!(store.resolve_interrupted("p1")?, 1);
+    assert_eq!(store.resolve_interrupted("p1", None)?, 1);
     assert!(store.interrupted_operation("p1")?.is_none());
     assert!(store.interrupted_operation("p2")?.is_some());
     assert_eq!(store.list_journal("p1", 10)?.len(), 2);

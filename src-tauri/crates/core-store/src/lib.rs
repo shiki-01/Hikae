@@ -321,28 +321,14 @@ impl Store {
     ) -> Result<Vec<JournalEntry>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_id, operation, triggered_by, started_at, finished_at, outcome,
-                    detail, snapshot_ref, backup_ref, target
+                    detail, snapshot_ref, backup_ref, target, head_before, error_code
              FROM journal
              WHERE project_id = ?
              ORDER BY started_at DESC, id DESC
              LIMIT ?",
         )?;
         let rows = stmt
-            .query_map(params![project_id, limit], |row| {
-                Ok(JournalEntry {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    operation: row.get(2)?,
-                    trigger: JournalTrigger::from_db(&row.get::<_, String>(3)?),
-                    started_at: row.get(4)?,
-                    finished_at: row.get(5)?,
-                    outcome: JournalOutcome::from_db(&row.get::<_, String>(6)?),
-                    detail: row.get(7)?,
-                    snapshot_ref: row.get(8)?,
-                    backup_ref: row.get(9)?,
-                    target: row.get(10)?,
-                })
-            })?
+            .query_map(params![project_id, limit], journal_entry_from_row)?
             .collect::<SqliteResult<Vec<_>>>()?;
         Ok(rows)
     }
@@ -439,14 +425,47 @@ impl Store {
             .next())
     }
 
-    /// 中断された操作への対応が済んだものとして、「中断」を「失敗（interrupted）」に変える。
-    /// 変えた件数を返す。
-    pub fn resolve_interrupted(&self, project_id: &str) -> Result<usize, StoreError> {
+    /// 中断された操作への対応が済んだものとして、プロジェクトの「中断」を「失敗」に変える。
+    /// `error_code` は理由コード（`interrupted-dismissed` など）。None なら空のまま。変えた件数を返す。
+    pub fn resolve_interrupted(
+        &self,
+        project_id: &str,
+        error_code: Option<&str>,
+    ) -> Result<usize, StoreError> {
         Ok(self.conn.execute(
-            "UPDATE journal SET outcome = 'failure'
+            "UPDATE journal SET outcome = 'failure', error_code = ?
              WHERE project_id = ? AND outcome = 'interrupted'",
-            params![project_id],
+            params![error_code, project_id],
         )?)
+    }
+
+    /// 1 件の「中断」を、理由コード付きで「失敗」に変える（起動時の自動確定に使う）。
+    /// 変えたら true。「中断」でない行は変えない。
+    pub fn close_interrupted(&self, id: i64, error_code: &str) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE journal SET outcome = 'failure', error_code = ?
+             WHERE id = ? AND outcome = 'interrupted'",
+            params![error_code, id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// すべてのプロジェクトの「中断」の行を、古い順に返す（起動時の確認に使う）。
+    pub fn list_interrupted(&self) -> Result<Vec<JournalEntry>, StoreError> {
+        self.journal_rows("WHERE outcome = 'interrupted' ORDER BY id", [])
+    }
+
+    /// 「実行中」の行に、操作の開始時点の HEAD（完全な OID）を記録する（設計書 6.3）。
+    /// 完全な OID の形でなければ何も書かず false を返す。「実行中」でない行は変えない。
+    pub fn set_journal_head_before(&self, id: i64, oid: &str) -> Result<bool, StoreError> {
+        if !journal::is_full_oid(oid) {
+            return Ok(false);
+        }
+        let changed = self.conn.execute(
+            "UPDATE journal SET head_before = ? WHERE id = ? AND outcome = 'running'",
+            params![oid, id],
+        )?;
+        Ok(changed > 0)
     }
 
     /// 保持期間を過ぎた完了済みの行を削除する。削除した件数を返す。
@@ -541,26 +560,12 @@ impl Store {
     ) -> Result<Vec<JournalEntry>, StoreError> {
         let sql = format!(
             "SELECT id, project_id, operation, triggered_by, started_at, finished_at, outcome,
-                    detail, snapshot_ref, backup_ref, target
+                    detail, snapshot_ref, backup_ref, target, head_before, error_code
              FROM journal {clause}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
-            .query_map(args, |row| {
-                Ok(JournalEntry {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    operation: row.get(2)?,
-                    trigger: JournalTrigger::from_db(&row.get::<_, String>(3)?),
-                    started_at: row.get(4)?,
-                    finished_at: row.get(5)?,
-                    outcome: JournalOutcome::from_db(&row.get::<_, String>(6)?),
-                    detail: row.get(7)?,
-                    snapshot_ref: row.get(8)?,
-                    backup_ref: row.get(9)?,
-                    target: row.get(10)?,
-                })
-            })?
+            .query_map(args, journal_entry_from_row)?
             .collect::<SqliteResult<Vec<_>>>()?;
         Ok(rows)
     }
@@ -600,6 +605,25 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// `journal` の SELECT の列（`head_before`・`error_code` まで）を 1 件の `JournalEntry` にする。
+fn journal_entry_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<JournalEntry> {
+    Ok(JournalEntry {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        operation: row.get(2)?,
+        trigger: JournalTrigger::from_db(&row.get::<_, String>(3)?),
+        started_at: row.get(4)?,
+        finished_at: row.get(5)?,
+        outcome: JournalOutcome::from_db(&row.get::<_, String>(6)?),
+        detail: row.get(7)?,
+        snapshot_ref: row.get(8)?,
+        backup_ref: row.get(9)?,
+        target: row.get(10)?,
+        head_before: row.get(11)?,
+        error_code: row.get(12)?,
+    })
 }
 
 /// プロジェクト単位の直列実行ロック。状態変更操作の並行実行を防ぐ。
