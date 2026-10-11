@@ -2,7 +2,7 @@
 
 Oct 7, 2026 · @shiki
 
-最終更新: Oct 9, 2026。Phase 1 の実装（コミット f2a50c7 時点。機能実装は完了）に合わせて追記・修正しました。Oct 9 にファイル追加（D&D）の拡張、元に戻した後の保存、Office 一時ファイルの除外、広すぎるフォルダの拒否、「一覧から外す」、容量・破損・同時実行・部品・ファイル名の検出（5.2）、性能の計測（`docs/notes/phase1-measurements.md`）を反映し、失敗時の自動の巻き戻しは実装しない方針に改めました。「実装」と書いた箇所はコードを読んで確認した内容、「未実装」「未確認」と書いた箇所は該当する処理をコード上で確認できなかったものです。設計の方針は、失敗時の巻き戻しを除いて変更していません。
+最終更新: Oct 11, 2026。Phase 2 の実装（コミット 89090fd 時点）に合わせて、状況の記述と誤記を修正しました（7.2、8.2、8.3、9.1、9.3、11.5、12 章、13.3 など）。Oct 9, 2026 の更新: Phase 1 の実装（コミット f2a50c7 時点。機能実装は完了）に合わせて追記・修正しました。Oct 9 にファイル追加（D&D）の拡張、元に戻した後の保存、Office 一時ファイルの除外、広すぎるフォルダの拒否、「一覧から外す」、容量・破損・同時実行・部品・ファイル名の検出（5.2）、性能の計測（`docs/notes/phase1-measurements.md`）を反映し、失敗時の自動の巻き戻しは実装しない方針に改めました。「実装」と書いた箇所はコードを読んで確認した内容、「未実装」「未確認」と書いた箇所は該当する処理をコード上で確認できなかったものです。設計の方針は、失敗時の巻き戻しを除いて変更していません。
 
 ## 0. 確定済みの前提
 
@@ -53,18 +53,18 @@ Oct 7, 2026 · @shiki
 | --- | --- | --- | --- |
 | F1 | 保存 | 変更全件を自動対象化。メッセージ自動提案。1クリック | MVP |
 | F2 | 履歴 | タイムライン表示。各時点のファイル一覧と内容表示 | MVP |
-| F3 | 比較 | 任意2時点／現在。テキスト行差分、画像の並列・重ね合わせ、docx/xlsx はテキスト抽出差分 | MVP（画像・Office は Phase 2） |
+| F3 | 比較 | 任意2時点／現在。テキスト行差分、画像の並列・重ね合わせ、docx/xlsx はテキスト抽出差分 | MVP（画像・Office は Phase 2 で実装済み） |
 | F4 | 元に戻す | ファイル単位／全体。影響範囲表示。実行前の状態を自動保存 | MVP |
 | F5 | 作業コピー | 一覧から切り替え。未保存変更は自動退避 | Phase 3 |
 | F6 | 最新を取り込む | fetch+merge を1ボタン化。起動時・定期の自動取り込み | MVP |
 | F7 | アップロード | 手動、または保存時に自動 | MVP |
-| F8 | 変更のぶつかり解消 | 自分の版／相手の版の2択。テキストのみ行単位編集 | MVP（2択）、Phase 2（行単位） |
+| F8 | 変更のぶつかり解消 | 自分の版／相手の版の2択。テキストのみ行単位編集 | MVP（2択）、Phase 2（行単位。実装済み） |
 | F9 | 自動保存 | ファイル監視で隠し ref にスナップショット | MVP（Phase 2 から前倒し） |
-| F10 | メッセージ生成（LLM） | ルールベースを主、ローカル LLM を任意で追加 | ルール: MVP、LLM: Phase 2 |
+| F10 | メッセージ生成（LLM） | ルールベースを主、ローカル LLM を任意で追加 | ルール: MVP、LLM: Phase 2（実装済み） |
 | F11 | プレビュー拡張 | 対応形式を拡張機能で追加 | Phase 3 |
 | F12 | リポジトリ作成 | アプリから GitHub に作成。所有者（個人／Org）選択 | MVP |
 | F13 | ファイル追加・外部で開く | D&D で追加。ファイルごとに「既定のアプリ」「フォルダで表示」「パスをコピー」（VS Code で開くは実装しない。4.7） | MVP |
-| F14 | 除外設定 | .gitignore を GUI で編集。追跡中ファイルの扱いを選択 | Phase 2 |
+| F14 | 除外設定 | .gitignore を GUI で編集。追跡中ファイルの扱いを選択 | Phase 2（実装済み） |
 
 ### 1.4 非機能要件
 
@@ -137,12 +137,12 @@ Oct 7, 2026 · @shiki
 | S4 | 比較ビュー | サイドパネル拡大 | 左右比較、行差分、画像比較、時点セレクタ | MVP |
 | D1 | プロジェクト追加 | ダイアログ | 既存フォルダ／GitHub から取得／新規作成 | MVP |
 | D2 | 元に戻す確認 | ダイアログ | 影響ファイル一覧、「戻す前を自動保存」の明示 | MVP |
-| D3 | 変更のぶつかり解消 | 全画面モーダル | ファイルごとの2択、行単位編集（Phase 2） | MVP |
+| D3 | 変更のぶつかり解消 | 全画面モーダル | ファイルごとの2択、行単位編集（Phase 2。実装済み） | MVP |
 | D4 | エラー表示 | ダイアログ／トースト | 平易な説明、次の行動ボタン、技術情報の折りたたみ | MVP |
 | S5 | 設定 | 全画面 | 一般、取り込み、アップロード、自動保存、AI、拡張、詳細 | MVP（項目は段階追加） |
-| S6 | 保存しないファイル | 設定内タブ | パターン一覧、追加、追跡中ファイルの扱い選択 | Phase 2 |
-| S7 | AI モデル管理 | 設定内タブ | モデル一覧、DL 進捗、Ollama 切替 | Phase 2 |
-| S8 | 拡張機能管理 | 設定内タブ | インストール済み一覧、有効化、権限表示 | Phase 3 |
+| S6 | 保存しないファイル | 設定内タブ | パターン一覧、追加、追跡中ファイルの扱い選択 | Phase 2（実装済み） |
+| S7 | AI モデル管理 | 設定内タブ | モデル一覧、DL 進捗、Ollama 切替 | Phase 2（実装済み） |
+| S8 | 拡張機能管理 | 設定内タブ | インストール済み一覧、有効化、権限表示 | Phase 3（未実装） |
 
 ### 3.2 画面遷移
 
@@ -272,7 +272,7 @@ Oct 7, 2026 · @shiki
    - 履歴・競合情報の取得時にトレーラーを本文から分離して `pc_name` として返す（メモ本文の表示にはトレーラーを含めない）。取り込み前の自動保存（4.3）とぶつかり解消の保存（4.4）にも付く
 6. 「保存時に自動アップロード」（設定 `auto_push_after_save`）がオンで commit が作られた場合は、スケジューラが直列キュー経由で 4.5 を実行する（保存コマンドは完了を待たない）
 
-メモの提案（10.3）は保存操作とは独立した読み取り専用の処理で、`git status --porcelain=v2 -z -uall --no-renames` の結果（変更種別とファイルサイズ）からルールベースで作る。`--no-renames` のため、名前変更は検出せず追加と削除として扱う。LLM による差し替え候補は未実装（Phase 2）。
+メモの提案（10.3）は保存操作とは独立した読み取り専用の処理で、`git status --porcelain=v2 -z -uall --no-renames` の結果（変更種別とファイルサイズ）からルールベースで作る。`--no-renames` のため、名前変更は検出せず追加と削除として扱う。LLM による提案は、保存欄の「✨ 提案」として実装済み（Phase 2。10.4・10.5）。
 
 **新規（未追跡）ファイルの差分表示**（`core-ops` の `diff_file`。読み取りのみ）:
 
@@ -353,7 +353,7 @@ Git の `revert`（特定の保存を打ち消す新しい保存を作る）は�
 2. 「この PC の版」: `git checkout --ours -- <path>`、「クラウドの版」: `git checkout --theirs -- <path>`
 3. 「使わなかった版を別名で残す」: `git show :3:<path>`（または `:2:`）の内容を `<名前> (クラウドの版 MM-DD).<拡張子>` として書き出す
 4. 片方が削除している場合: 「残す」／「削除を受け入れる」の2択（`git add` または `git rm --cached`。作業フォルダの実体はアプリが削除する。`GitRunner` は `--cached` なしの `rm` を許可しない）
-5. 行単位編集（テキストのみ、Phase 2）: `:1:`（共通の元）、`:2:`、`:3:` を取得し、アプリ内の3ペインで組み立てて書き込む
+5. 行単位編集（テキストのみ、Phase 2。実装済み。下の補足）: `:1:`（共通の元）、`:2:`、`:3:` を取得し、アプリ内の3ペインで組み立てて書き込む
 6. 全件解消後: `git add <paths>` → `git commit --no-edit`（メモは「2台の変更をまとめました」に置換）
 7. 「あとで」: `git merge --abort`。復元点 `pre-merge` が残っているので状態は完全に戻る
 8. 解消後の書き戻し: 手順 6 の保存の**後**に、4.3 手順 8 と同じ書き戻しを行う。競合で止まった取り込みでも、相手が追跡を外したファイルが取り込みで消えていれば、競合前の HEAD（競合中も HEAD は動かない）の内容を作業フォルダへ戻す
@@ -448,6 +448,8 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 4. 2 を選んだ場合の注意: 他の PC が取り込むと、Git はそのファイルを削除する。4.3 の手順8で書き戻して防ぐ
 5. 「過去の履歴からも完全に消す」（パスワード等を誤って保存した場合）は履歴の書き換えが必要なため対象外とし、ヘルプで GitHub のドキュメントへ案内する
 
+実装状況（2026-10-11）: 「保存しないファイル」の画面（S6。`features/settings/IgnoreSection.svelte`。プロジェクトの画面から開いたときに項目を出す。コミット 4f3bd83）と、手順 3-1 の skip-worktree（コミット 0409480）は実装済み。
+
 **3-1 今後の変更だけ無視する（skip-worktree）の仕様の差異と実装補足**
 
 - 差異: 手順 3-1 は「他の PC で同じプロジェクトを開いたとき」に再適用を提案するとしていた。しかし記録は PC ごとの SQLite にあり、他の PC へは届かない。そのため実装は、**この PC で無視の設定が外れていた場合**（復元・再取得などで印が外れたとき）に限り、プロジェクトを開いたときに一度だけ提案する。「今はしない」を選んだ記録は `dismissed` で再通知しない。無視を指定し直すと提案は戻る
@@ -541,7 +543,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | E14 | `index_locked` / `index_lock_stale`。状態を変える操作の前の検査と、git の標準エラー出力。二重起動は `tauri-plugin-single-instance` で防ぐ。5.2 |
 | E17 | `app_health`（起動直後の画面）と `git_unavailable`（実行中に git を起動できなくなったとき）。5.2 |
 | E18 | `unsupported_file_names`。取り込みの fetch 後・merge 前（Windows のみ）。自動の取り込みでは `NeedsAttention`（理由 `unsupported-file-names`）。5.2 |
-| E19 | Phase 2 の機能のため未実装 |
+| E19 | 実装済み（10.5。設定の「試す」で理由を表示する。提案が出ないだけで、保存は通常どおり行える） |
 | E20 | 表示拡張の失敗は実装済み（第 2 段階）。拡張の一覧の画面の失敗は Phase 3 の機能のため未実装 |
 
 **次の行動ボタンと自動回復（実装）**: 実際のエラーはバックエンドのコードで届くため、ボタンの種類は `error-view.ts` の対応表（コード → 種類）で決める。対応表に無いコードは「閉じる」だけ。
@@ -741,8 +743,8 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | --- | --- | --- | --- |
 | 新規リポジトリの既定の公開範囲 | 非公開 / 公開 | 非公開 | Phase 1 |
 | 元に戻した後に自動で保存 | オン / オフ | オン（通常設定と同じ項目を再掲） | Phase 1 |
-| 自動保存の容量上限 | なし / プロジェクトサイズの 1倍 / 2倍 / 5倍 | 2倍 | Phase 2 |
-| AI モデルの指定 | カタログから選ぶ / 任意の GGUF ファイルを指定 | カタログから選ぶ | Phase 2 |
+| 自動保存の容量上限 | なし / プロジェクトサイズの 1倍 / 2倍 / 5倍 | 2倍 | Phase 2（実装済み。6.2） |
+| AI モデルの指定 | カタログから選ぶ / 任意の GGUF ファイルを指定 | カタログから選ぶ | Phase 2（カタログから選ぶ方式のみ実装。任意の GGUF は未実装） |
 | 作業コピー機能の表示 | オフ / オン | オフ | Phase 3 |
 | 拡張機能の開発者モード（署名なしの手動導入） | オフ / オン | オフ | Phase 3 |
 | 拡張機能の追加索引 | 公式のみ / URL を追加 | 公式のみ | Phase 4 |
@@ -761,7 +763,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」の 4 タブに項目があり（ほかに「保存しないファイル」「拡張機能」「詳細設定」のタブがあるが、「今後のバージョンで利用できます」などの案内だけを出す。「AI」のタブは Phase 2 で実装済み（S7。内容は 10.5））、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブに項目があり（「保存しないファイル」はプロジェクトの画面から開いたときだけ項目を出す（S6。4.8）。「AI」は S7。内容は 10.5）、「拡張機能」は案内だけを出し、「詳細設定」は空（案内のみ）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_scope`、`ai_ollama_url`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
@@ -835,9 +837,9 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `wasmtime` 49.0.2（`=` で固定。`default-features = false`、`cranelift`・`runtime`・`std`）、`wasmtime-wasi` 49.0.2（`=` で固定。`default-features = false`、`p1`）、`semver` 1、`bytes` 1、`tokio` 1（`default-features = false`。型名の参照だけ） | `core-preview`（feature `host`。既定で有効） | 拡張ホストの WASM 実行（11 章）、マニフェストの版（semver）の検証。p1 は内部で p2 を要求するため Component Model の機能も含まれるが、コンポーネントとしては使わない |
 | 開発用: `httpmock` 0.8、`tempfile`、`walkdir`、`sha2`、`wat` 1（`core-preview` のテスト専用の WASM を WAT から作る） | 各 crate のテスト | GitHub API のモック、一時ディレクトリの実リポジトリ |
 
-設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`。`wasmtime` は Phase 2 で導入済み（11 章。Windows での実行は確認済み、macOS は未確認）。`llama-server` サイドカーと `core-llm` のモデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続は Phase 2 で導入済み（10.5。Windows は同梱の取得と `--version` まで確認。macOS は未確認）。Phase 2 で追加した依存: `sysinfo` 0.39.6（`app`。総メモリと空き容量の取得。機能は `system`・`disk` のみ）、`tokio` 1（`app`。`time`・`sync`。生成の時間制限と、設定変更の共有ロック。`core-llm` と同じ版の系列）、`tokio-util` 0.7（`app`。ダウンロードの中断の `CancellationToken`。`core-llm` と同じ版）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。
+設計書にあるが、**まだ導入していない**もの: `tauri-plugin-updater`。`wasmtime` は Phase 2 で導入済み（11 章。Windows での実行は確認済み、macOS は未確認）。`llama-server` サイドカーと `core-llm` のモデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続は Phase 2 で導入済み（10.5。Windows は同梱の取得と `--version` まで確認。macOS は未確認）。Phase 2 で追加した依存: `sysinfo` 0.39.6（`app`。総メモリと空き容量の取得。機能は `system`・`disk` のみ）、`tokio` 1（`app`。`time`・`sync`。生成の時間制限と、設定変更の共有ロック。`core-llm` と同じ版の系列）、`tokio-util` 0.7（`app`。ダウンロードの中断の `CancellationToken`。`core-llm` と同じ版）。`core-preview` は `zip`（8.6）/ `quick-xml`（0.41）/ `calamine`（0.36）/ `similar`（3.2）で docx・xlsx の抽出と差分を実装済み。zip と quick-xml の版は、二重にバイナリへ入らないよう calamine に揃えている。表示の PDF は `pdfjs-dist` 6.3.289 を表示拡張の中で使う（ワーカーは作らない。11.7）。差分の行・段落・セルは `similar` 3.2 を使う。
 
-**同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の CSP は未設定（`null`）。
+**同梱の git**（実装済み（Windows）／CI でのビルドまで確認済み（macOS））: `GitRunner::bundled(resource_dir)` が、(1) 環境変数 `HIKAE_GIT_PATH`（開発・テスト用。存在するファイルのときだけ採用）、(2) `<resource_dir>/git/` 以下の同梱 git、(3) PATH 上の git の順に探す。同梱 git を使うときは、PATH の先頭（Windows は `ucrt64/bin` と `usr/bin`）、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR` を子プロセスにだけ渡す。ユーザーのグローバル git 設定には書き込まない。Windows は公式 MinGit（64-bit、通常版）を `scripts/fetch-git-windows.mjs` がバージョンと SHA-256 を固定して取得し、不要なファイルを削って `src-tauri/app/resources/git/`（コミットしない）へ展開する。macOS は `scripts/build-git-macos.sh` が公式ソースから universal binary をビルドする（CI の `bundle-git-macos` で arm64 / x86_64 のビルドと `lipo` による universal 化を確認。実 Mac での起動と署名・公証は未確認）。出典表記は同梱の `NOTICE.txt` と `git/LICENSE.txt`。詳細は `docs/notes/git-bundling.md` の「7. 実装結果」。`tauri.conf.json` の `app.security.csp` は、`img-src`（app-blob と GitHub のアバター）と `frame-src`（`ext:`）だけを設定し、ほかの指令は設定していない（11.6）。
 
 **ツールチェーンと設定の注意**（Phase 0 で判明）:
 
@@ -871,10 +873,11 @@ Rust 側は Cargo workspace で機能ごとに crate を分け、Tauri 層（`ap
 | `core-github` | Device Flow、REST API、keyring、credential helper | なし |
 | `core-preview` | 種別判定、テキスト／画像／docx／xlsx／pptx 抽出（ネイティブ。WASM 抽出器と同じコード）、差分、拡張機能ホスト（feature `host`。wasmtime による抽出器の実行、11 章） | なし |
 | `extensions/office-extractor`（workspace の member、bin は 3 つ） | 組み込みの Office 抽出器（WASM、WASI preview1）。docx・xlsx・pptx ごとに 1 つの bin。入力は stdin、出力は stdout の JSON（11 章） | `core-preview`（`default-features = false`。wasmtime を含めない） |
-| `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成（雛形のみ） | core-preview |
+| `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成（Phase 2 で実装済み。10.5） | core-preview（宣言のみ。実際の使用は無い） |
 | `core-store` | SQLite、設定、プロジェクト登録、操作ジャーナル、プロジェクト単位のロック（`ProjectLocks`） | なし |
 | `app` | Tauri コマンド・イベント、スケジューラ、プロジェクト単位の操作キュー | 上記すべて |
-| `src/lib/features/*` | projects, changes, history, compare, conflict, settings, ai, extensions | 生成された TS バインディング |
+| `src/lib/features/*` | projects, changes, history, compare, conflict, settings, ai, extensions, app-health, notifications | 生成された TS バインディング |
+| `src/lib/ext-ui`、`extensions-ui/*` | 表示拡張（iframe の中で動く UI）の部品と入口。`extensions-ui/` は `vite.ext.config.ts` でビルドし、拡張フォルダの `ui/` に置く（11.5） | 本体の `#lib`（表示拡張の中だけで動く） |
 
 ```text
 UI（WebView・SvelteKit） ←postMessage→ 拡張 renderer（sandbox iframe）
@@ -911,7 +914,8 @@ UI と拡張 renderer は Rust 層を介さずに Git やファイルへ触れ�
 | SQLite `settings` / `project_settings` | アプリ全体の設定と、プロジェクト別の上書き（7.2） | キーと JSON 値。UI 言語は日本語のみで保存項目なし。ウィンドウ状態の保存は未実装 |
 | SQLite `projects` | 登録プロジェクト | id、パス（一意）、表示名、remote URL、所有者（個人のログイン名）、既定ブランチ、最終表示日時、最初の保存の OID（`initial_commit`）。`config`（旧形式の上書き JSON）は残るが未使用 |
 | SQLite `journal` | 操作ジャーナル | 6.3 |
-| SQLite `snapshots`、`skip_worktree`、`extensions` | 表は作成済みだが、**読み書きする処理は未実装**（Phase 2 以降の用途） | 当初案の項目のまま。スナップショットの一覧は、現状は ref から直接読んでいる（`for-each-ref`） |
+| SQLite `skip_worktree` | 「今後の変更だけ無視する」の記録（この PC のみ。マイグレーション v6 で `dismissed` を追加）。4.8 | 実装済み（0409480）。取り込みの前後と起動時の再適用で使う
+| SQLite `snapshots`、`extensions` | 表は作成済みだが、**読み書きする処理は無い**（Phase 3 以降の用途） | 当初案の項目のまま。スナップショットの一覧は、現状は ref から直接読んでいる（`for-each-ref`） |
 | SQLite `llm_models`、`message_cache` | 導入済みモデルの記録（ID、段階、`models_dir` からの相対パス、SHA-256、サイズ、導入日時）と、生成済みの提案のキャッシュ（入力ハッシュ → 文。500 件まで、作成の古いものから削除） | 導入の有無はファイルの有無で判定し、`llm_models` は記録として残す。キャッシュのキーは 10.4 の 5 |
 | `.git/hikae/tmp/` | スナップショット作成用の一時インデックス（処理後に削除） | 6.2 |
 | OS キーチェーン | GitHub トークン | — |
@@ -962,13 +966,14 @@ SQLite のファイルは、Tauri の `app_data_dir` 配下の `hikae.db` です
 
 ### 9.3 フロントエンドとの通信
 
-- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 45 個）:
+- **コマンド**（UI → Rust、tauri-specta で `src/lib/bindings.ts` を型生成。`app/src/lib.rs` の `specta_builder` に登録した 68 個）:
   - プロジェクト: `list_projects`、`add_project`、`remove_project`、`relocate_project`、`project_status`、`check_project_folder`（フォルダの確認。13.1）
   - 起動時の確認: `app_health`（git が使えるか。5.2 の E17）
   - 変更・保存: `list_changes`、`list_project_tree`、`suggest_memo`、`save`、`save_with_size_choice`、`add_files`
-  - 履歴・比較: `list_history`（`offset` と `limit` でページ指定）、`list_point_changes`、`list_files_at`、`diff`
+  - 履歴・比較: `list_history`（`offset` と `limit` でページ指定）、`list_point_changes`、`list_files_at`、`diff`、`preview_file`、`list_renderers`、`compare_office`
   - 元に戻す: `restore_preview`、`restore`、`restore_file_preview`、`restore_file`、`undo_restore`、`discard_new_file`
-  - 同期: `pull`、`push`、`list_conflicts`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
+  - 除外設定・追跡中のファイル（4.8）: `list_ignore_patterns`、`add_ignore_pattern`、`remove_ignore_pattern`、`list_tracked_ignored_files`、`untrack_files`、`list_skip_worktree`、`list_skip_worktree_drift`、`dismiss_skip_worktree_drift`、`set_skip_worktree`、`clear_skip_worktree`、`reapply_skip_worktree`
+  - 同期: `pull`、`push`、`list_conflicts`、`conflict_text`、`resolve_conflicts`、`abort_merge`、`recover_interrupted`
   - ファイルを開く: `open_project_file`、`reveal_project_file`、`open_file_at`
   - GitHub: `get_session`、`start_login`、`wait_login`、`cancel_login`、`open_login_page`、`logout`、`list_owners`、`list_remote_projects`、`clone_project`、`connect_remote`
   - 設定: `get_settings`、`update_settings`、`complete_onboarding`
@@ -1105,7 +1110,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - **Node.js ベース（VS Code 型）**: Tauri には Node が無く、同梱すると配布サイズの利点が消えるため不採用
 - **ネイティブの動的ライブラリ**: OS・CPU ごとのビルドが必要で、異常時にアプリごと落ちるため不採用
 
-### 11.5 実装状況（Phase 2 第 1 段階。2026-10-10）
+### 11.5 実装状況（Phase 2。第 1〜3 段階。第 1 段階は 2026-10-10、第 2・3 段階は 2026-10-11）
 
 **実装済み**: 拡張ホスト（`core-preview` の feature `host`。`ExtensionHost`）、マニフェストの検証、組み込みの拡張 `hikae.builtin.office`（docx・xlsx・pptx の 3 つの抽出器）、WASM 抽出器（`extensions/office-extractor`）、ビルド（`scripts/build-extensions.mjs`）。`preview_file`、`compare_office`、AI の入力（docx・xlsx の差分）は、ネイティブの抽出ではなく拡張ホストで抽出する。ネイティブの `extract_*` は WASM 抽出器のソースとして残し、同値性テストの基準にする。差分の計算（`diff_paragraphs`・`diff_sheets`）はネイティブのまま。
 
@@ -1163,7 +1168,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - iframe → ホスト: 既存の `ready`・`error`・`open` のみ。`blocks` は設けない（前へ・次へ用の箇所の数は、ホストが `countBlocks` で計算する。同じ計算を iframe とホストの両方に持たないため）
 - 送るのは表示の対象（名前・拡張子・状態・内容・差分）と表示の選択だけ。パス・プロジェクト ID・時点 ID・トークン・設定は送らない。iframe の属性と受け取る側の検査は、表示と同じ（`parseRenderMessage` が compare の形と差分の種類を、`parseOptionsMessage` が選択の形を確かめる）
 
-## 12. 開発ロードマップ
+### 11.8 計測とテスト（拡張機能）
 
 **計測**（Windows、2026-10-10）: wasm の大きさ（release。`opt-level = "s"`、LTO、strip）は docx 363 KiB、xlsx 505 KiB、pptx 389 KiB。wasm の作成（release）は約 16 秒。`Cargo.lock` には 79 件の crate が加わった（うち `wat` とその依存は開発専用）。wasmtime 系の crate を作り直すのに debug で約 41 秒。app の debug 実行ファイルは 37.9 MB から 68.3 MB になった（比較元は別のビルドで、条件は完全には揃っていない参考値）。app の release の大きさは未計測。起動時の登録（3 つの wasm のコンパイル）は、release で 0.79 秒、debug で 1.0 秒。debug では cranelift の crate を `[profile.dev.package]` で最適化しており、最適化しないと約 23 秒かかった。release のテスト用ビルド（LTO、wasmtime を含む初回）は約 10 分 37 秒。
 
@@ -1177,7 +1182,7 @@ MVP は「1台目で保存・履歴・元に戻す、2台目で取り込む」�
 | --- | --- | --- |
 | Phase 0 技術検証 | Tauri の Windows / macOS ビルド、git 同梱と credential helper、Device Flow、一時インデックスでのスナップショット、競合ステージの取得 | 2台の PC 間で「保存 → アップロード → 取り込み → 競合 → 2択解消」が CLI レベルで通る |
 | Phase 1 MVP | S0〜S4、D1〜D4、保存、履歴、テキスト比較、元に戻す、取り込み（起動時・定期）、アップロード（自動・手動）、2択の競合解消、リポジトリ作成・取得、D&D、外部で開く、ルールベースのメモ、安全設計の3層、ファイル監視と自動保存（Phase 2 から前倒し）、署名と自動更新（配布の直前に行う。下の「Phase 1 の区切り」） | Git 未経験者 5 人が、説明なしで初回アップロードまで 5 分以内に到達し、別 PC での取り込みを完了できる |
-| Phase 2 | 画像比較、docx / xlsx の抽出差分、行単位の競合解消、保存しないファイルの GUI、ローカル LLM（段階1〜2、Ollama 切替）、組み込みプレビューの拡張 API 化 | 1か月の自己利用で、データ消失・復元不能の事例がゼロ |
+| Phase 2（機能は実装済み。下の実装状況） | 画像比較、docx / xlsx の抽出差分、行単位の競合解消、保存しないファイルの GUI、ローカル LLM（段階1〜2、Ollama 切替）、組み込みプレビューの拡張 API 化 | 1か月の自己利用で、データ消失・復元不能の事例がゼロ（未確認） |
 | Phase 3 | 作業コピー（ブランチ）、拡張機能の開発者モード、LLM 段階3（画像）、自動保存のクラウド控え、gix による履歴読み取りの高速化 | 第三者が雛形から拡張機能を1つ作成・導入できる |
 | Phase 4 | 拡張機能の一覧・署名検証、英語 UI、Git LFS 対応の要否判断 | 利用者の要望とリスク評価に基づき個別判断 |
 
@@ -1226,6 +1231,25 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 - 「一覧から外す」の直後に、実機でファイル監視と自動保存が止まること（外した後にフォルダのファイルを編集しても、自動保存が作られないこと）は未確認。自動テストで確かめたのは、止める対象の判断（`core_watch::registration`）と、登録の削除・再登録（`core-store`）まで
 - 新規ファイルの「元に戻す（作成しない）」のアプリ上での通し確認は未確認。自動テストで確かめたのは、`core-ops` の統合テスト（ごみ箱の代わりに一時フォルダへ移す実装を使う）まで。実際のごみ箱への移動は、Windows で `trash` crate を単体で呼んで移ることを確認しただけで、アプリの画面からの操作（ごみ箱が使えない環境、macOS を含む）は実機で確認していない
 - 署名・公証（Windows のコード署名、macOS の Developer ID と公証）の手続き。Gatekeeper / SmartScreen の確認
+
+**Phase 2 の実装状況**（2026-10-11、コミット 89090fd 時点。コードと `git log` を読んで確認した内容）:
+
+| 範囲 | 状況 |
+| --- | --- |
+| 画像比較 | 実装済み（058c91e。並べる・重ねる・差分強調）。表示は第 3 段階で表示拡張の `compare` に移した（f16a61d、11.5） |
+| docx・xlsx の抽出差分 | 実装済み（e4f94e5）。抽出は WASM 抽出器に移した（c24f39b。pptx も同じ仕組み）。表示は表示拡張の `compare`（7a23d8f、f16a61d） |
+| 行単位の競合解消 | 実装済み（a6483b7。4.4 の補足。テキストのみ） |
+| 保存しないファイル | 実装済み（4f3bd83 の画面と追跡中ファイルの扱い。0409480 の skip-worktree と再適用。4.8） |
+| 自動保存の容量上限 | 実装済み（7000730。6.2） |
+| ローカル LLM（保存メモの提案） | 実装済み（d727198、e44fadd。10.4・10.5）。Ollama への切替を含む（AI タブ）。カタログは段階 2 の 2 モデル（既定は Gemma 4 E2B） |
+| プレビュー・ファイル表示 | 実装済み（1ee4806、93dfaf5、7a23d8f。画像・PDF・docx・xlsx・pptx・テキストを表示拡張で描く。11.5） |
+| 組み込みプレビューの拡張 API 化 | 実装済み（c24f39b、7a23d8f、f16a61d、89090fd。11.5〜11.7） |
+
+**Phase 2 の未実装・未確認**:
+
+- 未実装: 段階 1 のモデル（カタログに無い。「AI に渡す範囲」の「ファイル名まで」は実装済み）、段階 3・4 のモデル（段階 3 は Phase 3）、拡張機能の一覧の画面（S8）、利用者フォルダの追加（Phase 3）
+- 未確認: llama-server の実起動、実ネットワークでのモデルのダウンロード、Ollama の実機、macOS の llama-server（同梱の取得を含む）、画像比較・docx / xlsx 差分・行単位の解消・保存しないファイルの画面の、Tauri 上での見た目と操作（10.5、11.5）
+- macOS の確認・ビルド（llama-server の macOS 版の同梱を含む）は、利用者の決定（2026-10-11）により、残りを最後にまとめて行う
 
 ## 13. リスクと判断が必要な論点
 
@@ -1308,7 +1332,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | リスク | 状況 |
 | --- | --- |
 | クラウド同期フォルダ（OneDrive、iCloud）上のプロジェクト | 登録時の警告と、軽い検査による破損の検出は実装済み（13.1、5.2）。破損したときの**自動の復旧**（退避 → 取得し直し → 未保存変更のコピー）は未実装で、取得し直しの案内のみ。`fsck` による検査は行わない |
-| skip-worktree の限界（4.8） | 「保存しないファイル」の GUI ごと Phase 2。いまは、サイズ検査で「外す」を選んだときの `rm --cached` と .gitignore への追記だけ |
+| skip-worktree の限界（4.8） | 実装済み（0409480。取り込み前の一時解除・内容の退避・再設定）。「保存しないファイル」の画面は実装済み（4f3bd83）。残る限界は 4.8 の「既知の限界」（保留の退避を画面から戻す手段が無い、など） |
 | 署名・公証のコスト | 署名の設定は無い。配布の直前にまとめて行う（2026-10-09 に決定。12章） |
 | WebView の差異（Windows と macOS の表示・D&D） | CI は両 OS で実行するが、WebView 上の E2E テストは無い |
 
@@ -1328,7 +1352,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | 新規ファイルを「作らなかったこと」にできない | 戻す先の版が無く、アプリの外で消すしかなかった。一方、不変条件 6 は未追跡ファイルの削除を禁じている | 利用者が明示的に選んだ 1 件に限り、復元点にバイト単位で一致する内容があることを確かめてから、OS のごみ箱へ移す（4.2、6.4）。復元点に入らない大きさ・追跡済み・保存対象外・フォルダ・リンクは拒否する。取り消しは復元点からの復元。ごみ箱への実際の移動は、アプリ上では実機で未確認 |
 | 画面に出ている設定が、実際には働いていない | 設定画面の「ぶつかり発生時」「アップロード待ちの通知」は、値を保存するだけで挙動に反映されない（7.2）。「戻した後に自動で保存」は 2026-10-09 に反映した（4.2）。利用者が効いていると誤解する。自動保存の2項目は、ファイル監視の実装（6.2）で反映済みになり、画面に戻した | 反映するまで画面から外している（上の2項目）。方針は判断が必要 |
 | 失敗した操作を自動では巻き戻さない | 当初の設計は「失敗時は復元点へ戻す」だったが、実装はエラーを返して終わる。操作の途中で失敗すると、作業フォルダが中途半端な状態で残りうる | **実装しない方針に決定済み（2026-10。4章冒頭、9.2）**。失敗しても操作前の復元点が必ず残り、画面の案内（E15 の「操作前の状態に戻す」、履歴の「元に戻す」）から戻せる。`reset --hard` / `checkout -f` を使えない制約の中で、操作ごとの安全な巻き戻しは複雑なため |
-| `tauri.conf.json` の CSP が未設定 | 本体の WebView に CSP が無い。拡張機能（11章）を入れる前に、本体側でも外部への接続やスクリプトの読み込みを制限する必要がある | Phase 3 の前に、本体の CSP を決めて設定する |
+| 本体の CSP が一部だけ | `tauri.conf.json` の CSP は `img-src` と `frame-src` だけを設定し、`default-src` など、ほかの指令は無い。本体の WebView の外部への接続やスクリプトの読み込みは制限されていない | 拡張の `ext://` 配信側の CSP は 11.6 で設定済み。本体の残りの指令は判断が必要（未決） |
 | 自動保存が、作るたびに作業フォルダの全ファイルを読み直す | 一時インデックスには更新時刻の情報が無いため、`git add -A` が全ファイルの内容を読んで計算し直す。大きなフォルダ（数千ファイル以上）では、静止のたびに時間と CPU を使う | 変更が無ければ一時インデックスを作らずに終える。静止時間の設定（カスタムで長くできる）で頻度を下げられる。計測（Windows、同梱 git）では、1 万ファイルで 100 件変更後の作成が 3.0 秒（同じ内容で呼んだ場合の空振りが 1.6 秒）、500MB（100 ファイル × 5MB）を全部書き換えた後で 21.7 秒（空振り 4.7 秒）。静止のたびに数秒かかる規模があるが、裏で動く。必要なら、実インデックスの更新時刻情報を読み取り専用で再利用する方法を検討する |
 | 初回保存が、ファイル数に対して直線より速く遅くなる | 計測（Windows、同梱 git）で、初回保存が 1,000 ファイルで 18.5 秒（18.5ms/ファイル）、1 万ファイルで 430 秒（43ms/ファイル）。`git add -A` を単独で実行すると約 7ms/ファイルで、保存の手順（復元点の作成、サイズ検査、`add -A`、`commit`）のどこが長いかは未調査。多くのファイルがあるフォルダを最初に登録する利用者は 7 分ほど待つ | 内訳を調べたうえで改善を検討する（提案のみ。`docs/notes/phase1-measurements.md` 5.2）。それまでは進行状況の表示で待ち時間を説明する案がある |
 | 履歴 100 件の取得が約 4 秒かかる | 計測（Windows）で、100 件の取得が約 4 秒（1 件あたり約 40ms）。返す 1 件ごとに `git diff --numstat` を起動して変更ファイル数を数えているため（`core-ops` の `history`）。ファイルの大きい保存（500MB の差分）が並ぶと、1 件あたりはさらに長い | 対応済み（2026-10-09）。ページ全体で、少ない回数（150 件ずつ）の `show --first-parent --name-only -z` にまとめた。100 件の取得は約 0.37 秒（`docs/notes/phase1-measurements.md` 3.2.1） |

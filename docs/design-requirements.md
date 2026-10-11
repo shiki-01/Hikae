@@ -122,7 +122,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | ImpactList | 影響ファイル一覧（いまの内容 → 戻した後） | 変更 / 取り除かれる / 復活する | MVP |
 | OwnerPicker | 保存先（個人 / Org）のアバター付き選択 | 選択可、作成権限なし（灰色＋理由） | MVP |
 | ModelCard | AI モデルの段階、容量、必要メモリ、DL ボタン | 未導入、DL 中（進捗）、導入済み、PC 条件を満たさない（灰色＋理由）、途中まで取得（再開）。推奨バッジ、使用中。実装済み（`lib/components/ModelCard.svelte`、Phase 2）。ライセンスは名前と URL の文字だけを表示し、リンクにはしない（画面側に外部を開く権限を与えないため） | Phase 2 |
-| IgnoreRuleRow | パターン、対象件数、削除 | 通常、追跡中ファイルあり（2択の導線） | Phase 2 |
+| IgnoreRuleRow | パターン、対象件数、削除 | 通常、追跡中ファイルあり（2択の導線） | Phase 2（実装済み。`features/settings/IgnoreSection.svelte` の行として） |
 
 ## 4. 画面ごとのレイアウト
 
@@ -218,7 +218,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 - 設定は即時保存（保存ボタンなし）。影響の大きい変更のみ確認ダイアログ
 - プロジェクト別に上書きできる項目は「このプロジェクトだけ変更」リンクを行内に置く
 - S6: IgnoreRuleRow の一覧、「追加」から拡張子 / フォルダ / ファイル選択、追跡中ファイルがあれば2択の Dialog
-- S7: 段階0〜4の ModelCard を縦に並べ、PC のメモリ・空き容量を上部に表示。詳細設定内に Ollama の接続先（実装: 現状のカタログは段階 2 の 2 モデルだけで、段階 0・1・3・4 は未実装。「AI に渡す範囲」は「ファイル名まで」と「テキスト差分まで」の 2 択。有効・無効は「保存メモを AI で提案する」。カスタム GGUF は出さない）
+- S7: 段階0〜4の ModelCard を縦に並べ、PC のメモリ・空き容量を上部に表示。Ollama の接続先（実装では詳細設定ではなく AI タブに置いた。実装: 現状のカタログは段階 2 の 2 モデルだけで、段階 0・1・3・4 は未実装。「AI に渡す範囲」は「ファイル名まで」と「テキスト差分まで」の 2 択。有効・無効は「保存メモを AI で提案する」。カスタム GGUF は出さない）
 - S8: 拡張機能の一覧（名前、対応形式、有効化 Toggle）。開発者モードは詳細設定内
 
 ### D1 プロジェクト追加（560px）
@@ -235,7 +235,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 ### D3 変更のぶつかり解消（全画面モーダル）
 
 - 上部: 見出しと説明1文、件数
-- 本体: ConflictItem の縦並び。行単位編集（Phase 2）は該当行から右側に3ペインのエディタを開く
+- 本体: ConflictItem の縦並び。行単位編集（Phase 2。実装済み）は該当行から右側に3ペインのエディタを開く
 - 下部固定: 「あとで」（secondary）、「解消して保存」（primary、全件選択まで無効）
 
 ### D4 エラー表示
@@ -301,16 +301,16 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 - [ ] D4 エラー表示（Dialog / Toast）と空状態
 - [ ] S5 設定の枠組み
 - [ ] アプリアイコン（Windows / macOS の各サイズ）
-- [ ] Phase 2 以降: ImageCompare、ModelCard、IgnoreRuleRow、S6〜S8
+- [x] Phase 2: ImageCompare、ModelCard、IgnoreRuleRow、S6、S7 は実装済み（7 章）。S8（拡張機能管理）は Phase 3
 
-## 7. 実装状況（2026-10-08）
+## 7. 実装状況（2026-10-08。Phase 2 の項目は 2026-10-11 に更新）
 
 仮の値のまま画面を実装し、トークンは Figma の確定値に差し替えました。部品は `src/lib/components`、画面は `src/lib/features/*` と `src/routes` にあります。
 
 ### 7.1 部品（全 30 種との対応）
 
 - **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
-- **3.2 Hikae 固有の部品 14 種のうち 11 種が実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、DiffView、ConflictItem、ImpactList、OwnerPicker。MVP の 27 種はすべて実装済み
+- **3.2 Hikae 固有の部品 14 種はすべて実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、ConflictItem、ImpactList、OwnerPicker、ModelCard。DiffView は表示拡張の `src/lib/ext-ui/DiffView.svelte` に移動した（design.md 11.5）。ImageCompare は `src/lib/ext-ui/CompareImage.svelte`、IgnoreRuleRow は `features/settings/IgnoreSection.svelte` の行として実装した。MVP の 27 種はすべて実装済み
 - **Phase 2 の AI（ModelCard、S7、保存欄の提案）は実装済み**（2026-10-10。ビルド・型・単体テストまで確認。Tauri の実機での見た目、実ネットワークでのダウンロード、llama-server の実起動、Ollama の実機は未確認）。ImageCompare は実装済み（第 3 段階で `src/lib/ext-ui/CompareImage.svelte` に移し、表示拡張の中で描く）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
 - 一覧にない部品として、一覧系のローディング用に Skeleton（5章）と、変更の種類を示す小さな ChangeBadge（「すべてのファイル」のツリー用）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
 - StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」「GitHub に接続していない」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、未接続、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
@@ -324,7 +324,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
 | S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、履歴の各項目の `cloudSynced`（バックエンドの `cloud_synced`）から出す。保存先に接続していない、まだ何も上げていないときは出ない（design.md 4.6、12章） |
 | S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）、画像比較、docx・xlsx の差分（第 3 段階で表示拡張の `compare` に移行。本体は `features/extensions/CompareFrame.svelte`） |
-| S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」の 4 タブ。詳細設定は空。S6〜S8 は未実装（`features/ai` と `features/extensions` は空） |
+| S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブ（「保存しないファイル」はプロジェクトの画面から開いたときに項目を出す）。「拡張機能」は案内のみ、「詳細設定」は空。S6（`features/settings/IgnoreSection.svelte`）と S7（`features/ai/AiSection.svelte`）は実装済み。S8 は未実装（`features/extensions` は表示・比較の描画の受け渡しだけで、拡張の一覧の画面は無い） |
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |
 | D2 元に戻す確認 | `features/history/RestoreDialog.svelte` | 実装済み |
