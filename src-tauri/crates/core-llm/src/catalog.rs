@@ -149,12 +149,19 @@ mod tests {
     #[test]
     fn builtin_catalog_is_valid() {
         let catalog = Catalog::builtin().unwrap();
-        assert_eq!(catalog.models.len(), 3);
+        assert_eq!(catalog.models.len(), 4);
         let gemma = catalog.get("gemma-4-e2b-it-q4_k_m").unwrap();
         assert!(gemma.recommended);
         assert_eq!(gemma.stage, 2);
         assert_eq!(gemma.size_bytes, 3_106_738_272);
-        assert_eq!(catalog.stage(2).count(), 2);
+        // 段階 2 は E2B・Qwen3-4B・E4B の 3 つ（E4B は評価ノート 11.3。既定の推奨は E2B のまま）
+        assert_eq!(catalog.stage(2).count(), 3);
+        let e4b = catalog.get("gemma-4-e4b-it-q4_k_m").unwrap();
+        assert_eq!(e4b.stage, 2);
+        assert!(!e4b.recommended);
+        assert_eq!(e4b.size_bytes, 4_977_171_584);
+        // 必要メモリは 12GiB（8GB の PC では導入できず、理由つきで灰色になる。評価ノート 15 節の実測ピーク 4.2GB）
+        assert_eq!(e4b.min_total_memory_bytes, 12 * 1024 * 1024 * 1024);
         // 段階 1 は Qwen3.5-2B（設計 10.2。評価ノート 11.3）。既定は段階 2 の Gemma 4 E2B のまま
         assert_eq!(catalog.stage(1).count(), 1);
         let light = catalog.get("qwen3.5-2b-q4_k_m").unwrap();
@@ -178,6 +185,25 @@ mod tests {
             catalog.get("qwen3.5-2b-q4_k_m").unwrap().sha256,
             "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
         );
+        assert_eq!(
+            catalog.get("gemma-4-e4b-it-q4_k_m").unwrap().sha256,
+            "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+        );
+    }
+
+    #[test]
+    fn builtin_ids_and_urls_are_unique_and_well_formed() {
+        // ID の重複は読み込みで拒否される。URL は取得元の形式（resolve/main）と SHA-256 の 64 桁を確かめる
+        let catalog = Catalog::builtin().unwrap();
+        let mut urls = HashSet::new();
+        let mut hashes = HashSet::new();
+        for m in &catalog.models {
+            assert!(urls.insert(m.url.as_str()), "{}", m.id);
+            assert!(hashes.insert(m.sha256.as_str()), "{}", m.id);
+            assert_eq!(m.sha256.len(), 64, "{}", m.id);
+            assert!(m.url.contains("/resolve/main/"), "{}", m.id);
+            assert!(m.size_bytes > 0, "{}", m.id);
+        }
     }
 
     #[test]

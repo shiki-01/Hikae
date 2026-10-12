@@ -17,6 +17,7 @@ function model(overrides: Partial<AiModel> = {}): AiModel {
 		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
 		minMemoryBytes: 7 * 1024 ** 3,
 		recommended: false,
+		recommendedForThisPc: false,
 		status: 'missing',
 		partialBytes: 0,
 		available: true,
@@ -44,5 +45,27 @@ describe('モデルの段階の表示（軽量・標準）', () => {
 		renderCard(model({ stage: 2 }));
 		expect(screen.getByText(/段階 2（標準）/)).toBeTruthy();
 		expect(screen.queryByText(/内容の理解は限定的です/)).toBeNull();
+	});
+});
+
+describe('推奨のバッジ', () => {
+	afterEach(cleanup);
+
+	it('この PC のおすすめのモデルには「この PC のおすすめ」を出す', () => {
+		renderCard(model({ recommendedForThisPc: true }));
+		expect(screen.getByText('この PC のおすすめ')).toBeTruthy();
+		expect(screen.queryByText('推奨')).toBeNull();
+	});
+
+	it('この PC のおすすめでない段階の推奨（既定）は「推奨」を出す', () => {
+		renderCard(model({ recommended: true, recommendedForThisPc: false }));
+		expect(screen.getByText('推奨')).toBeTruthy();
+		expect(screen.queryByText('この PC のおすすめ')).toBeNull();
+	});
+
+	it('どちらでもないモデルは、バッジを出さない', () => {
+		renderCard(model({ recommended: false, recommendedForThisPc: false }));
+		expect(screen.queryByText('この PC のおすすめ')).toBeNull();
+		expect(screen.queryByText('推奨')).toBeNull();
 	});
 });

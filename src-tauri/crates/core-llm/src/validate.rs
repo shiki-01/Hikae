@@ -48,11 +48,36 @@ const QUOTE_PAIRS: [(char, char); 6] = [
     ('`', '`'),
 ];
 
-/// 前置きと判断する行の長さの上限（文字数。これ未満の行で、先頭が `PREAMBLE_PREFIXES` のものが前置き）
+/// 前置きの定型（`PREAMBLE_FORMS`）に当たる行の長さの上限（文字数。これ未満の行だけを前置きとみなす）
 const PREAMBLE_MAX_CHARS: usize = 40;
 
-/// 前置きの先頭語（英字は大文字小文字を区別しない）。小型モデルが本文の前に付ける定型の言い回し
-const PREAMBLE_PREFIXES: [&str; 7] = ["以下", "次の", "保存メモ", "メモ", "Here", "Sure", "回答"];
+/// 前置きの定型（先頭語と末尾の組）。短い行（`PREAMBLE_MAX_CHARS` 未満）で、先頭語で始まり、末尾（「。」を除く）が
+/// 組の末尾のいずれかで終わるものを前置きとみなす。「メモ」のような本文の先頭になりうる語は含めない
+/// （評価ノート 15 節の A06 で、通常の要約が弾かれたため）。
+///
+/// 「以下」は「以下が保存メモです」「以下の内容です」のような導入に広く使われるため、「です」「ます」も末尾に含める。
+/// 「次の」は「次の会議は来週です」のような要約が現れうるため、「内容」「とおり」の形だけに限る。
+const PREAMBLE_FORMS: [(&str, &[&str]); 2] = [
+    (
+        "以下",
+        &["です", "ます", "内容です", "内容", "とおりです", "とおり"],
+    ),
+    ("次の", &["内容です", "内容", "とおりです", "とおり"]),
+];
+
+/// 英語の前置きの先頭（小文字に変えて比べる）。「Here is …」「Sure…」（後ろが英字でない場合）
+const ENGLISH_PREAMBLE_OPENERS: [&str; 2] = ["here is", "sure"];
+
+/// 本文の行を捨てた理由（注記の文言を選ぶ）。複数あれば、値の大きいもの（最も重いもの）を残す
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BodyDrop {
+    /// 根拠が確認できない行（ファイル名も差分の語も含まない）。形式・長さ・用語の不備で落とした行もここに含める
+    Ungrounded,
+    /// 差分の本文を長く写している行
+    Copy,
+    /// 機微に見える文字列を含む行（最も重い）
+    Sensitive,
+}
 
 /// 解析・検証を通ったメモの提案（要約と本文）
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -61,8 +86,13 @@ pub struct Memo {
     pub title: String,
     /// 本文の行（「・」の記号は外してある）。無ければ空
     pub body: Vec<String>,
-    /// 安全のために本文の行を捨てたか（形式・長さ・根拠・機微・写しのいずれか）
-    pub body_dropped: bool,
+    /// 本文の行を捨てた理由（最も重いもの）。捨てていなければ `None`
+    pub body_dropped: Option<BodyDrop>,
+}
+
+/// 捨てた理由を記録する（すでにあるものより重ければ置き換える）
+fn note_drop(slot: &mut Option<BodyDrop>, reason: BodyDrop) {
+    *slot = Some(slot.map_or(reason, |current| current.max(reason)));
 }
 
 /// モデルの生の出力を、形式どおりに解析して検証する（入力とは照らさない）。
@@ -75,10 +105,8 @@ pub fn parse_memo(raw: &str) -> Option<Memo> {
     let lines: Vec<&str> = raw.lines().collect();
     let first_idx = lines.iter().position(|line| !line.trim().is_empty())?;
     let first = lines[first_idx].trim();
-    // 前置きの判定は、複数行の出力のときだけ語で見る（1 行の出力は、旧規則どおり語では判定しない）。
-    // 末尾の「:」は、1 行でも要約ではないため常に前置きとする
-    let multi_line = lines.iter().filter(|line| !line.trim().is_empty()).count() > 1;
-    if ends_with_colon(first) || (multi_line && is_preamble(first)) {
+    // 前置きは要約の行に対しても判定する（末尾の「:」、「以下の内容です」などの導入、英語の「Here is」「Sure」）
+    if is_preamble(first) {
         return None;
     }
     let title = validate_line(first)?;
@@ -87,7 +115,7 @@ pub fn parse_memo(raw: &str) -> Option<Memo> {
     let blank_after_title = rest.first().is_some_and(|line| line.trim().is_empty());
     let mut body = Vec::new();
     let mut total_chars = 0usize;
-    let mut dropped = false;
+    let mut dropped: Option<BodyDrop> = None;
     for line in rest
         .iter()
         .map(|line| line.trim())
@@ -98,12 +126,12 @@ pub fn parse_memo(raw: &str) -> Option<Memo> {
             continue;
         }
         let Some(text) = body_line(line) else {
-            dropped = true;
+            note_drop(&mut dropped, BodyDrop::Ungrounded);
             continue;
         };
         let chars = text.chars().count();
         if body.len() >= MAX_BODY_LINES || total_chars + chars > MAX_BODY_CHARS {
-            dropped = true;
+            note_drop(&mut dropped, BodyDrop::Ungrounded);
             continue;
         }
         total_chars += chars;
@@ -146,13 +174,19 @@ pub fn screen_memo(mut memo: Memo, input: &ChangeInput) -> Option<Memo> {
     let words = grounding_words(&corpus);
     let mut kept = Vec::with_capacity(memo.body.len());
     for line in std::mem::take(&mut memo.body) {
-        let ok = looks_sensitive(&line).is_none()
-            && !copies_diff(&line, &corpus, BODY_COPY_CHARS)
-            && grounded(&line, &names, &words);
-        if ok {
-            kept.push(line);
+        // 理由は、機微 → 写し → 根拠なしの順に確かめ、最初に当たったものを記録する
+        let reason = if looks_sensitive(&line).is_some() {
+            Some(BodyDrop::Sensitive)
+        } else if copies_diff(&line, &corpus, BODY_COPY_CHARS) {
+            Some(BodyDrop::Copy)
+        } else if !grounded(&line, &names, &words) {
+            Some(BodyDrop::Ungrounded)
         } else {
-            memo.body_dropped = true;
+            None
+        };
+        match reason {
+            None => kept.push(line),
+            Some(reason) => note_drop(&mut memo.body_dropped, reason),
         }
     }
     memo.body = kept;
@@ -187,7 +221,7 @@ pub fn memo_from_text(text: &str) -> Option<Memo> {
     Some(Memo {
         title: title.to_string(),
         body,
-        body_dropped: false,
+        body_dropped: None,
     })
 }
 
@@ -220,22 +254,35 @@ fn validate_line(line: &str) -> Option<String> {
 /// 出力の行が前置き（本文の前置きの言い回し）か。純関数。
 ///
 /// - 末尾が `:` または `：` の行（「次の内容です:」など）
-/// - 先頭が `PREAMBLE_PREFIXES` のいずれかで、短い行（`PREAMBLE_MAX_CHARS` 未満）の行
+/// - 短い行（`PREAMBLE_MAX_CHARS` 未満）で、`PREAMBLE_FORMS` の定型（先頭語と末尾の組）に当たる行。
+///   「次の会議は来週です。」のような通常の要約は前置きとみなさない
+/// - 英語で「Here is」または「Sure」で始まる行（後ろが英字でないもの）
 ///
-/// 箇条書き記号と対の引用符は外して判定する。長い行は、同じ語で始まっても前置きとみなさない
-/// （「メモリの設定を…」のような本文を誤って弾かないため）。
+/// 箇条書き記号と対の引用符は外して判定する。
 fn is_preamble(line: &str) -> bool {
     let probe = strip_quotes(strip_bullet(line.trim()).trim()).trim();
-    if ends_with_colon(probe) {
+    if ends_with_colon(probe) || is_english_preamble(probe) {
         return true;
     }
     if probe.chars().count() >= PREAMBLE_MAX_CHARS {
         return false;
     }
-    let lower = probe.to_lowercase();
-    PREAMBLE_PREFIXES
-        .iter()
-        .any(|prefix| lower.starts_with(&prefix.to_lowercase()))
+    let ending = probe.trim_end_matches('。').trim_end();
+    PREAMBLE_FORMS.iter().any(|(opener, endings)| {
+        probe.starts_with(opener) && endings.iter().any(|end| ending.ends_with(end))
+    })
+}
+
+/// 英語の前置き（「Here is …」「Sure」「Sure, …」）か。語の途中（「Surely」など）は含めない。
+fn is_english_preamble(probe: &str) -> bool {
+    let lower = probe.to_ascii_lowercase();
+    ENGLISH_PREAMBLE_OPENERS.iter().any(|opener| {
+        lower.starts_with(opener)
+            && lower[opener.len()..]
+                .chars()
+                .next()
+                .is_none_or(|next| !next.is_ascii_alphabetic())
+    })
 }
 
 /// 末尾が `:` または `：` の行か（「次の内容です:」など。導入の言い回しとみなす）
@@ -435,7 +482,7 @@ mod tests {
         let memo = parse_memo("契約書の支払期限を翌々月払いに変えた。").expect("要約");
         assert_eq!(memo.title, "契約書の支払期限を翌々月払いに変えた。");
         assert!(memo.body.is_empty());
-        assert!(!memo.body_dropped);
+        assert!(memo.body_dropped.is_none());
     }
 
     #[test]
@@ -447,7 +494,7 @@ mod tests {
             memo.body,
             vec!["商品Aを40個から25個に変更", "商品Cを10個から0個に変更"]
         );
-        assert!(!memo.body_dropped);
+        assert!(memo.body_dropped.is_none());
     }
 
     #[test]
@@ -465,7 +512,7 @@ mod tests {
         let raw = "要約。\n\n以上です\n・本文の一行";
         let memo = parse_memo(raw).expect("解析");
         assert_eq!(memo.body, vec!["本文の一行"]);
-        assert!(!memo.body_dropped);
+        assert!(memo.body_dropped.is_none());
     }
 
     #[test]
@@ -510,7 +557,7 @@ mod tests {
         let raw = "要約。\n\n・良い行\n・commit の行\n・二つ。目。";
         let memo = parse_memo(raw).expect("要約は採る");
         assert_eq!(memo.body, vec!["良い行"]);
-        assert!(memo.body_dropped);
+        assert!(memo.body_dropped.is_some());
     }
 
     #[test]
@@ -519,13 +566,13 @@ mod tests {
         let raw = format!("要約。\n\n{six}");
         let memo = parse_memo(&raw).expect("解析");
         assert_eq!(memo.body.len(), MAX_BODY_LINES);
-        assert!(memo.body_dropped);
+        assert!(memo.body_dropped.is_some());
 
         let big: String = (0..5).map(|_| format!("・{}\n", "あ".repeat(90))).collect();
         let memo = parse_memo(&format!("要約。\n\n{big}")).expect("解析");
         // 90 文字 × 4 行 = 360 文字まで。5 行目（450 文字目）で全体の上限を超えるため捨てる
         assert_eq!(memo.body.len(), 4);
-        assert!(memo.body_dropped);
+        assert!(memo.body_dropped.is_some());
     }
 
     #[test]
@@ -550,7 +597,7 @@ mod tests {
                 "Sheet1の値を増やした".into(),       // 差分の英数字の語
                 "まったく関係のない文章です".into(), // 根拠なし
             ],
-            body_dropped: false,
+            body_dropped: None,
         };
         let screened = screen_memo(memo, &inp).expect("要約は通る");
         assert_eq!(
@@ -562,7 +609,7 @@ mod tests {
                 "Sheet1の値を増やした",
             ]
         );
-        assert!(screened.body_dropped);
+        assert!(screened.body_dropped.is_some());
     }
 
     #[test]
@@ -584,14 +631,14 @@ mod tests {
         let copied = Memo {
             title: "違約金は未払い額の一割とし、支払期日から三十日を経過した".into(),
             body: vec![],
-            body_dropped: false,
+            body_dropped: None,
         };
         assert_eq!(screen_memo(copied, &inp), None);
         // 写しでなければ採る
         let own = Memo {
             title: "契約の違約金の定めを厳しくした".into(),
             body: vec![],
-            body_dropped: false,
+            body_dropped: None,
         };
         assert!(screen_memo(own, &inp).is_some());
     }
@@ -606,11 +653,11 @@ mod tests {
                 "違約金は未払い額の一割とする".into(),
                 "違約金の定めを厳しくした".into(),
             ],
-            body_dropped: false,
+            body_dropped: None,
         };
         let screened = screen_memo(memo, &inp).expect("要約は通る");
         assert_eq!(screened.body, vec!["違約金の定めを厳しくした"]);
-        assert!(screened.body_dropped);
+        assert!(screened.body_dropped.is_some());
     }
 
     #[test]
@@ -619,7 +666,7 @@ mod tests {
         let memo = Memo {
             title: "接続先の認証情報を更新: password=hunter2".into(),
             body: vec![],
-            body_dropped: false,
+            body_dropped: None,
         };
         assert_eq!(screen_memo(memo, &inp), None);
     }
@@ -633,11 +680,11 @@ mod tests {
                 "接続の設定を変えた。連絡先 test@example.com".into(),
                 "接続の設定を変えた".into(),
             ],
-            body_dropped: false,
+            body_dropped: None,
         };
         let screened = screen_memo(memo, &inp).expect("要約は通る");
         assert_eq!(screened.body, vec!["接続の設定を変えた"]);
-        assert!(screened.body_dropped);
+        assert!(screened.body_dropped.is_some());
     }
 
     #[test]
@@ -645,19 +692,19 @@ mod tests {
         let memo = Memo {
             title: "要約".into(),
             body: vec!["一つ目".into(), "二つ目".into()],
-            body_dropped: true,
+            body_dropped: Some(BodyDrop::Ungrounded),
         };
         let text = memo_text(&memo);
         assert_eq!(text, "要約\n\n一つ目\n二つ目");
         let back = memo_from_text(&text).expect("復元");
         assert_eq!(back.title, "要約");
         assert_eq!(back.body, vec!["一つ目", "二つ目"]);
-        assert!(!back.body_dropped);
+        assert!(back.body_dropped.is_none());
         // 本文が無いものは要約だけ
         let only = Memo {
             title: "要約だけ".into(),
             body: vec![],
-            body_dropped: false,
+            body_dropped: None,
         };
         assert_eq!(memo_text(&only), "要約だけ");
         assert_eq!(
@@ -672,5 +719,115 @@ mod tests {
         assert_eq!(strip_bullet("-x"), "-x");
         assert_eq!(strip_quotes("「内容」"), "内容");
         assert_eq!(strip_quotes("『内容』"), "内容");
+    }
+
+    /// 評価ノート 15 節の A06（3 ファイルの果物の追記）の入力。3 モデルとも「メモ…」で始まる出力だった
+    fn a06_input() -> ChangeInput {
+        input(vec![
+            file("メモ1.txt", Some("+ りんご")),
+            file("メモ2.txt", Some("+ みかん")),
+            file("メモ3.txt", Some("- ばなな\n+ ぶどう")),
+        ])
+    }
+
+    #[test]
+    fn a06_outputs_from_the_evaluation_pass_the_rules() {
+        // 評価ノート 15 節の A06 の生の出力（E2B・E4B・9B の `raw_first`）。前置きの規則で弾かれず、検査も通ること
+        let outputs = [
+            "メモファイルに新しい果物の名前が追加された。\n\n・メモ1.txtに「りんご」が追加された\n・メモ2.txtに「みかん」が追加された\n・メモ3.txtから「ばなな」が削除され、「ぶどう」が追加された",
+            "メモファイルに果物の名前を追記・変更した。\n\n・メモ1.txtに「りんご」を追記\n・メモ2.txtに「みかん」を追記\n・メモ3.txtで「ばなな」を削除し、「ぶどう」を追記",
+            "メモにりんご、みかん、ぶどうを追加し、ばななを削除した。\n\n・りんごを追加\n・みかんを追加\n・ばななを削除してぶどうを追加",
+        ];
+        for raw in outputs {
+            let memo = parse_memo(raw).expect("前置きの規則で弾かない");
+            let screened = screen_memo(memo, &a06_input()).expect("検査を通る");
+            assert!(!screened.body.is_empty(), "{raw}");
+            assert!(screened.body_dropped.is_none(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn ordinary_summaries_that_start_with_the_old_words_are_accepted() {
+        // 旧規則の先頭語（「メモ」「保存メモ」「回答」）や、「次の」「以下」で始まる通常の要約は弾かない
+        for raw in [
+            "メモを更新した。",
+            "メモファイルに新しい行を追加した。",
+            "保存メモの書式を直した。",
+            "回答期限を来週金曜に延ばした。",
+            "次の会議は来週です。",
+            "次の会議は来週金曜に行う。",
+            "以下の価格を税込みに直した。",
+            "メモ1に「りんご」を追記した。\n\n・メモ1.txtに「りんご」を追記",
+        ] {
+            assert!(parse_memo(raw).is_some(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn fixed_preamble_forms_are_rejected() {
+        // 「以下」「次の」で始まる短い導入、末尾が「:」の行、英語の前置き
+        for raw in [
+            "以下の内容です\n\n・変更",
+            "以下が保存メモです。\n\n・変更",
+            "次のとおりです\n\n・変更",
+            "次の内容です:\n変更",
+            "以下の変更内容:\n・変更",
+            "Here is the memo.\n変更",
+            "Sure, here is the summary.\n変更",
+            "Sure",
+        ] {
+            assert_eq!(parse_memo(raw), None, "{raw}");
+        }
+        // 英語の語の途中（Surely）は前置きではない
+        assert!(parse_memo("Surely the memo changed.").is_some());
+    }
+
+    #[test]
+    fn body_drop_reason_is_the_most_severe_one() {
+        let inp = input(vec![file(
+            "契約.txt",
+            Some("+ 違約金は未払い額の一割とする\n+ 注意事項"),
+        )]);
+        let base = |body: Vec<&str>| Memo {
+            title: "契約の違約金を変えた".into(),
+            body: body.into_iter().map(str::to_string).collect(),
+            body_dropped: None,
+        };
+        // 写し（差分の本文を長く写す）
+        let copied = screen_memo(
+            base(vec!["違約金は未払い額の一割とする", "契約の注意を追記"]),
+            &inp,
+        )
+        .expect("要約は通る");
+        assert_eq!(copied.body_dropped, Some(BodyDrop::Copy));
+        // 根拠が無い（ファイル名も差分の語も含まない）
+        let ungrounded = screen_memo(
+            base(vec!["全く関係のない文章です", "契約の注意を追記"]),
+            &inp,
+        )
+        .expect("要約は通る");
+        assert_eq!(ungrounded.body_dropped, Some(BodyDrop::Ungrounded));
+        // 機微（写しと根拠なしも含むときは、機微を残す）
+        let sensitive = screen_memo(
+            base(vec![
+                "全く関係のない文章です",
+                "違約金は未払い額の一割とする",
+                "パスワード: Qx7!kL9p",
+            ]),
+            &inp,
+        )
+        .expect("要約は通る");
+        assert_eq!(sensitive.body_dropped, Some(BodyDrop::Sensitive));
+        assert_eq!(sensitive.body, Vec::<String>::new());
+        // 写しと根拠なしのとき、写しを残す
+        let mixed = screen_memo(
+            base(vec![
+                "全く関係のない文章です",
+                "違約金は未払い額の一割とする",
+            ]),
+            &inp,
+        )
+        .expect("要約は通る");
+        assert_eq!(mixed.body_dropped, Some(BodyDrop::Copy));
     }
 }

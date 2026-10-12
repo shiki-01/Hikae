@@ -96,3 +96,14 @@ export function modelButtons(model: AiModel, selected: boolean): ModelButtons {
 		remove: model.status !== 'missing'
 	};
 }
+
+/**
+ * モデルの行に出す推奨のバッジの文言キー（`null` は出さない）。
+ * この PC のおすすめ（総メモリと導入の可否で選ぶ）を優先し、無ければ段階の推奨（カタログの既定）を出す。
+ */
+export function recommendationKey(
+	model: Pick<AiModel, 'recommended' | 'recommendedForThisPc'>
+): MessageKey | null {
+	if (model.recommendedForThisPc) return 'ai.recommended_for_pc';
+	return model.recommended ? 'ai.recommended' : null;
+}

@@ -776,6 +776,7 @@ function mapAiModel(model: BackendModelView): AiModel {
 		licenseUrl: model.license_url,
 		minMemoryBytes: model.min_memory_bytes ?? 0,
 		recommended: model.recommended,
+		recommendedForThisPc: model.recommended_for_this_pc,
 		status: model.status,
 		partialBytes: model.partial_bytes ?? 0,
 		available: model.available,

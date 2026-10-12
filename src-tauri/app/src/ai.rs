@@ -24,7 +24,9 @@ use core_llm::{
     ModelChoice, Prepared, Reason, SensitiveKind, ServiceConfig, SourceChange, SuggestFailure,
     SuggestNotice, SystemInfo, GENERATE_TIMEOUT,
 };
-use core_ops::{ChangedKind, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES};
+use core_ops::{
+    memo_has_content, ChangedKind, MemoContentFact, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES,
+};
 use core_preview::{office_kind, ExtensionHost, OfficeKind};
 use core_store::{
     now_rfc3339, AiModelSource, AiRunner, AiScope, AppSettings, LlmModelRecord, MemoSuggestion,
@@ -90,7 +92,10 @@ pub struct ModelView {
     pub license_url: String,
     /// 必要メモリの目安（バイト）
     pub min_memory_bytes: f64,
+    /// 同じ段階での推奨（カタログの既定。段階 2 は E2B）
     pub recommended: bool,
+    /// この PC で勧めるか（総メモリと導入の可否で選ぶ。`ai_catalog` が判定する。設計 10.2）
+    pub recommended_for_this_pc: bool,
     pub status: ModelStatus,
     /// 途中まで取得したバイト数（`partial` のときだけ意味を持つ）
     pub partial_bytes: f64,
@@ -504,6 +509,13 @@ pub async fn ai_catalog(state: State<'_, AppState>) -> Result<AiCatalog, AppErro
     run_blocking(move || {
         let catalog = core_llm::Catalog::builtin().map_err(|_| catalog_error())?;
         let info = system_info(&models_dir);
+        // この PC のおすすめ（導入できるものの中で必要メモリが最も大きい段階 2 の項目。無ければ無し）
+        let recommended_id = core_llm::requirements::recommended_for_pc(
+            info,
+            &catalog,
+            core_llm::requirements::RECOMMENDED_STAGE,
+        )
+        .map(|m| m.id.clone());
         let mut models = Vec::with_capacity(catalog.models.len());
         for entry in &catalog.models {
             let (status, partial_bytes) =
@@ -532,6 +544,7 @@ pub async fn ai_catalog(state: State<'_, AppState>) -> Result<AiCatalog, AppErro
                 license_url: entry.license_url.clone(),
                 min_memory_bytes: entry.min_total_memory_bytes as f64,
                 recommended: entry.recommended,
+                recommended_for_this_pc: recommended_id.as_deref() == Some(entry.id.as_str()),
                 status,
                 partial_bytes: partial_bytes as f64,
                 available: availability.ok,
@@ -782,7 +795,7 @@ async fn suggest_for_project(
     // 上限（90 秒）は入力の収集から始まる。内蔵の起動待ちは別枠
     let started = Instant::now();
     let extensions = state.extensions.clone();
-    let Prepared { input, notices } = tokio::time::timeout(
+    let (Prepared { input, notices }, has_content) = tokio::time::timeout(
         GENERATE_TIMEOUT,
         run_blocking(move || collect_input(&extensions, &repo, scope)),
     )
@@ -791,6 +804,10 @@ async fn suggest_for_project(
     .map_err(|_| SuggestFailure::Unavailable)?;
     if input.files.is_empty() {
         return Err(SuggestFailure::NotReady);
+    }
+    // 削除のみ・名前変更のみ・画像などだけの変更は、LLM を呼ばない（設計 10.4。エラーではない）
+    if !has_content {
+        return Err(SuggestFailure::NoContent);
     }
     // キーは伏せ字の後の入力から作る（元の機微な文字列は残らない）。本文の有無でプロンプトが変わるため、キーも変わる
     let key = cache_key(&input, &model, body);
@@ -835,8 +852,8 @@ async fn suggest_for_project(
         return Err(SuggestFailure::Invalid);
     }
     let mut notices = notices;
-    if memo.body_dropped {
-        notices.push(SuggestNotice::BodyDropped);
+    if let Some(reason) = memo.body_dropped {
+        notices.push(SuggestNotice::from_body_drop(reason));
         // 安全のために本文を捨てた結果は保存しない（キャッシュからは、捨てる前の本文を返さないため）
         return Ok(Suggested { memo, notices });
     }
@@ -865,38 +882,46 @@ fn store_message(store: &Arc<Mutex<Store>>, key: &str, model: &str, message: &st
 
 /// 提案の入力（変更ファイルの一覧と、設定の範囲に応じた差分）を作る。読み取りのみ。
 /// 機微なファイル（ファイル名で判定）は内容を読まない（設計書 10.6）。伏せ字と注記は `prepare_input` が作る。
+/// 提案の入力を作る。戻り値の 2 つ目は、内容を持つ変更が 1 件でもあるか（`memo_has_content`。設計 10.4）。
 fn collect_input(
     extensions: &ExtensionHost,
     repo: &Path,
     scope: AiScope,
-) -> Result<Prepared, AppError> {
+) -> Result<(Prepared, bool), AppError> {
     let ops = Ops::new(git_runner());
     let changes = ops.list_changes(repo).map_err(AppError::from_ops_error)?;
-    let sources: Vec<SourceChange> = changes
-        .iter()
-        .take(MAX_INPUT_FILES)
-        .map(|change| {
-            let sensitive = sensitive_file(&change.path)
-                || change.original_path.as_deref().is_some_and(sensitive_file);
-            // 「ファイル名まで」は本文を渡さない。「テキスト差分まで」と画像を含む設定は、
-            // 画像は本文を渡さず（段階 3 は未実装）、テキストと文書の差分だけを渡す
-            let (amount, diff_text) = match scope {
-                _ if sensitive => (None, None),
-                AiScope::FileNames => (None, None),
-                AiScope::TextDiff | AiScope::WithImages => {
-                    content_of(&ops, extensions, repo, &change.path)
-                }
-            };
-            SourceChange {
-                kind: map_kind(change.kind),
-                path: change.path.clone(),
-                old_path: change.original_path.clone(),
-                amount,
-                diff_text,
+    let capacity = changes.len().min(MAX_INPUT_FILES);
+    let mut sources: Vec<SourceChange> = Vec::with_capacity(capacity);
+    let mut facts: Vec<MemoContentFact> = Vec::with_capacity(capacity);
+    for change in changes.iter().take(MAX_INPUT_FILES) {
+        let sensitive = sensitive_file(&change.path)
+            || change.original_path.as_deref().is_some_and(sensitive_file);
+        // 「ファイル名まで」は本文を渡さない。「テキスト差分まで」と画像を含む設定は、
+        // 画像は本文を渡さず（段階 3 は未実装）、テキストと文書の差分だけを渡す
+        let (amount, diff_text) = match scope {
+            _ if sensitive => (None, None),
+            AiScope::FileNames => (None, None),
+            AiScope::TextDiff | AiScope::WithImages => {
+                content_of(&ops, extensions, repo, &change.path)
             }
-        })
-        .collect();
-    Ok(prepare_input(&sources))
+        };
+        // 内容の有無の判定（設計 10.4）。「ファイル名まで」では渡す内容が名前と種類だけのため、
+        // 機微でないファイルは名前を内容として数える（この設定の使い方を止めないため）
+        let name_only_content = matches!(scope, AiScope::FileNames) && !sensitive;
+        facts.push(MemoContentFact {
+            kind: change.kind,
+            has_amount: amount.is_some() || name_only_content,
+            has_text: diff_text.as_deref().is_some_and(|text| !text.is_empty()),
+        });
+        sources.push(SourceChange {
+            kind: map_kind(change.kind),
+            path: change.path.clone(),
+            old_path: change.original_path.clone(),
+            amount,
+            diff_text,
+        });
+    }
+    Ok((prepare_input(&sources), memo_has_content(&facts)))
 }
 
 fn map_kind(kind: ChangedKind) -> ChangeKind {

@@ -5,6 +5,7 @@
 		formatBytes,
 		modelButtons,
 		progressPercent,
+		recommendationKey,
 		stageLevelKey,
 		stageNoteKey,
 		unavailableMessage,
@@ -36,6 +37,8 @@
 	}: Props = $props();
 
 	const buttons = $derived(modelButtons(model, selected));
+	/** 推奨のバッジ（この PC のおすすめを優先） */
+	const recommendation = $derived(recommendationKey(model));
 	/** 段階 1 だけ、内容の理解が限定的であることの説明を出す */
 	const stageNote = $derived(stageNoteKey(model.stage));
 	const unavailable = $derived(
@@ -61,8 +64,8 @@
 	<div class="flex align-items:center justify-content:space-between gap:3">
 		<div class="flex align-items:center gap:2 min-w:0">
 			<span class="type-body font-weight:600">{model.displayName}</span>
-			{#if model.recommended}
-				<Badge variant="sync" label={t('ai.recommended')} />
+			{#if recommendation}
+				<Badge variant="sync" label={t(recommendation)} />
 			{/if}
 		</div>
 		{#if selected}

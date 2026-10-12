@@ -1212,7 +1212,14 @@ const messages = {
 	'save_bar.sensitive_confirm': 'このまま保存',
 	'save_bar.notice.sensitive-masked': '機微に見える部分は伏せて作りました',
 	'save_bar.notice.sensitive-file-skipped': '機微な可能性のあるファイルの内容は使っていません',
-	'save_bar.notice.body-dropped': '安全のため、詳細の一部を省きました',
+	'save_bar.notice.body-dropped-copy':
+		'詳細の一部は、ファイルの内容を写している可能性があるため省きました',
+	'save_bar.notice.body-dropped-ungrounded':
+		'詳細の一部は、変更の内容と照らして確認できなかったため省きました',
+	'save_bar.notice.body-dropped-sensitive':
+		'詳細の一部は、パスワードなど機微に見える文字列を含むため省きました',
+	'save_bar.no_content':
+		'削除・移動・画像だけの変更には、AI の提案はありません。通常のメモを使ってください。',
 	'save_bar.ai_failed.timeout':
 		'提案を作れませんでした（時間がかかりすぎました）。変更は無事です。',
 	'save_bar.ai_failed.invalid':
@@ -1244,6 +1251,7 @@ const messages = {
 	'ai.scope_light_hint':
 		'段階 1 のモデルは内容を読む力が限定的です。「ファイル名まで」を選ぶと、結果が安定しやすくなります。',
 	'ai.recommended': '推奨',
+	'ai.recommended_for_pc': 'この PC のおすすめ',
 	'ai.size': '約 {size}',
 	'ai.memory_need': '必要メモリ {memory}',
 	'ai.license': 'ライセンス: {name}',

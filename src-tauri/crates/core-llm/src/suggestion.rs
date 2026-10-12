@@ -19,8 +19,24 @@ pub enum SuggestNotice {
     SensitiveMasked,
     /// 機微なファイルの内容を使わなかった（名前と種類だけを渡した）
     SensitiveFileSkipped,
-    /// 安全のために本文の行を捨てた
-    BodyDropped,
+    /// 本文の行を、差分の本文を写していたため捨てた（内容を写している可能性）
+    BodyDroppedCopy,
+    /// 本文の行を、根拠が確認できなかったため捨てた
+    BodyDroppedUngrounded,
+    /// 本文の行を、機微に見える文字列を含むため捨てた（最も重い理由）
+    BodyDroppedSensitive,
+}
+
+impl SuggestNotice {
+    /// 本文の行を捨てた理由から注記を作る（`validate::BodyDrop`）
+    pub fn from_body_drop(reason: crate::validate::BodyDrop) -> Self {
+        use crate::validate::BodyDrop;
+        match reason {
+            BodyDrop::Ungrounded => SuggestNotice::BodyDroppedUngrounded,
+            BodyDrop::Copy => SuggestNotice::BodyDroppedCopy,
+            BodyDrop::Sensitive => SuggestNotice::BodyDroppedSensitive,
+        }
+    }
 }
 
 /// 提案が得られなかった理由（画面が文言を選ぶ）
@@ -30,6 +46,8 @@ pub enum SuggestNotice {
 pub enum SuggestFailure {
     /// 時間内に終わらなかった（入力の収集と生成の合計）
     Timeout,
+    /// 変更の内容が無い（削除のみ・名前変更のみ・画像などだけ）。LLM は呼ばない（設計 10.4）。エラーではない
+    NoContent,
     /// モデルの出力が検証で採用されなかった
     Invalid,
     /// AI の準備ができていない（提案の設定、モデルの未導入、Ollama に接続できない、接続先の指定）
@@ -159,6 +177,15 @@ mod tests {
         assert_eq!(json, "\"not-ready\"");
         let json = serde_json::to_string(&SuggestFailure::Cancelled).unwrap();
         assert_eq!(json, "\"cancelled\"");
+        let json = serde_json::to_string(&SuggestFailure::NoContent).unwrap();
+        assert_eq!(json, "\"no-content\"");
+        // 注記の名前（本文を捨てた理由別）
+        let json = serde_json::to_string(&SuggestNotice::BodyDroppedCopy).unwrap();
+        assert_eq!(json, "\"body-dropped-copy\"");
+        let json = serde_json::to_string(&SuggestNotice::BodyDroppedUngrounded).unwrap();
+        assert_eq!(json, "\"body-dropped-ungrounded\"");
+        let json = serde_json::to_string(&SuggestNotice::BodyDroppedSensitive).unwrap();
+        assert_eq!(json, "\"body-dropped-sensitive\"");
     }
 
     #[test]

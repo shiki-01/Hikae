@@ -1,6 +1,6 @@
 // 段階ごとの導入条件の判定（設計 10.2、10.5）。OS の値は呼び出し側が `SystemInfo` として渡す純粋な判定。
 
-use crate::catalog::CatalogEntry;
+use crate::catalog::{Catalog, CatalogEntry};
 
 /// 導入先 PC の状態（呼び出し側が取得した値）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,11 +57,75 @@ pub fn stage_availability(info: SystemInfo, model: &CatalogEntry) -> Availabilit
     }
 }
 
+/// 「この PC のおすすめ」を選ぶ段階（段階 2 の中から選ぶ。設計 10.2）
+pub const RECOMMENDED_STAGE: u8 = 2;
+
+/// この PC で勧める項目を返す（設計 10.2）。
+///
+/// `stage` の項目のうち、この PC で導入できるもの（`stage_availability` が通るもの）の中で、
+/// 必要メモリ（`min_total_memory_bytes`）が最も大きいものを選ぶ。同じ必要メモリのときは `recommended` の項目を優先する。
+/// 導入できる項目が無ければ `None`。
+pub fn recommended_for_pc(info: SystemInfo, catalog: &Catalog, stage: u8) -> Option<&CatalogEntry> {
+    catalog
+        .stage(stage)
+        .filter(|m| stage_availability(info, m).ok)
+        .max_by_key(|m| (m.min_total_memory_bytes, m.recommended))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn info(total_gib_tenths: u64) -> SystemInfo {
+        SystemInfo {
+            total_memory_bytes: total_gib_tenths * GIB / 10,
+            free_disk_bytes: 100 * GIB,
+        }
+    }
+
+    #[test]
+    fn recommends_e2b_on_an_8gb_class_machine() {
+        // 8GB の PC（OS の報告で約 7.6GiB）では、E4B は必要メモリ（12GiB）に足りず導入できない
+        let catalog = Catalog::builtin().unwrap();
+        let picked = recommended_for_pc(info(76), &catalog, RECOMMENDED_STAGE).unwrap();
+        assert_eq!(picked.id, "gemma-4-e2b-it-q4_k_m");
+        let e4b = catalog.get("gemma-4-e4b-it-q4_k_m").unwrap();
+        assert_eq!(
+            stage_availability(info(76), e4b).reason,
+            Some(Reason::NotEnoughMemory {
+                needed: 12 * GIB,
+                have: 7 * GIB + GIB * 6 / 10,
+            })
+        );
+    }
+
+    #[test]
+    fn recommends_e4b_from_12gib() {
+        let catalog = Catalog::builtin().unwrap();
+        let picked = recommended_for_pc(info(120), &catalog, RECOMMENDED_STAGE).unwrap();
+        assert_eq!(picked.id, "gemma-4-e4b-it-q4_k_m");
+        // 16GB の PC（OS の報告で約 15.7GiB）
+        let picked = recommended_for_pc(info(157), &catalog, RECOMMENDED_STAGE).unwrap();
+        assert_eq!(picked.id, "gemma-4-e4b-it-q4_k_m");
+        // 12GiB 未満（11.9GiB）は E2B
+        let picked = recommended_for_pc(info(119), &catalog, RECOMMENDED_STAGE).unwrap();
+        assert_eq!(picked.id, "gemma-4-e2b-it-q4_k_m");
+    }
+
+    #[test]
+    fn no_recommendation_when_nothing_is_available() {
+        let catalog = Catalog::builtin().unwrap();
+        // メモリが 7GiB に届かない PC では、どの段階 2 も導入できない
+        assert!(recommended_for_pc(info(40), &catalog, RECOMMENDED_STAGE).is_none());
+        // 空き容量が足りなければ選ばない
+        let no_disk = SystemInfo {
+            total_memory_bytes: 16 * GIB,
+            free_disk_bytes: 0,
+        };
+        assert!(recommended_for_pc(no_disk, &catalog, RECOMMENDED_STAGE).is_none());
+    }
 
     fn model(size: u64, min_mem: u64) -> CatalogEntry {
         CatalogEntry {
@@ -149,6 +213,11 @@ mod tests {
         };
         let catalog = crate::catalog::Catalog::builtin().unwrap();
         for m in &catalog.models {
+            // E4B は必要メモリが 12GiB のため、8GB の PC では導入できない（理由つきで灰色にする）
+            if m.id == "gemma-4-e4b-it-q4_k_m" {
+                assert!(!stage_availability(info, m).ok, "{}", m.id);
+                continue;
+            }
             assert!(stage_availability(info, m).ok, "{}", m.id);
         }
     }

@@ -39,6 +39,19 @@
       "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
       "min_total_memory_bytes": 7516192768,
       "recommended": false
+    },
+    {
+      "id": "gemma-4-e4b-it-q4_k_m",
+      "display_name": "Gemma 4 E4B it（Q4_K_M）",
+      "stage": 2,
+      "file_name": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+      "size_bytes": 4977171584,
+      "license_name": "Apache License 2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_total_memory_bytes": 12884901888,
+      "recommended": false
     }
   ]
 }

@@ -62,7 +62,9 @@ pub use index_lock::{
     WaitPlan, DEFAULT_WAIT, STALE_LOCK_AGE,
 };
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
-pub use memo_input::{MemoTextDiff, MEMO_DIFF_MAX_LINES, MEMO_TEXT_MAX_BYTES};
+pub use memo_input::{
+    memo_has_content, MemoContentFact, MemoTextDiff, MEMO_DIFF_MAX_LINES, MEMO_TEXT_MAX_BYTES,
+};
 pub use memo_text::{normalize_memo, MEMO_MAX_CHARS, MEMO_MAX_LINES};
 pub use models::{
     new_restore_points, quiet_record_is_discardable, AddConflictAction, AddConflictDecision,

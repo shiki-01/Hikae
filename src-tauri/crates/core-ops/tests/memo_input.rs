@@ -249,3 +249,101 @@ fn a_file_changed_from_utf8_to_shift_jis_is_read_line_by_line() -> TestResult {
     );
     Ok(())
 }
+
+/// 保存メモの提案の入力について、作業フォルダの変更 1 件ずつの内容の有無を、実リポジトリから集める（`app` の `collect_input` と同じ読み方）
+fn content_facts(
+    repo: &Path,
+) -> Result<Vec<core_ops::MemoContentFact>, Box<dyn std::error::Error>> {
+    let mut facts = Vec::new();
+    for change in ops().list_changes(repo)? {
+        let diff = ops().memo_text_diff(repo, &change.path, MEMO_TEXT_MAX_BYTES)?;
+        facts.push(core_ops::MemoContentFact {
+            kind: change.kind,
+            has_amount: diff.is_some(),
+            has_text: diff.is_some_and(|d| !d.text.is_empty()),
+        });
+    }
+    Ok(facts)
+}
+
+/// バイナリ（NUL を含む）の画像らしいファイルを書く
+fn write_binary(repo: &Path, rel_path: &str, fill: u8) -> Result<(), Box<dyn std::error::Error>> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0, 0, 0, 0x0d];
+    bytes.extend(std::iter::repeat_n(fill, 64));
+    std::fs::write(repo.join(rel_path), bytes)?;
+    Ok(())
+}
+
+#[test]
+fn memo_has_content_only_when_a_change_has_text_or_amount() -> TestResult {
+    // 実リポジトリで、削除のみ・名前変更のみ・画像のみ・テキストの変更を含む混在を確かめる
+    let tmp = tempfile::tempdir()?;
+    let repo = new_repo(tmp.path())?;
+    write_test_file(&repo, "memo.txt", "一行目\n二行目\n")?;
+    write_test_file(&repo, "old.txt", "残す内容\n")?;
+    write_binary(&repo, "pic.png", 1)?;
+    write_binary(&repo, "moved.png", 2)?;
+    ops().save(&repo, "初回")?;
+
+    // 1. 削除のみ（テキストの削除）: 内容として数えない
+    std::fs::remove_file(repo.join("old.txt"))?;
+    assert!(
+        !core_ops::memo_has_content(&content_facts(&repo)?),
+        "削除のみ"
+    );
+    ops().save(&repo, "削除")?;
+
+    // 2. 名前変更のみ（画像。`git mv` で名前だけを変える）: 本文も変更量も渡せないため内容なし
+    let (code, _, err) = run_git(&repo, &["mv", "moved.png", "renamed.png"]);
+    assert_eq!(code, 0, "{err}");
+    let facts = content_facts(&repo)?;
+    assert!(
+        facts.iter().any(|f| f.kind == ChangedKind::Renamed),
+        "{facts:?}"
+    );
+    assert!(!core_ops::memo_has_content(&facts), "名前変更のみ");
+    ops().save(&repo, "移動")?;
+
+    // 3. 画像だけの追加・差し替え: 内容なし
+    write_binary(&repo, "pic.png", 3)?;
+    write_binary(&repo, "added.png", 4)?;
+    assert!(
+        !core_ops::memo_has_content(&content_facts(&repo)?),
+        "画像のみ"
+    );
+
+    // 4. 削除（テキスト）と画像の追加・差し替えの混在: 削除は数えず、画像も数えないため内容なし
+    std::fs::remove_file(repo.join("memo.txt"))?;
+    let facts = content_facts(&repo)?;
+    assert!(
+        facts
+            .iter()
+            .any(|f| f.kind == ChangedKind::Deleted && f.has_text),
+        "{facts:?}"
+    );
+    assert!(!core_ops::memo_has_content(&facts), "削除と画像の混在");
+
+    // 5. 新規のテキストを足した混在: 内容あり（新規のテキストは本文を渡せる）
+    write_test_file(&repo, "memo2.txt", "新しい行\n")?;
+    let facts = content_facts(&repo)?;
+    assert!(facts
+        .iter()
+        .any(|f| f.kind == ChangedKind::Added && f.has_text));
+    assert!(core_ops::memo_has_content(&facts), "新規テキストは内容あり");
+    ops().save(&repo, "混在")?;
+
+    // 6. テキストの変更を含む混在（画像の差し替えと、テキストの追記）: 内容あり
+    write_binary(&repo, "pic.png", 5)?;
+    write_test_file(&repo, "memo2.txt", "新しい行\n追加の行\n")?;
+    assert!(
+        core_ops::memo_has_content(&content_facts(&repo)?),
+        "テキストの変更あり"
+    );
+    Ok(())
+}
+
+#[test]
+fn memo_has_content_is_false_for_no_changes() -> TestResult {
+    assert!(!core_ops::memo_has_content(&[]));
+    Ok(())
+}

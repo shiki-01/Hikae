@@ -342,7 +342,7 @@ fn finish(raw: &str, input: &ChangeInput, body: bool) -> Option<Memo> {
     let mut memo = parse_memo(raw)?;
     if !body {
         memo.body.clear();
-        memo.body_dropped = false;
+        memo.body_dropped = None;
     }
     screen_memo(memo, input)
 }
@@ -527,7 +527,7 @@ mod finish_tests {
         let memo = finish(raw, &input, true).expect("要約は採る");
         assert_eq!(memo.title, "契約書の支払期限を変えた。");
         assert_eq!(memo.body, vec!["支払期限を翌々月払いに変更"]);
-        assert!(memo.body_dropped);
+        assert!(memo.body_dropped.is_some());
     }
 
     #[test]
@@ -543,6 +543,6 @@ mod finish_tests {
         let raw = "契約書の支払期限を変えた。\n\n・支払期限を翌々月払いに変更";
         let memo = finish(raw, &input, false).expect("要約");
         assert!(memo.body.is_empty());
-        assert!(!memo.body_dropped);
+        assert!(memo.body_dropped.is_none());
     }
 }

@@ -924,7 +924,10 @@ export type ModelView = {
 	license_url: string,
 	/**  必要メモリの目安（バイト） */
 	min_memory_bytes: number | null,
+	/**  同じ段階での推奨（カタログの既定。段階 2 は E2B） */
 	recommended: boolean,
+	/**  この PC で勧めるか（総メモリと導入の可否で選ぶ。`ai_catalog` が判定する。設計 10.2） */
+	recommended_for_this_pc: boolean,
 	status: ModelStatus,
 	/**  途中まで取得したバイト数（`partial` のときだけ意味を持つ） */
 	partial_bytes: number | null,
@@ -1572,6 +1575,8 @@ export type StatusChanged = {
 export type SuggestFailure = 
 /**  時間内に終わらなかった（入力の収集と生成の合計） */
 "timeout" | 
+/**  変更の内容が無い（削除のみ・名前変更のみ・画像などだけ）。LLM は呼ばない（設計 10.4）。エラーではない */
+"no-content" | 
 /**  モデルの出力が検証で採用されなかった */
 "invalid" | 
 /**  AI の準備ができていない（提案の設定、モデルの未導入、Ollama に接続できない、接続先の指定） */
@@ -1587,8 +1592,12 @@ export type SuggestNotice =
 "sensitive-masked" | 
 /**  機微なファイルの内容を使わなかった（名前と種類だけを渡した） */
 "sensitive-file-skipped" | 
-/**  安全のために本文の行を捨てた */
-"body-dropped";
+/**  本文の行を、差分の本文を写していたため捨てた（内容を写している可能性） */
+"body-dropped-copy" | 
+/**  本文の行を、根拠が確認できなかったため捨てた */
+"body-dropped-ungrounded" | 
+/**  本文の行を、機微に見える文字列を含むため捨てた（最も重い理由） */
+"body-dropped-sensitive";
 
 /**
  *  保存メモの提案の結果。`title` があれば成功（`body` は本文の行を改行でつないだもの。無ければ null）。

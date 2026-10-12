@@ -1678,6 +1678,7 @@ export const mockApi: ProjectApi = {
 	async aiCatalog(): Promise<AiCatalog> {
 		await sleep(80);
 		const saved = readAiStore();
+		const recommendedId = mockRecommendedId(MOCK_AI_MEMORY, MOCK_AI_DISK);
 		return {
 			system: { totalMemoryBytes: MOCK_AI_MEMORY, freeDiskBytes: MOCK_AI_DISK },
 			models: MOCK_AI_MODELS.map((model) => {
@@ -1689,6 +1690,7 @@ export const mockApi: ProjectApi = {
 					available:
 						model.minMemoryBytes <= MOCK_AI_MEMORY && model.sizeBytes * 1.1 <= MOCK_AI_DISK,
 					unavailableReason: null,
+					recommendedForThisPc: model.id === recommendedId,
 					downloading: aiRunning.has(model.id)
 				};
 			})
@@ -1747,6 +1749,9 @@ export const mockApi: ProjectApi = {
 		const state = states.get(projectId);
 		if (!state || state.changes.length === 0)
 			return { title: null, body: null, notices: [], failure: 'not-ready' };
+		// 削除・名前変更だけの変更は、内容が無いため AI を呼ばない（実装と同じ。モックは内容を持たないため種類で判定する）
+		if (state.changes.every((c) => c.type === 'deleted' || c.type === 'renamed'))
+			return { title: null, body: null, notices: [], failure: 'no-content' };
 		return {
 			title: `AI 提案（モック）: ${suggestMemo(state.changes)}`,
 			body: '（モック）詳細の 1 行目\n（モック）詳細の 2 行目',
@@ -1833,7 +1838,12 @@ function mockCustomGgufCheck(path: string): AiCustomGgufCheck {
 /** カタログの内容（バックエンドの catalog.json と同じ値・同じ順） */
 const MOCK_AI_MODELS: Omit<
 	AiModel,
-	'status' | 'partialBytes' | 'available' | 'unavailableReason' | 'downloading'
+	| 'status'
+	| 'partialBytes'
+	| 'available'
+	| 'unavailableReason'
+	| 'downloading'
+	| 'recommendedForThisPc'
 >[] = [
 	{
 		id: 'qwen3.5-2b-q4_k_m',
@@ -1864,8 +1874,39 @@ const MOCK_AI_MODELS: Omit<
 		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
 		minMemoryBytes: 7516192768,
 		recommended: false
+	},
+	{
+		id: 'gemma-4-e4b-it-q4_k_m',
+		displayName: 'Gemma 4 E4B it（Q4_K_M）',
+		stage: 2,
+		sizeBytes: 4977171584,
+		licenseName: 'Apache License 2.0',
+		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+		minMemoryBytes: 12884901888,
+		recommended: false
 	}
 ];
+
+/**
+ * モックの「この PC のおすすめ」（実装の `recommended_for_pc` と同じ規則。段階 2 のうち導入できるもので、
+ * 必要メモリが最も大きいもの。同じときは recommended を優先する）
+ */
+function mockRecommendedId(memory: number, disk: number): string | null {
+	const candidates = MOCK_AI_MODELS.filter(
+		(m) => m.stage === 2 && m.minMemoryBytes <= memory && m.sizeBytes * 1.1 <= disk
+	);
+	let best: (typeof candidates)[number] | null = null;
+	for (const m of candidates) {
+		if (
+			!best ||
+			m.minMemoryBytes > best.minMemoryBytes ||
+			(m.minMemoryBytes === best.minMemoryBytes && m.recommended && !best.recommended)
+		) {
+			best = m;
+		}
+	}
+	return best?.id ?? null;
+}
 
 const aiListeners = new Set<(notice: AiDownloadNotice) => void>();
 /** モックの提案の要求番号（新しい要求・取り消しで増やし、古い要求の結果を捨てる） */

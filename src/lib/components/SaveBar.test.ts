@@ -96,13 +96,13 @@ describe('SaveBar の AI 提案の「使う」と「元に戻す」', () => {
 		kind: 'result',
 		title: '税率を8%から10%に変えた',
 		body: '・税率を8%から10%に変更',
-		notices: ['sensitive-masked', 'body-dropped']
+		notices: ['sensitive-masked', 'body-dropped-copy']
 	};
 
 	it('「使う」は要約と本文を渡し、短い注記を出す', async () => {
 		const { onusesuggestion } = renderBar({ canSuggest: true, suggestState: result });
 		expect(screen.getByText(t('save_bar.notice.sensitive-masked'))).toBeTruthy();
-		expect(screen.getByText(t('save_bar.notice.body-dropped'))).toBeTruthy();
+		expect(screen.getByText(t('save_bar.notice.body-dropped-copy'))).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: t('save_bar.ai_use') }));
 		expect(onusesuggestion).toHaveBeenCalledWith({
 			title: '税率を8%から10%に変えた',
@@ -123,5 +123,29 @@ describe('SaveBar の AI 提案の「使う」と「元に戻す」', () => {
 	it('「元に戻す」は、使っていないときは出さない', () => {
 		renderBar({ canSuggest: true, suggestState: result, undoable: false });
 		expect(screen.queryByRole('button', { name: t('save_bar.ai_undo') })).toBeNull();
+	});
+});
+
+describe('SaveBar の内容の無い変更と、本文を捨てた理由の注記', () => {
+	it('内容の無い変更は、注記だけを出し、再試行を出さない（失敗の表示ではない）', () => {
+		renderBar({ canSuggest: true, suggestState: { kind: 'no-content' } });
+		expect(screen.getByText(t('save_bar.no_content'))).toBeTruthy();
+		expect(screen.queryByRole('button', { name: t('save_bar.ai_retry') })).toBeNull();
+		expect(screen.queryByText(t('save_bar.ai_failed.invalid'))).toBeNull();
+	});
+
+	it('本文を捨てた理由ごとに、理由を添えた注記を出す', () => {
+		for (const notice of [
+			'body-dropped-copy',
+			'body-dropped-ungrounded',
+			'body-dropped-sensitive'
+		] as const) {
+			cleanup();
+			renderBar({
+				canSuggest: true,
+				suggestState: { kind: 'result', title: '要約', body: null, notices: [notice] }
+			});
+			expect(screen.getByText(t(`save_bar.notice.${notice}`))).toBeTruthy();
+		}
 	});
 });

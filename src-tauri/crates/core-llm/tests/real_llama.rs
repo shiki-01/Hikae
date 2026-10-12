@@ -1078,7 +1078,7 @@ fn body_run(
             core_llm::Memo {
                 title: "x".into(),
                 body: vec![line.clone()],
-                body_dropped: false,
+                body_dropped: None,
             },
             input,
         )

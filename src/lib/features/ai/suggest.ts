@@ -48,7 +48,9 @@ export type SuggestState =
 	| { kind: 'idle' }
 	| { kind: 'generating'; seq: number }
 	| { kind: 'result'; title: string; body: string | null; notices: AiSuggestNotice[] }
-	| { kind: 'failed'; failure: AiSuggestFailure };
+	| { kind: 'failed'; failure: AiSuggestFailure }
+	/** 内容の無い変更（削除・名前変更・画像だけ）。エラーではなく、AI の提案は無いことを静かに伝える（再試行は出さない） */
+	| { kind: 'no-content' };
 
 export type SuggestEvent =
 	| { type: 'start'; seq: number }
@@ -74,6 +76,7 @@ export function reduceSuggest(state: SuggestState, event: SuggestEvent): Suggest
 			const { title, body, notices, failure } = event.result;
 			if (title !== null) return { kind: 'result', title, body, notices };
 			if (failure === null || failure === 'cancelled') return SUGGEST_IDLE;
+			if (failure === 'no-content') return { kind: 'no-content' };
 			return { kind: 'failed', failure };
 		}
 	}

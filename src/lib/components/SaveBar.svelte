@@ -131,13 +131,16 @@
 						<Button variant="ghost" size="sm" onclick={() => onregenerate?.()}>
 							{t('save_bar.ai_regenerate')}
 						</Button>
-					{:else}
+					{:else if suggestState.kind === 'failed'}
 						<span class="max-w:320px type-small fg:fg-muted">
 							{t(suggestFailureKey(suggestState.failure))}
 						</span>
 						<Button variant="ghost" size="sm" onclick={() => onrequest?.()}>
 							{t('save_bar.ai_retry')}
 						</Button>
+					{:else if suggestState.kind === 'no-content'}
+						<!-- 内容の無い変更は失敗ではないため、再試行は出さない（設計 10.4） -->
+						<span class="max-w:320px type-small fg:fg-muted">{t('save_bar.no_content')}</span>
 					{/if}
 					{#if undoable}
 						<Button

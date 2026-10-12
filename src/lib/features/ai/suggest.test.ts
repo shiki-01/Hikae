@@ -8,6 +8,7 @@ import {
 	reduceSuggest,
 	SUGGEST_IDLE,
 	suggestFailureKey,
+	suggestNoticeKey,
 	type SuggestState
 } from './suggest';
 
@@ -28,6 +29,7 @@ function catalog(status: AiModel['status']): AiCatalog {
 				licenseUrl: 'https://example.invalid/license',
 				minMemoryBytes: 1,
 				recommended: true,
+				recommendedForThisPc: false,
 				status,
 				partialBytes: 0,
 				available: true,
@@ -184,5 +186,39 @@ describe('失敗の理由と文言', () => {
 		for (const reason of reasons) {
 			expect(ja[suggestFailureKey(reason)], reason).toContain('変更は無事');
 		}
+	});
+});
+
+describe('内容の無い変更（no-content）と、注記の文言', () => {
+	it('内容の無い変更は、失敗ではなく no-content の状態になる（再試行の対象にしない）', () => {
+		let state = reduceSuggest(SUGGEST_IDLE, { type: 'start', seq: 1 });
+		state = reduceSuggest(state, {
+			type: 'done',
+			seq: 1,
+			result: { title: null, body: null, notices: [], failure: 'no-content' }
+		});
+		expect(state).toEqual({ kind: 'no-content' });
+	});
+
+	it('本文を捨てた理由の注記は、理由別の文言のキーを持つ', () => {
+		const notices = [
+			'sensitive-masked',
+			'sensitive-file-skipped',
+			'body-dropped-copy',
+			'body-dropped-ungrounded',
+			'body-dropped-sensitive'
+		] as const;
+		for (const notice of notices) {
+			const key = suggestNoticeKey(notice);
+			expect(ja[key], key).toBeTruthy();
+		}
+		// 旧い注記（理由の無い body-dropped）の文言は残さない
+		expect(ja).not.toHaveProperty('save_bar.notice.body-dropped');
+	});
+
+	it('内容の無い変更の文言は、削除・移動・画像の変更だと分かる（Git 用語を含まない）', () => {
+		const text = ja['save_bar.no_content'];
+		expect(text).toContain('削除・移動・画像');
+		expect(text).not.toMatch(/commit|push|diff|branch|コミット/i);
 	});
 });

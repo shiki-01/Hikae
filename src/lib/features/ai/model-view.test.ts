@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { AiModel } from '#lib/api/types.js';
-import { formatBytes, modelButtons, progressPercent, unavailableMessage } from './model-view';
+import {
+	formatBytes,
+	modelButtons,
+	progressPercent,
+	recommendationKey,
+	unavailableMessage
+} from './model-view';
 
 const GB = 1024 ** 3;
 
@@ -14,6 +20,7 @@ function model(overrides: Partial<AiModel> = {}): AiModel {
 		licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
 		minMemoryBytes: 8 * GB,
 		recommended: true,
+		recommendedForThisPc: false,
 		status: 'missing',
 		partialBytes: 0,
 		available: true,
@@ -98,5 +105,23 @@ describe('モデルの行のボタン', () => {
 		expect(modelButtons(model({ status: 'ready' }), false).use).toBe(true);
 		expect(modelButtons(model({ status: 'ready' }), true).use).toBe(false);
 		expect(modelButtons(model({ status: 'ready' }), true).remove).toBe(true);
+	});
+});
+
+describe('推奨のバッジ（この PC のおすすめ を優先する）', () => {
+	it('この PC のおすすめは、段階の推奨より優先して出す', () => {
+		expect(recommendationKey({ recommended: true, recommendedForThisPc: true })).toBe(
+			'ai.recommended_for_pc'
+		);
+		expect(recommendationKey({ recommended: false, recommendedForThisPc: true })).toBe(
+			'ai.recommended_for_pc'
+		);
+	});
+
+	it('この PC のおすすめでなければ、段階の推奨（既定）を出し、どちらでもなければ出さない', () => {
+		expect(recommendationKey({ recommended: true, recommendedForThisPc: false })).toBe(
+			'ai.recommended'
+		);
+		expect(recommendationKey({ recommended: false, recommendedForThisPc: false })).toBeNull();
 	});
 });

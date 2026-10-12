@@ -558,6 +558,8 @@ export interface AiModel {
 	/** 必要メモリの目安（バイト） */
 	minMemoryBytes: number;
 	recommended: boolean;
+	/** この PC で勧めるか（総メモリと導入の可否で選ぶ。設計 10.2） */
+	recommendedForThisPc: boolean;
 	status: AiModelStatus;
 	/** 途中まで取得したバイト数（`partial` のときだけ意味を持つ） */
 	partialBytes: number;
@@ -597,10 +599,16 @@ export interface AiEndpointCheck {
 }
 
 /** 保存メモの提案が得られなかった理由（`cancelled` は画面に出さない） */
-export type AiSuggestFailure = 'timeout' | 'invalid' | 'not-ready' | 'unavailable' | 'cancelled';
+export type AiSuggestFailure =
+	'timeout' | 'no-content' | 'invalid' | 'not-ready' | 'unavailable' | 'cancelled';
 
 /** 提案に付ける注記（内容は含まない。短い文は画面が選ぶ） */
-export type AiSuggestNotice = 'sensitive-masked' | 'sensitive-file-skipped' | 'body-dropped';
+export type AiSuggestNotice =
+	| 'sensitive-masked'
+	| 'sensitive-file-skipped'
+	| 'body-dropped-copy'
+	| 'body-dropped-ungrounded'
+	| 'body-dropped-sensitive';
 
 /** 保存メモに含まれる機微に見える文字列の種類（内容は含まない） */
 export type SensitiveKind =

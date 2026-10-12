@@ -9,6 +9,7 @@
 // - 文書（docx・xlsx）の差分は app 層が `core-preview` で行う。ここはテキストだけを扱う
 
 use crate::blob::{read_bytes, Fetched, WORK_REV};
+use crate::changes::ChangedKind;
 use crate::models::{DiffLineKind, OpsError};
 use crate::operations::parse_unified_diff;
 use crate::point::resolve_point;
@@ -120,6 +121,28 @@ fn decode_diff_output(bytes: &[u8]) -> Option<String> {
         text.push_str(&decode_memo_text(line)?);
     }
     Some(text)
+}
+
+/// 保存メモの提案の入力について、1 件の変更の内容の有無（`memo_has_content` の入力）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoContentFact {
+    /// 変更の種類
+    pub kind: ChangedKind,
+    /// 変更量（「行 +2 / -0」など）を渡せたか
+    pub has_amount: bool,
+    /// 差分の本文（テキストの行、文書の段落、セルの差分）を渡せたか
+    pub has_text: bool,
+}
+
+/// 提案の入力に、内容を持つ変更が 1 件でもあるか（設計 10.4。純関数）。
+///
+/// - 削除された変更は内容として数えない（削除の行は、保存メモの推測の材料にしないため）
+/// - 名前変更・画像・PDF・バイナリなど、変更量も本文も渡せない変更は内容として数えない
+/// - 上記のどちらでもない変更（テキストや文書の本文、変更量を渡せたもの）が 1 件でもあれば、内容がある
+pub fn memo_has_content(facts: &[MemoContentFact]) -> bool {
+    facts
+        .iter()
+        .any(|f| f.kind != ChangedKind::Deleted && (f.has_amount || f.has_text))
 }
 
 /// 本文の全行を追加として数える
