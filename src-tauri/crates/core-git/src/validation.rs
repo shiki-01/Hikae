@@ -692,6 +692,8 @@ fn validate_diff_args(args: &[&str]) -> Result<(), Rejection> {
         "--shortstat",
         "--text",
         "-a",
+        // 行末の CR と、最後の行の改行の有無だけの違いを差分に出さない（画面の差分用）
+        "--ignore-cr-at-eol",
     ];
 
     let mut i = 0;

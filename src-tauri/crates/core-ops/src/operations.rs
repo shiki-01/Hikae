@@ -727,7 +727,9 @@ pub(crate) fn diff_with(
         return Err(OpsError::Unexpected("invalid commit".to_string()));
     }
     // 画面は「いま」の作業フォルダを `current` で指す（`work` も同じ）。その場合は作業フォルダとの差分を取る
-    let mut cmd = vec!["diff", "--unified=3", from];
+    // 行末の CR と、最後の行の改行の有無だけの違い（メモ帳などで最後の行の後に Enter を押さずに保存した後、
+    // 追記すると、その行が「変更された」と出る）は、内容の変更ではないため差分に出さない
+    let mut cmd = vec!["diff", "--unified=3", "--ignore-cr-at-eol", from];
     if !crate::point::is_working_point(to) {
         cmd.push(to);
     }

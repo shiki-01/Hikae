@@ -70,7 +70,17 @@ pub(crate) fn memo_text_diff(
 
     // 保存にあるファイル: git の差分をバイト列のまま読み、同じ文字コードの規則で解釈する
     let spec = format!(":(literal){rel}");
-    let out = runner.run_ok(repo, &["diff", "--unified=3", &head, "--", &spec])?;
+    let out = runner.run_ok(
+        repo,
+        &[
+            "diff",
+            "--unified=3",
+            "--ignore-cr-at-eol",
+            &head,
+            "--",
+            &spec,
+        ],
+    )?;
     let Some(text) = decode_diff_output(&out.stdout) else {
         return Ok(None);
     };
