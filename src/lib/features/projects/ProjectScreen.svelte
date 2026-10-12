@@ -13,6 +13,7 @@
 		OpenTarget,
 		RestoreScope,
 		SavePoint,
+		SensitiveKind,
 		SizeCheck
 	} from '#lib/api/types.js';
 	import SaveBar from '#lib/components/SaveBar.svelte';
@@ -39,6 +40,11 @@
 		SUGGEST_IDLE,
 		type SuggestState
 	} from '#lib/features/ai/suggest.js';
+	import {
+		applySuggestion,
+		composeMemo,
+		type MemoDraft
+	} from '#lib/features/changes/memo-draft.js';
 	import SizeCheckDialog from '#lib/features/changes/SizeCheckDialog.svelte';
 	import { choiceFor, type SizeAction } from '#lib/features/changes/size-check.js';
 	import { folderAtPoint, folderLabel } from '#lib/features/changes/drop-target.js';
@@ -125,6 +131,12 @@
 	let selectedPointId = $state<string | null>('now');
 	let expanded = $state<string[]>([]);
 	let memo = $state('');
+	// 保存欄の詳細（任意）と、その欄を開いているか。提案を使う前の下書きは「元に戻す」のために持つ
+	let detail = $state('');
+	let detailOpen = $state(false);
+	let suggestBackup = $state<MemoDraft | null>(null);
+	// 保存欄のメモに見える機微情報の種類（内容は持たない）。空でなければ保存前に確認する
+	let sensitive = $state<SensitiveKind[]>([]);
 	// 最後に自動で入れた案。メモ欄がこれと同じ間だけ、新しい案に差し替える
 	let autoMemo = '';
 	let leftWidth = $state(320);
@@ -188,7 +200,7 @@
 	const aiSettings = $derived(settingsQuery.data?.settings);
 	const aiReady = $derived(aiSuggestionReady(aiSettings, aiCatalogQuery.data));
 	const aiKey = $derived(
-		`${projectId}|${changesKey(changes)}|${aiReady}|${aiSettings?.memoSuggestion}|${aiSettings?.aiRunner}|${aiSettings?.aiModel}|${aiSettings?.aiModelSource}|${aiSettings?.aiCustomGgufPath}|${aiSettings?.aiScope}`
+		`${projectId}|${changesKey(changes)}|${aiReady}|${aiSettings?.memoSuggestion}|${aiSettings?.aiRunner}|${aiSettings?.aiModel}|${aiSettings?.aiModelSource}|${aiSettings?.aiCustomGgufPath}|${aiSettings?.aiScope}|${aiSettings?.aiSuggestBody}`
 	);
 	let suggest = $state<SuggestState>(SUGGEST_IDLE);
 	let suggestSeq = 0;
@@ -217,7 +229,7 @@
 			suggest = reduceSuggest(suggest, {
 				type: 'done',
 				seq,
-				result: { text: null, failure: 'unavailable' }
+				result: { title: null, body: null, failure: 'unavailable', notices: [] }
 			});
 		}
 	}
@@ -234,6 +246,9 @@
 		() => {
 			memo = '';
 			autoMemo = '';
+			detail = '';
+			detailOpen = false;
+			suggestBackup = null;
 			sizeRequest = null;
 		},
 		(requestMemo, check) => (sizeRequest = { memo: requestMemo, check })
@@ -333,9 +348,50 @@
 		}
 	});
 
+	// 保存欄のメモに機微に見える文字列があるかを、入力が止まってから調べる（読み取りのみ。保存は止めない）。
+	// 結果が遅れて届いても、古い入力の結果では上書きしない
+	let sensitiveSeq = 0;
+	$effect(() => {
+		const text = composeMemo(memo, detail);
+		const seq = ++sensitiveSeq;
+		if (text.trim() === '') {
+			sensitive = [];
+			return;
+		}
+		const timer = setTimeout(() => {
+			api
+				.checkMemoSensitive(text)
+				.then((kinds) => {
+					if (seq === sensitiveSeq) sensitive = kinds;
+				})
+				.catch(() => {
+					if (seq === sensitiveSeq) sensitive = [];
+				});
+		}, 400);
+		return () => clearTimeout(timer);
+	});
+
 	function submitSave() {
-		const text = memo.trim() || suggestion;
+		// 要約が空なら、ルールベースの提案を要約にする。詳細は要約の後に空行を挟んでつなぐ
+		const text = composeMemo(memo.trim() || suggestion, detail);
 		if (text) save.mutate({ memo: text });
+	}
+
+	/** AI の提案を下書きに入れる。直前の下書きは「元に戻す」のために残す */
+	function useSuggestion(suggested: { title: string; body: string | null }) {
+		const applied = applySuggestion({ summary: memo, detail }, suggested);
+		suggestBackup = applied.backup;
+		memo = applied.next.summary;
+		detail = applied.next.detail;
+		if (detail !== '') detailOpen = true;
+	}
+
+	function undoSuggestion() {
+		if (!suggestBackup) return;
+		memo = suggestBackup.summary;
+		detail = suggestBackup.detail;
+		if (detail !== '') detailOpen = true;
+		suggestBackup = null;
 	}
 
 	function chooseSize(action: SizeAction) {
@@ -650,15 +706,20 @@
 	{#if tab === 'changes'}
 		<SaveBar
 			bind:memo
+			bind:detail
+			bind:detailOpen
 			hasChanges={changes.length > 0}
 			saving={save.isPending}
 			canSuggest={aiCanSuggest}
 			suggestState={suggest}
+			{sensitive}
+			undoable={suggestBackup !== null}
 			onsave={submitSave}
 			onrequest={() => requestSuggestion(false)}
 			onregenerate={() => requestSuggestion(true)}
 			oncancel={cancelSuggestion}
-			onusesuggestion={(text) => (memo = text)}
+			onusesuggestion={useSuggestion}
+			onundosuggestion={undoSuggestion}
 		/>
 	{/if}
 </div>

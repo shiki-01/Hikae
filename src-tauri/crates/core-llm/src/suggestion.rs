@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tokio_util::sync::CancellationToken;
 
+/// 提案に付ける注記（画面が短い文を選ぶ。内容は含まない）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum SuggestNotice {
+    /// 入力の中の機微に見える部分を伏せて作った
+    SensitiveMasked,
+    /// 機微なファイルの内容を使わなかった（名前と種類だけを渡した）
+    SensitiveFileSkipped,
+    /// 安全のために本文の行を捨てた
+    BodyDropped,
+}
+
 /// 提案が得られなかった理由（画面が文言を選ぶ）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

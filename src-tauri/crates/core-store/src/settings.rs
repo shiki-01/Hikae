@@ -185,6 +185,8 @@ define_settings! {
     ai_model: String = String::new(),
     /// AI に渡す範囲
     ai_scope: AiScope = AiScope::TextDiff,
+    /// 保存メモの本文（詳細の箇条書き）も提案する。オフのときは要約だけを求める。Phase 2（設計書 10.6）
+    ai_suggest_body: bool = true,
     /// Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ
     ai_ollama_url: String = DEFAULT_OLLAMA_URL.to_string(),
 
@@ -440,6 +442,7 @@ mod tests {
         assert_eq!(d.ai_runner, AiRunner::Builtin);
         assert_eq!(d.ai_model, "");
         assert_eq!(d.ai_scope, AiScope::TextDiff);
+        assert!(d.ai_suggest_body);
         assert_eq!(d.ai_ollama_url, DEFAULT_OLLAMA_URL);
         assert_eq!(d.git_executable, GitExecutable::Bundled);
         assert!(!d.show_technical_info);

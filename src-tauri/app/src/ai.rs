@@ -17,10 +17,12 @@ use crate::events::{LlmDownloadFinished, LlmDownloadOutcome, LlmDownloadProgress
 use crate::office::{self, ParagraphRow};
 use crate::{git_runner, load_project, run_blocking, AppError, AppState};
 use core_llm::{
-    cache_key, cell_amount, cell_line, change_input, check_endpoint, installed, list_ollama_models,
-    paragraph_amount, signed_line, stage_availability, text_amount, validate_custom_gguf, Backend,
-    CatalogEntry, ChangeInput, ChangeKind, CustomGgufError, Downloader, Installed, LlmError,
-    ModelChoice, Reason, ServiceConfig, SourceChange, SuggestFailure, SystemInfo, GENERATE_TIMEOUT,
+    cache_key, cell_amount, cell_line, check_endpoint, installed, list_ollama_models,
+    memo_from_text, memo_sensitive_kinds, memo_text, paragraph_amount, prepare_input,
+    sensitive_file, signed_line, stage_availability, text_amount, validate_custom_gguf, Backend,
+    CatalogEntry, ChangeInput, ChangeKind, CustomGgufError, Downloader, Installed, LlmError, Memo,
+    ModelChoice, Prepared, Reason, SensitiveKind, ServiceConfig, SourceChange, SuggestFailure,
+    SuggestNotice, SystemInfo, GENERATE_TIMEOUT,
 };
 use core_ops::{ChangedKind, MemoTextDiff, Ops, MEMO_TEXT_MAX_BYTES};
 use core_preview::{office_kind, ExtensionHost, OfficeKind};
@@ -189,27 +191,41 @@ pub struct GenerationTest {
     pub reason: Option<TestFailure>,
 }
 
-/// 保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由
+/// 保存メモの提案の結果。`title` があれば成功（`body` は本文の行を改行でつないだもの。無ければ null）。
+/// 無ければ `failure` の理由。`notices` は、入力の伏せ字・機微なファイルの除外・本文の省略を画面に短く知らせる
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct SuggestResult {
-    pub text: Option<String>,
+    pub title: Option<String>,
+    pub body: Option<String>,
     pub failure: Option<SuggestFailure>,
+    pub notices: Vec<SuggestNotice>,
 }
 
 impl SuggestResult {
-    fn ok(text: String) -> Self {
+    fn ok(suggested: Suggested) -> Self {
+        let Suggested { memo, notices } = suggested;
         Self {
-            text: Some(text),
+            title: Some(memo.title),
+            body: (!memo.body.is_empty()).then(|| memo.body.join("\n")),
             failure: None,
+            notices,
         }
     }
 
     fn failed(failure: SuggestFailure) -> Self {
         Self {
-            text: None,
+            title: None,
+            body: None,
             failure: Some(failure),
+            notices: Vec::new(),
         }
     }
+}
+
+/// 生成に成功した提案（検証を通ったメモと、入力の注記）
+struct Suggested {
+    memo: Memo,
+    notices: Vec<SuggestNotice>,
 }
 
 // ========== ダウンロード・削除の直列化 ==========
@@ -683,9 +699,17 @@ pub async fn ai_suggest_memo(app: AppHandle, project_id: String, fresh: bool) ->
         state.llm.read().await.stop().await;
     }
     match outcome {
-        Ok(text) => SuggestResult::ok(text),
+        Ok(suggested) => SuggestResult::ok(suggested),
         Err(failure) => SuggestResult::failed(failure),
     }
+}
+
+/// 保存欄のメモに、パスワード・鍵・個人情報のように見える文字列があるかを調べる（読み取りのみ）。
+/// 内容は返さず、種類だけを返す（設計書 10.6）。保存は止めない。警告と確認に使う。
+#[tauri::command]
+#[specta::specta]
+pub fn check_memo_sensitive(text: String) -> Vec<SensitiveKind> {
+    memo_sensitive_kinds(&text)
 }
 
 /// 進行中の保存メモの提案を取り消す。進行中の要求の側が、後始末として llama-server を止める
@@ -700,7 +724,7 @@ async fn suggest_for_project(
     state: &AppState,
     project_id: String,
     fresh: bool,
-) -> Result<String, SuggestFailure> {
+) -> Result<Suggested, SuggestFailure> {
     let store = state.store_clone();
     let (settings, repo) = run_blocking(move || {
         // 有効・無効（memo_suggestion）はプロジェクト別に上書きできるため、そのプロジェクトの実効値を使う
@@ -721,6 +745,8 @@ async fn suggest_for_project(
     let choice = model_choice(&settings).ok_or(SuggestFailure::NotReady)?;
     let model = choice.key();
     let ollama = settings.ai_runner == AiRunner::Ollama;
+    // 本文も提案するか（既定はオン。オフのときは要約だけを求める。設計書 10.6）
+    let body = settings.ai_suggest_body;
     apply_backend(&state.llm, &settings)
         .await
         .map_err(|_| SuggestFailure::NotReady)?;
@@ -756,7 +782,7 @@ async fn suggest_for_project(
     // 上限（90 秒）は入力の収集から始まる。内蔵の起動待ちは別枠
     let started = Instant::now();
     let extensions = state.extensions.clone();
-    let input = tokio::time::timeout(
+    let Prepared { input, notices } = tokio::time::timeout(
         GENERATE_TIMEOUT,
         run_blocking(move || collect_input(&extensions, &repo, scope)),
     )
@@ -766,14 +792,21 @@ async fn suggest_for_project(
     if input.files.is_empty() {
         return Err(SuggestFailure::NotReady);
     }
-    let key = cache_key(&input, &model);
+    // キーは伏せ字の後の入力から作る（元の機微な文字列は残らない）。本文の有無でプロンプトが変わるため、キーも変わる
+    let key = cache_key(&input, &model, body);
 
     if !fresh {
         let store = state.store_clone();
         let lookup_key = key.clone();
         // キャッシュの読み取りの失敗は、作り直しで扱う（提案の成否に影響させない）
         if let Ok(Some(hit)) = run_blocking(move || cached_message(&store, &lookup_key)).await {
-            return Ok(hit);
+            if let Some(memo) = memo_from_text(&hit) {
+                // 提案の全文の最後の確認（設計書 10.6）。該当があれば、その提案は出さない
+                if !memo_sensitive_kinds(&hit).is_empty() {
+                    return Err(SuggestFailure::Invalid);
+                }
+                return Ok(Suggested { memo, notices });
+            }
         }
     }
 
@@ -785,27 +818,37 @@ async fn suggest_for_project(
     let generated = {
         let llm = state.llm.read().await;
         match &choice {
-            ModelChoice::Custom(path) => llm.suggest_custom(&input, path, budget).await,
+            ModelChoice::Custom(path) => llm.suggest_custom(&input, path, budget, body).await,
             ModelChoice::Catalog(_) | ModelChoice::Ollama(_) => {
-                llm.suggest(&input, &model, budget).await
+                llm.suggest(&input, &model, budget, body).await
             }
         }
     };
-    let text = match generated {
-        Ok(Some(text)) => text,
+    let memo = match generated {
+        Ok(Some(memo)) => memo,
         Ok(None) => return Err(SuggestFailure::Invalid),
         Err(e) => return Err(core_llm::failure_of(e, ollama)),
     };
 
+    // 提案の全文の最後の確認（設計書 10.6）。入力と出力の検査で除かれているはずで、念のため確かめる
+    if !memo_sensitive_kinds(&memo_text(&memo)).is_empty() {
+        return Err(SuggestFailure::Invalid);
+    }
+    let mut notices = notices;
+    if memo.body_dropped {
+        notices.push(SuggestNotice::BodyDropped);
+        // 安全のために本文を捨てた結果は保存しない（キャッシュからは、捨てる前の本文を返さないため）
+        return Ok(Suggested { memo, notices });
+    }
     let store = state.store_clone();
-    let stored = text.clone();
+    let stored = memo_text(&memo);
     // 結果は上書きで保存する（作り直しの結果も次回から使う）。保存の失敗は提案の成否に影響させない
     let _ = run_blocking(move || {
         store_message(&store, &key, &model, &stored);
         Ok(())
     })
     .await;
-    Ok(text)
+    Ok(Suggested { memo, notices })
 }
 
 fn cached_message(store: &Arc<Mutex<Store>>, key: &str) -> Result<Option<String>, AppError> {
@@ -821,20 +864,24 @@ fn store_message(store: &Arc<Mutex<Store>>, key: &str, model: &str, message: &st
 }
 
 /// 提案の入力（変更ファイルの一覧と、設定の範囲に応じた差分）を作る。読み取りのみ。
+/// 機微なファイル（ファイル名で判定）は内容を読まない（設計書 10.6）。伏せ字と注記は `prepare_input` が作る。
 fn collect_input(
     extensions: &ExtensionHost,
     repo: &Path,
     scope: AiScope,
-) -> Result<ChangeInput, AppError> {
+) -> Result<Prepared, AppError> {
     let ops = Ops::new(git_runner());
     let changes = ops.list_changes(repo).map_err(AppError::from_ops_error)?;
     let sources: Vec<SourceChange> = changes
         .iter()
         .take(MAX_INPUT_FILES)
         .map(|change| {
+            let sensitive = sensitive_file(&change.path)
+                || change.original_path.as_deref().is_some_and(sensitive_file);
             // 「ファイル名まで」は本文を渡さない。「テキスト差分まで」と画像を含む設定は、
             // 画像は本文を渡さず（段階 3 は未実装）、テキストと文書の差分だけを渡す
             let (amount, diff_text) = match scope {
+                _ if sensitive => (None, None),
                 AiScope::FileNames => (None, None),
                 AiScope::TextDiff | AiScope::WithImages => {
                     content_of(&ops, extensions, repo, &change.path)
@@ -849,7 +896,7 @@ fn collect_input(
             }
         })
         .collect();
-    Ok(change_input(&sources))
+    Ok(prepare_input(&sources))
 }
 
 fn map_kind(kind: ChangedKind) -> ChangeKind {
@@ -998,13 +1045,14 @@ pub async fn ai_test_generation(app: AppHandle) -> GenerationTest {
         return failed(TestFailure::InvalidEndpoint);
     }
     let llm = state.llm.read().await;
+    let body = settings.ai_suggest_body;
     let result = match &choice {
         ModelChoice::Custom(path) => {
-            llm.suggest_custom(&test_input(), path, GENERATE_TIMEOUT)
+            llm.suggest_custom(&test_input(), path, GENERATE_TIMEOUT, body)
                 .await
         }
         ModelChoice::Catalog(_) | ModelChoice::Ollama(_) => {
-            llm.suggest(&test_input(), &choice.key(), GENERATE_TIMEOUT)
+            llm.suggest(&test_input(), &choice.key(), GENERATE_TIMEOUT, body)
                 .await
         }
     };
@@ -1027,7 +1075,7 @@ fn failed(reason: TestFailure) -> GenerationTest {
 
 /// 生成の試行に使う固定の入力
 fn test_input() -> ChangeInput {
-    change_input(&[SourceChange {
+    prepare_input(&[SourceChange {
         kind: ChangeKind::Modified,
         path: "資料/第3章.docx".to_string(),
         old_path: None,
@@ -1037,6 +1085,7 @@ fn test_input() -> ChangeInput {
             signed_line(true, "実験の回数を5回に修正しました。")
         )),
     }])
+    .input
 }
 
 fn test_failure_of(e: LlmError) -> TestFailure {

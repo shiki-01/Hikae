@@ -13,6 +13,7 @@ pub mod download;
 pub mod error;
 pub mod input;
 pub mod prompt;
+pub mod redact;
 pub mod requirements;
 pub mod service;
 pub mod sidecar;
@@ -28,12 +29,16 @@ pub use custom::{custom_model_id, validate_custom_gguf, CustomGguf, CustomGgufEr
 pub use download::{installed, is_allowed_url, remove, DownloadError, Downloader, Installed};
 pub use error::LlmError;
 pub use input::{
-    cache_key, cell_amount, cell_line, change_input, paragraph_amount, signed_line, text_amount,
-    SourceChange,
+    cache_key, cell_amount, cell_line, paragraph_amount, prepare_input, signed_line, text_amount,
+    Prepared, SourceChange,
 };
 pub use prompt::{build_messages, ChangeInput, ChangeKind, ChangedFile, Message, Role};
+pub use redact::{
+    copies_diff, looks_sensitive, mask_secrets, memo_sensitive_kinds, sensitive_file,
+    SensitiveKind, MASK,
+};
 pub use requirements::{required_disk_bytes, stage_availability, Availability, Reason, SystemInfo};
 pub use service::{content_retry_messages, needs_content_retry, LlmService, ServiceConfig};
 pub use sidecar::{Clock, LlamaServer, LlamaServerOptions, SystemClock};
-pub use suggestion::{failure_of, SuggestFailure, SuggestSlot};
-pub use validate::{clean_summary, clean_summary_detail, Cleaned};
+pub use suggestion::{failure_of, SuggestFailure, SuggestNotice, SuggestSlot};
+pub use validate::{memo_from_text, memo_text, parse_memo, screen_memo, Memo};

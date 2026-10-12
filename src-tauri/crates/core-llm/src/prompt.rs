@@ -16,6 +16,7 @@ pub const SYSTEM_PROMPT: &str =
 - 変更ファイルが 10 件を超えるときは、ファイル名を並べず、種類と件数でまとめる。
 - 与えられた情報にある事実だけを書く。差分や名前から分からない内容（画像の中身など）は推測せず、「画像を差し替えた」のように事実だけを書く。
 - 専門用語（commit、diff、push、branch、repository など）は使わない。
+- パスワード・鍵・トークン・個人情報（氏名・住所・電話・メールなど）は絶対に書かない。
 - 前置き、説明、引用符、記号の装飾は付けない。メモの文だけを出力する。
 
 例1
@@ -38,6 +39,67 @@ pub const SYSTEM_PROMPT: &str =
 良い例: 相談メモに「来週の金曜までに見積書を提出する」を追記した。
 悪い例: 相談メモ.txt に 1 行追加した。";
 
+/// 要約と本文を求めるシステムプロンプト（設計 10.4。既定）。出力の形式（1 行目の要約、空行、「・」の本文）を明記する。
+/// 規則と例は `SYSTEM_PROMPT` と同じ方針で、例だけを新しい形式（要約＋本文）に直している。文面を変えたら評価を取り直すこと。
+pub const SYSTEM_PROMPT_BODY: &str =
+    "あなたは、ファイルの変更内容から「保存メモ」を書く assistant です。
+出力の形式:
+1 行目: 変更全体の要約を 1 文で書く（60 文字程度まで）。
+2 行目: 空行。
+3 行目以降: 変更ごとに「何がどう変わったか」を 1 行ずつ、「・」で始まる箇条書きで書く（最大 5 行）。
+最優先の規則: 何のファイルかではなく、「何がどう変わったか」（変更前後の値、追加・削除された内容、変更の目的）を書く。ファイル名は、内容を説明するのに必要なときだけ短く添える。「〜を更新した」「〜を修正した」のようにファイル名と操作だけの文は書かない。
+ファイルの中の文章をそのまま写さず、要約して書く。パスワード・鍵・トークン・個人情報（氏名・住所・電話・メールなど）は絶対に書かない。
+その他の規則:
+- 出力は日本語。要約は 1 文のみ。
+- 複数のファイルが同じ目的で変わっているときは、その目的と変更内容（例: 税率を 8% から 10% に変えた）を要約で 1 文にまとめる。無関係な変更が混ざるときは、主な変更の内容を要約で 2 つ程度まで書く。
+- 文を追加・削除したときは、その文の内容を短く引用または要約する（例: 「提出期限は金曜」を追記した）。行数や件数だけを書かない。内容が短いときは、その文を「」で 20 文字程度まで引用してよい。
+- 変更ファイルが 10 件を超えるときは、ファイル名を並べず、種類と件数でまとめる。
+- 与えられた情報にある事実だけを書く。差分や名前から分からない内容（画像の中身など）は推測せず、「画像を差し替えた」のように事実だけを書く。
+- 専門用語（commit、diff、push、branch、repository など）は使わない。
+- 本文の各行は、要約の繰り返しにせず、別のファイルや別の変更の内容を書く。
+- 前置き、説明、引用符、記号の装飾は付けない（「・」は本文の箇条書きの記号としてだけ使う）。メモの文だけを出力する。
+
+例1
+変更: 契約書ひな形.docx（更新）: - 支払は月末締め翌月末払いとする。 → + 支払は月末締め翌々月 15 日払いとする。
+出力:
+契約書の支払期限を、翌月末払いから翌々月15日払いに変えた。
+
+・支払期限を翌月末払いから翌々月15日払いに変更
+
+例2
+変更: 在庫表.xlsx（更新）: 在庫!C3(商品A): 40 → 25、在庫!C7(商品C): 10 → 0
+出力:
+在庫表で、商品Aと商品Cの在庫数を減らした。
+
+・商品Aの在庫を40個から25個に変更
+・商品Cの在庫を10個から0個に変更
+
+例3
+変更: login.py（更新）: - if len(password) < 6: → + if len(password) < 8:
+出力:
+ログイン時に使えるパスワードの最小の長さを、6文字から8文字に厳しくした。
+
+・最小の長さを6文字から8文字に変更
+
+例4
+変更: 相談メモ.txt（更新）: + 来週の金曜までに見積書を提出する。
+出力:
+相談メモに「来週の金曜までに見積書を提出する」を追記した。
+
+・見積書の提出期限として「来週の金曜まで」を追記
+
+悪い例（書いてはいけない形）:
+契約書ひな形.docx を更新した。
+相談メモ.txt に 1 行追加した。
+";
+
+/// 要約だけを求めるとき（本文を提案しない設定）のユーザーメッセージ末尾の指示
+const USER_TAIL_SUMMARY: &str = USER_TAIL;
+
+/// 要約と本文を求めるときのユーザーメッセージ末尾の指示
+const USER_TAIL_BODY: &str =
+    "1 行目に要約を 1 文、2 行目に空行、3 行目以降に変更ごとの「・」で始まる箇条書きを書いてください。何のファイルかではなく、何がどう変わったか（値・内容・目的）を書いてください。";
+
 /// 表に載せるファイルの上限。超えた分は「ほか n 件」にまとめる
 pub const MAX_FILES: usize = 30;
 /// 差分本文を渡すファイルの数（変更量の多い順。それ以外は表の行だけ）
@@ -50,6 +112,8 @@ pub const MAX_TOTAL_DIFF_CHARS: usize = 1500;
 pub const MAX_NAME_CHARS: usize = 60;
 
 const OMITTED_NOTE: &str = "（以下省略）";
+/// 機微なファイルの変更量の欄に入れる文（設計書 10.6）
+const SENSITIVE_NOTE: &str = "（内容は機微なため表示していません）";
 const USER_LEAD: &str = "次の変更の保存メモを書いてください。";
 /// ユーザーメッセージの末尾に添える指示（評価ノート 11.5 の V1 の末尾。何がどう変わったかを 1 文で書かせる）
 const USER_TAIL: &str =
@@ -85,6 +149,8 @@ pub struct ChangedFile {
     pub amount: Option<String>,
     /// 抽出したテキストの差分（テキスト・docx・xlsx など）
     pub diff_text: Option<String>,
+    /// 機微なファイル（ファイル名で判定）。本文と変更量は渡さない
+    pub sensitive: bool,
 }
 
 /// モデルへ渡す入力（変更ファイルの一覧）
@@ -107,21 +173,26 @@ pub struct Message {
     pub content: String,
 }
 
-/// システムプロンプトとユーザーメッセージの 2 件を作る。
-pub fn build_messages(input: &ChangeInput) -> Vec<Message> {
+/// システムプロンプトとユーザーメッセージの 2 件を作る。`body` が真なら要約と本文を求め、偽なら要約だけを求める。
+pub fn build_messages(input: &ChangeInput, body: bool) -> Vec<Message> {
+    let (system, tail) = if body {
+        (SYSTEM_PROMPT_BODY, USER_TAIL_BODY)
+    } else {
+        (SYSTEM_PROMPT, USER_TAIL_SUMMARY)
+    };
     vec![
         Message {
             role: Role::System,
-            content: SYSTEM_PROMPT.to_string(),
+            content: system.to_string(),
         },
         Message {
             role: Role::User,
-            content: user_message(input),
+            content: user_message(input, tail),
         },
     ]
 }
 
-fn user_message(input: &ChangeInput) -> String {
+fn user_message(input: &ChangeInput, tail: &str) -> String {
     let shown_count = input.files.len().min(MAX_FILES);
     let shown = &input.files[..shown_count];
 
@@ -135,7 +206,12 @@ fn user_message(input: &ChangeInput) -> String {
             }
             _ => short_name(&file.name),
         };
-        let amount = file.amount.as_deref().unwrap_or("-");
+        // 機微なファイルは、本文も変更量も渡さない（名前と種類だけ。設計書 10.6）
+        let amount = if file.sensitive {
+            SENSITIVE_NOTE
+        } else {
+            file.amount.as_deref().unwrap_or("-")
+        };
         let _ = writeln!(
             out,
             "| {} | {} | {} |",
@@ -184,7 +260,7 @@ fn user_message(input: &ChangeInput) -> String {
         out.push_str(&diffs);
     }
     out.push('\n');
-    out.push_str(USER_TAIL);
+    out.push_str(tail);
     out.push('\n');
     out
 }
@@ -267,11 +343,12 @@ mod tests {
             old_name: None,
             amount: Some("段落 +1 / -0".into()),
             diff_text: diff.map(str::to_string),
+            sensitive: false,
         }
     }
 
     fn user_content(input: &ChangeInput) -> String {
-        build_messages(input).remove(1).content
+        build_messages(input, false).remove(1).content
     }
 
     #[test]
@@ -279,7 +356,7 @@ mod tests {
         let input = ChangeInput {
             files: vec![file("報告書.docx", Some("+ 追加した段落"))],
         };
-        let messages = build_messages(&input);
+        let messages = build_messages(&input, false);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, Role::System);
         assert_eq!(messages[0].content, SYSTEM_PROMPT);
@@ -298,6 +375,7 @@ mod tests {
                 name: "発表資料_最終版.pptx".into(),
                 old_name: Some("発表資料_仮.pptx".into()),
                 amount: None,
+                sensitive: false,
                 diff_text: None,
             }],
         };
@@ -396,6 +474,7 @@ mod tests {
                 name: format!("{long}_新"),
                 old_name: Some("短い旧名.docx".into()),
                 amount: None,
+                sensitive: false,
                 diff_text: None,
             }],
         };

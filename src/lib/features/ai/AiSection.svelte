@@ -237,6 +237,21 @@
 			class="flex align-items:center justify-content:space-between gap:6 py:3 bb:1px|solid|border"
 		>
 			<div class="flex flex-direction:column gap:1 min-w:0">
+				<span class="type-body font-weight:500">{t('ai.suggest_body')}</span>
+				<span class="type-small fg:fg-muted">{t('ai.suggest_body_text')}</span>
+			</div>
+			{#if current}
+				<Toggle
+					label={t('ai.suggest_body')}
+					checked={current.aiSuggestBody}
+					onchange={(checked) => patch({ aiSuggestBody: checked })}
+				/>
+			{/if}
+		</div>
+		<div
+			class="flex align-items:center justify-content:space-between gap:6 py:3 bb:1px|solid|border"
+		>
+			<div class="flex flex-direction:column gap:1 min-w:0">
 				<span class="type-body font-weight:500">{t('ai.scope')}</span>
 				<span class="type-small fg:fg-muted">{t('ai.scope_text')}</span>
 			</div>

@@ -23,7 +23,7 @@ const TAGS_TIMEOUT: Duration = Duration::from_secs(30);
 
 const TEMPERATURE: f64 = 0.2;
 const TOP_P: f64 = 0.9;
-const MAX_TOKENS: u32 = 100;
+const MAX_TOKENS: u32 = 280;
 
 /// 生成の接続先
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,7 +182,7 @@ impl ChatClient {
 
     /// `chat` と同じ呼び出しで、入力のトークン数も返す（評価・計測用）。
     ///
-    /// 生成条件は設計 10.4 と評価レポートに従う（temperature 0.2、top_p 0.9、max_tokens 100、stream なし、thinking 無効）。
+    /// 生成条件は設計 10.4 と評価レポートに従う（temperature 0.2、top_p 0.9、max_tokens 280（要約と本文。設計 10.4）、stream なし、thinking 無効）。
     /// `timeout` は HTTP 要求の上限。呼び出し側が future を破棄すると、接続は切れる
     /// （ただし llama-server は切断では処理を止めない。実測は `docs/notes/phase2-llm-evaluation.md` の 9 節）。
     pub async fn chat_with_usage(

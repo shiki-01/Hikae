@@ -10,7 +10,7 @@ use crate::download::{installed, Installed};
 use crate::error::LlmError;
 use crate::prompt::{build_messages, ChangeInput, Message};
 use crate::sidecar::{LlamaServer, LlamaServerOptions};
-use crate::validate::clean_summary;
+use crate::validate::{parse_memo, screen_memo, Memo};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -102,9 +102,10 @@ impl LlmService {
         self.sidecar.stop().await;
     }
 
-    /// 保存メモの提案を 1 文生成する。
+    /// 保存メモの提案を生成する（要約と、`body` が真なら本文）。
     ///
     /// - `model_ref`: 内蔵の接続先ではカタログの ID、Ollama ではモデル名
+    /// - `body`: 本文も求めるか（偽なら要約だけを求め、本文は返さない）
     /// - `timeout`: 生成の上限。内容に触れていない出力への書き直しも、この中で行う（合計）。
     ///   起動待ち（内蔵）は含まず、別に上限がある（`sidecar`）。呼び出し側が全体の上限を管理し、残りの時間を渡す
     /// - 変更ファイルが空なら、サーバーを起動せず `Ok(None)` を返す
@@ -116,7 +117,8 @@ impl LlmService {
         input: &ChangeInput,
         model_ref: &str,
         timeout: Duration,
-    ) -> Result<Option<String>, LlmError> {
+        body: bool,
+    ) -> Result<Option<Memo>, LlmError> {
         if input.files.is_empty() {
             return Ok(None);
         }
@@ -130,7 +132,7 @@ impl LlmService {
                 model: model_ref,
             },
         };
-        self.suggest_with(input, &target, timeout).await
+        self.suggest_with(input, &target, timeout, body).await
     }
 
     /// 利用者が用意した GGUF（カスタム）で保存メモの提案を 1 文生成する（内蔵の接続先だけ）。
@@ -144,7 +146,8 @@ impl LlmService {
         input: &ChangeInput,
         gguf_path: &Path,
         timeout: Duration,
-    ) -> Result<Option<String>, LlmError> {
+        body: bool,
+    ) -> Result<Option<Memo>, LlmError> {
         if input.files.is_empty() {
             return Ok(None);
         }
@@ -152,7 +155,7 @@ impl LlmService {
             return Err(LlmError::InvalidModel);
         }
         validate_custom_gguf(gguf_path).map_err(|_| LlmError::CustomModelInvalid)?;
-        self.suggest_with(input, &Target::Custom(gguf_path), timeout)
+        self.suggest_with(input, &Target::Custom(gguf_path), timeout, body)
             .await
     }
 
@@ -161,37 +164,38 @@ impl LlmService {
     /// - 1 回目が検証で弾かれたとき（`None`）は、書き直さない
     /// - 書き直しが失敗・時間切れ・検証で不採用のときは、1 回目の結果を返す（変更の内容は無事のまま）
     /// - 書き直しの結果も件数だけなら、1 回目の結果を返す
+    /// - 要約だけを求めるとき（`body` が偽）は、出力の本文を捨てる
     async fn suggest_with(
         &self,
         input: &ChangeInput,
         target: &Target<'_>,
         timeout: Duration,
-    ) -> Result<Option<String>, LlmError> {
+        body: bool,
+    ) -> Result<Option<Memo>, LlmError> {
         let started = Instant::now();
         let raw = self
-            .generate(&build_messages(input), target, timeout)
+            .generate(&build_messages(input, body), target, timeout)
             .await?;
-        let first = clean_summary(&raw);
-        let Some(text) = first.as_deref() else {
+        let Some(first) = finish(&raw, input, body) else {
             return Ok(None);
         };
-        if !needs_content_retry(input, text) {
-            return Ok(first);
+        if !needs_content_retry(input, &first.title) {
+            return Ok(Some(first));
         }
         let left = timeout.saturating_sub(started.elapsed());
         if left.is_zero() {
-            return Ok(first);
+            return Ok(Some(first));
         }
         let second = match self
-            .generate(&content_retry_messages(input), target, left)
+            .generate(&content_retry_messages(input, body), target, left)
             .await
         {
-            Ok(raw) => clean_summary(&raw),
+            Ok(raw) => finish(&raw, input, body),
             Err(_) => None,
         };
         match second {
-            Some(text) if !needs_content_retry(input, &text) => Ok(Some(text)),
-            _ => Ok(first),
+            Some(memo) if !needs_content_retry(input, &memo.title) => Ok(Some(memo)),
+            _ => Ok(Some(first)),
         }
     }
 
@@ -280,8 +284,8 @@ pub fn needs_content_retry(input: &ChangeInput, text: &str) -> bool {
 }
 
 /// 内容に触れていない出力への書き直しを頼むメッセージ。システムの指示は変えず、ユーザーの末尾に `RETRY_NOTE` を足す。
-pub fn content_retry_messages(input: &ChangeInput) -> Vec<Message> {
-    let mut messages = build_messages(input);
+pub fn content_retry_messages(input: &ChangeInput, body: bool) -> Vec<Message> {
+    let mut messages = build_messages(input, body);
     let user = messages[1].content.trim_end().to_string();
     messages[1].content = format!("{user}\n{RETRY_NOTE}\n");
     messages
@@ -333,6 +337,16 @@ fn is_word_char(c: char) -> bool {
         )
 }
 
+/// 生の出力を解析し、入力と照らして検証する（要約だけを求めたときは本文を捨てる）。
+fn finish(raw: &str, input: &ChangeInput, body: bool) -> Option<Memo> {
+    let mut memo = parse_memo(raw)?;
+    if !body {
+        memo.body.clear();
+        memo.body_dropped = false;
+    }
+    screen_memo(memo, input)
+}
+
 /// 接続先を検査して正規化する。内蔵はそのまま通す。
 fn validated_backend(backend: Backend) -> Result<Backend, LlmError> {
     match backend {
@@ -376,6 +390,7 @@ mod tests {
                     old_name: None,
                     amount: Some("行 +2 / -0".into()),
                     diff_text: d.map(str::to_string),
+                    sensitive: false,
                 })
                 .collect(),
         }
@@ -475,13 +490,59 @@ mod tests {
     #[test]
     fn retry_messages_keep_the_system_prompt_and_add_the_note_once() {
         let input = input_with(&[Some("+ 牛乳を買う\n")]);
-        let first = build_messages(&input);
-        let retry = content_retry_messages(&input);
+        let first = build_messages(&input, false);
+        let retry = content_retry_messages(&input, false);
         assert_eq!(retry.len(), 2);
         assert_eq!(retry[0], first[0]);
         assert_eq!(retry[0].role, Role::System);
         assert!(retry[1].content.starts_with(first[1].content.trim_end()));
         assert!(retry[1].content.ends_with(&format!("{RETRY_NOTE}\n")));
         assert_eq!(retry[1].content.matches(RETRY_NOTE).count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+    use crate::prompt::{ChangeKind, ChangedFile};
+
+    fn input_with_diff(diff: &str) -> ChangeInput {
+        ChangeInput {
+            files: vec![ChangedFile {
+                kind: ChangeKind::Modified,
+                name: "契約書.docx".into(),
+                old_name: None,
+                amount: Some("段落 +1 / -0".into()),
+                diff_text: Some(diff.into()),
+                sensitive: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn invalid_body_lines_are_dropped_and_the_summary_is_kept() {
+        let input = input_with_diff("+ 支払期限は翌々月の十五日とする");
+        let raw =
+            "契約書の支払期限を変えた。\n\n・支払期限を翌々月払いに変更\n・commit の内容を書いた";
+        let memo = finish(raw, &input, true).expect("要約は採る");
+        assert_eq!(memo.title, "契約書の支払期限を変えた。");
+        assert_eq!(memo.body, vec!["支払期限を翌々月払いに変更"]);
+        assert!(memo.body_dropped);
+    }
+
+    #[test]
+    fn a_sensitive_summary_makes_the_whole_output_invalid() {
+        let input = input_with_diff("+ 設定");
+        let raw = "接続先の password=hunter2 を変えた。\n\n・設定を変更";
+        assert_eq!(finish(raw, &input, true), None);
+    }
+
+    #[test]
+    fn summary_only_mode_drops_the_body_even_if_the_model_wrote_one() {
+        let input = input_with_diff("+ 支払期限を翌々月払いに変える");
+        let raw = "契約書の支払期限を変えた。\n\n・支払期限を翌々月払いに変更";
+        let memo = finish(raw, &input, false).expect("要約");
+        assert!(memo.body.is_empty());
+        assert!(!memo.body_dropped);
     }
 }

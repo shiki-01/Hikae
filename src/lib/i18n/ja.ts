@@ -1196,6 +1196,23 @@ const messages = {
 	'save_bar.ai_regenerate': '作り直す',
 	'save_bar.ai_retry': 'もう一度',
 	'save_bar.ai_use_button': '使う',
+	'save_bar.ai_undo': '元に戻す',
+	'save_bar.note':
+		'メモは履歴に残り、アップロードされます。パスワードや個人情報は書かないでください。',
+	'save_bar.detail': '詳細（任意）',
+	'save_bar.detail_placeholder': '変更ごとの内容を、必要な分だけ書きます',
+	'save_bar.detail_open': '詳細を書く',
+	'save_bar.detail_close': '詳細を閉じる',
+	'save_bar.detail_meter':
+		'目安は {max_chars} 文字・{max_lines} 行まで（現在 {chars} 文字・{lines} 行）',
+	'save_bar.sensitive_title': '機微に見える文字列があります',
+	'save_bar.sensitive_warning':
+		'パスワードや鍵のように見える文字列が含まれています。保存するとメモは履歴に残り、アップロードされます。',
+	'save_bar.sensitive_back': '戻って直す',
+	'save_bar.sensitive_confirm': 'このまま保存',
+	'save_bar.notice.sensitive-masked': '機微に見える部分は伏せて作りました',
+	'save_bar.notice.sensitive-file-skipped': '機微な可能性のあるファイルの内容は使っていません',
+	'save_bar.notice.body-dropped': '安全のため、詳細の一部を省きました',
 	'save_bar.ai_failed.timeout':
 		'提案を作れませんでした（時間がかかりすぎました）。変更は無事です。',
 	'save_bar.ai_failed.invalid':
@@ -1209,6 +1226,9 @@ const messages = {
 	'ai.enabled_text': 'オフのときは、ルールに従ったメモだけを提案します。',
 	'ai.rules_only_note': 'AI を使わなくても、メモは自動で提案されます。',
 	'ai.scope': 'AI に渡す範囲',
+	'ai.suggest_body': '保存メモの詳細（本文）も提案する',
+	'ai.suggest_body_text':
+		'オンのとき、提案に変更ごとの箇条書きを含めます。メモは履歴に残り、アップロードされます。',
 	'ai.scope_file_names': 'ファイル名まで',
 	'ai.scope_text_diff': 'テキストの差分まで',
 	'ai.scope_text':

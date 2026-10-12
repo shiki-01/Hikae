@@ -1188,6 +1188,18 @@ async fn save_with_size_choice(
     run_save(app, &state, id, message, choice).await
 }
 
+/// 保存メモが上限（4,000 文字・100 行）を超えたときのエラー（何も変更されていない）
+fn memo_too_long_error() -> AppError {
+    AppError {
+        code: "invalid_input".to_string(),
+        params: Vec::new(),
+        what_happened: "保存メモが長すぎるため、保存できませんでした".to_string(),
+        data_is_safe: "変更は保存されていません".to_string(),
+        next_action: "メモを 4,000 文字・100 行以内に短くして、もう一度お試しください".to_string(),
+        technical_info: None,
+    }
+}
+
 async fn run_save(
     app: tauri::AppHandle,
     state: &AppState,
@@ -1195,6 +1207,10 @@ async fn run_save(
     message: String,
     choice: SaveSizeChoice,
 ) -> Result<SaveResult, AppError> {
+    // 保存メモの正規化（設計書 4.1 の E）。上限を超えるメモは切り詰めずに拒否する（何も変更しない）
+    let Some(message) = core_ops::normalize_memo(&message) else {
+        return Err(memo_too_long_error());
+    };
     let ctx = OpContext::new(app, state);
     let store = state.store_clone();
     let touch_id = id.clone();
@@ -3548,6 +3564,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             ai::ai_remove_model,
             ai::ai_suggest_memo,
             ai::ai_cancel_suggest,
+            ai::check_memo_sensitive,
             ai::ai_list_ollama_models,
             ai::ai_check_endpoint,
             ai::ai_test_generation,

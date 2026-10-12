@@ -4,6 +4,7 @@ import type { MessageKey } from '#lib/i18n/index.js';
 import type {
 	AiCatalog,
 	AiSuggestFailure,
+	AiSuggestNotice,
 	AiSuggestion,
 	AppSettings,
 	Change
@@ -46,7 +47,7 @@ export function canOfferSuggestion(input: { ready: boolean; changeCount: number 
 export type SuggestState =
 	| { kind: 'idle' }
 	| { kind: 'generating'; seq: number }
-	| { kind: 'result'; text: string }
+	| { kind: 'result'; title: string; body: string | null; notices: AiSuggestNotice[] }
 	| { kind: 'failed'; failure: AiSuggestFailure };
 
 export type SuggestEvent =
@@ -70,8 +71,8 @@ export function reduceSuggest(state: SuggestState, event: SuggestEvent): Suggest
 			return SUGGEST_IDLE;
 		case 'done': {
 			if (state.kind !== 'generating' || state.seq !== event.seq) return state;
-			const { text, failure } = event.result;
-			if (text !== null) return { kind: 'result', text };
+			const { title, body, notices, failure } = event.result;
+			if (title !== null) return { kind: 'result', title, body, notices };
 			if (failure === null || failure === 'cancelled') return SUGGEST_IDLE;
 			return { kind: 'failed', failure };
 		}
@@ -81,4 +82,9 @@ export function reduceSuggest(state: SuggestState, event: SuggestEvent): Suggest
 /** 失敗の理由 → 画面の文言のキー（3 要素: 何が起きたか、データは無事か）。次の行動は「もう一度」ボタン */
 export function suggestFailureKey(failure: AiSuggestFailure): MessageKey {
 	return `save_bar.ai_failed.${failure}` as MessageKey;
+}
+
+/** 注記の文のキー（画面の短い注記。内容は含まない） */
+export function suggestNoticeKey(notice: AiSuggestNotice): MessageKey {
+	return `save_bar.notice.${notice}` as MessageKey;
 }

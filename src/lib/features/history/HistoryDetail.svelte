@@ -3,6 +3,7 @@
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import { t } from '#lib/i18n/index.js';
 	import { formatDateTime } from '#lib/i18n/format.js';
+	import { memoBody, summaryLine } from '#lib/features/changes/memo-draft.js';
 	import { api } from '#lib/api/index.js';
 	import type { SavePoint } from '#lib/api/types.js';
 	import Button from '#lib/components/Button.svelte';
@@ -61,8 +62,11 @@
 				{/if}
 			</p>
 			<h2 class="m:0 type-title">
-				{point.kind === 'auto' ? t('timeline.auto_save') : point.message}
+				{point.kind === 'auto' ? t('timeline.auto_save') : summaryLine(point.message)}
 			</h2>
+			{#if point.kind !== 'auto' && memoBody(point.message) !== ''}
+				<p class="m:0 mt:2 type-body white-space:pre-wrap">{memoBody(point.message)}</p>
+			{/if}
 		</div>
 
 		<section class="flex flex-direction:column" aria-labelledby="history-files-title">

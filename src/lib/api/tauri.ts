@@ -205,6 +205,10 @@ export const tauriApi: ProjectApi = {
 		return commands.aiSuggestMemo(projectId, fresh);
 	},
 
+	async checkMemoSensitive(text: string) {
+		return commands.checkMemoSensitive(text);
+	},
+
 	async aiCancelSuggest() {
 		await commands.aiCancelSuggest();
 	},

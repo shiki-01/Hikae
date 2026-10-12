@@ -101,6 +101,7 @@
 - 文言はすべて i18n キー経由（初期は日本語のみ）。コンポーネント内に日本語文字列を直書きしない
 - 色・余白などは `docs/design-requirements.md` 2章のトークン名で Master CSS の `@theme` 変数（`src/lib/styles/tokens.css`）として定義し、コンポーネントでは値を直書きしない。値はデザイン確定前は仮でよい
 - エラー表示は「何が起きたか」「データは無事か」「次の行動」の3要素（`docs/design.md` 5章）
+- メモ生成と保存欄の入力の機微情報の対策は `core-llm/src/redact.rs` に集約する（パターンは Rust の 1 か所だけ。`docs/design.md` 10.6）
 - 表示拡張（iframe）には権限を与えない。`sandbox="allow-scripts"` だけを付け（`allow-same-origin` は付けない）、`connect-src 'none'` とし、Tauri の IPC に届かせない。内容はホストが渡し、iframe は読まない（design.md 11.6・11.7）
 - LLM は PC 内で完結させる。外部ホストの Ollama が指定されたときは、差分の本文を送らず、ファイル名と変更の種類だけを渡す（`app/src/ai.rs`、design.md 10.5）
 

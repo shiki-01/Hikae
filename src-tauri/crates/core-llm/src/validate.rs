@@ -1,9 +1,25 @@
-// モデルの出力の検証（設計 10.4）。条件を満たさない出力は採用せず `None` を返す（ルールベースのまま）。
+// モデルの出力の解析と検証（設計 10.4・10.6）。条件を満たさない出力は採用せず `None` を返す（ルールベースのまま）。
 // 純関数のみ。内容はログに出さない。
+//
+// 出力の形式: 1 行目が要約（1 文）、2 行目が空行、3 行目以降が「・」で始まる本文（任意）。
+// 検証は 2 段階。`parse_memo` は形式と長さを見る。`screen_memo` は入力と照らして、
+// 根拠の確認・長い写し・機微情報を見る（本文の行だけを捨て、要約が問題なら全体を採らない）。
 
-/// 1 行の上限（文字数）。評価で、事実として正しい出力が 80 文字を超える例（xlsx の複数セルの変更で 87 文字）が
-/// あったため 100 文字とする（プロンプトの「40 文字程度」は小型モデルが守らない）
+use crate::prompt::ChangeInput;
+use crate::redact::{copies_diff, looks_sensitive};
+
+/// 要約・本文の 1 行の上限（文字数）。評価で、事実として正しい出力が 80 文字を超える例（xlsx の複数セルの変更で 87 文字）が
+/// あったため 100 文字とする（プロンプトの「60 文字程度」は小型モデルが守らない）
 const MAX_CHARS: usize = 100;
+
+/// 本文の行数の上限
+pub const MAX_BODY_LINES: usize = 5;
+/// 本文の全体の上限（文字数。行の文字数の合計）
+pub const MAX_BODY_CHARS: usize = 400;
+/// 要約が差分の本文の連続した何文字以上を写したら捨てるか（空白と記号を除いて比べる）
+pub const TITLE_COPY_CHARS: usize = 24;
+/// 本文の行が差分の本文の連続した何文字以上を写したら捨てるか（空白と記号を除いて比べる）
+pub const BODY_COPY_CHARS: usize = 12;
 
 /// 文の区切りとみなす記号。2 つ以上あれば複数文とみなす
 const SENTENCE_END: char = '。';
@@ -38,90 +54,141 @@ const PREAMBLE_MAX_CHARS: usize = 40;
 /// 前置きの先頭語（英字は大文字小文字を区別しない）。小型モデルが本文の前に付ける定型の言い回し
 const PREAMBLE_PREFIXES: [&str; 7] = ["以下", "次の", "保存メモ", "メモ", "Here", "Sure", "回答"];
 
-/// 検証を通った出力。`rescued` は、複数行の出力を 1 文に整えて（行をつなぐか、最初の 1 行を採って）採ったことを表す
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cleaned {
-    pub text: String,
-    /// 複数行の出力から救済した（1 行の出力をそのまま採った場合は `false`）
-    pub rescued: bool,
+/// 解析・検証を通ったメモの提案（要約と本文）
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Memo {
+    /// 要約（1 行。1 文）
+    pub title: String,
+    /// 本文の行（「・」の記号は外してある）。無ければ空
+    pub body: Vec<String>,
+    /// 安全のために本文の行を捨てたか（形式・長さ・根拠・機微・写しのいずれか）
+    pub body_dropped: bool,
 }
 
-/// モデルの生の出力を、保存欄に出せる 1 文に整える。条件を満たさなければ `None`。
+/// モデルの生の出力を、形式どおりに解析して検証する（入力とは照らさない）。
 ///
-/// 戻り値の文だけが欲しい場合は `clean_summary` を使う。
-pub fn clean_summary(raw: &str) -> Option<String> {
-    clean_summary_detail(raw).map(|c| c.text)
-}
-
-/// `clean_summary` と同じ検証を行い、救済を使ったかも返す。
-///
-/// - 出力が 1 行（末尾の改行を除く）なら、その行を検証する
-/// - 複数行の出力は、2〜4 行なら「、」でつないで 1 文にして検証する。つなぐと検証を通らない（長すぎる等）
-///   ときや行数が多いときは、最初の空でない 1 行だけを検証する（救済。その行も通らなければ `None`）。
-///   小型モデルが「ファイルごとに 1 行」で返す出力を、検証で全件落とさないための規則（設計 10.4）。
-///   ただし最初の行が前置き（`is_preamble`）なら、本文ではないため採らない
-/// - 1 行の出力（改行なし）には、前置きの判定を適用しない
-pub fn clean_summary_detail(raw: &str) -> Option<Cleaned> {
-    let trimmed = raw.trim();
-    if trimmed.contains('\n') || trimmed.contains('\r') {
-        let lines: Vec<&str> = trimmed
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
-        let first = *lines.first()?;
-        if is_preamble(first) {
-            return None;
-        }
-        // 複数ファイルの変更で「ファイルごとに 1 行」と返ったとき、最初の 1 行だけでは他のファイルの内容が
-        // 落ちる。行を「、」でつないで 1 文にし、検証を通ればそれを採る。通らなければ最初の 1 行だけを採る
-        if let Some(text) =
-            join_lines(&lines).and_then(|joined| validate_line_max(&joined, JOIN_MAX_CHARS))
-        {
-            return Some(Cleaned {
-                text,
-                rescued: true,
-            });
-        }
-        return validate_line(first).map(|text| Cleaned {
-            text,
-            rescued: true,
-        });
+/// - 要約: 最初の空でない行。前置きなら `None`。箇条書き記号と引用符を外し、1 文・100 文字以内・Git 用語なし
+/// - 本文: 要約の直後が空行のときは、その後の「・」「-」「*」で始まる行だけ。空行が無いとき（旧形式の複数行）は、
+///   残りの行をすべて本文の候補にする。各行は要約と同じ検証。落ちた行は捨てて `body_dropped` を立てる
+/// - 本文は最大 `MAX_BODY_LINES` 行・全体 `MAX_BODY_CHARS` 文字まで（超えた行は捨てる）
+pub fn parse_memo(raw: &str) -> Option<Memo> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let first_idx = lines.iter().position(|line| !line.trim().is_empty())?;
+    let first = lines[first_idx].trim();
+    // 前置きの判定は、複数行の出力のときだけ語で見る（1 行の出力は、旧規則どおり語では判定しない）。
+    // 末尾の「:」は、1 行でも要約ではないため常に前置きとする
+    let multi_line = lines.iter().filter(|line| !line.trim().is_empty()).count() > 1;
+    if ends_with_colon(first) || (multi_line && is_preamble(first)) {
+        return None;
     }
-    validate_line(trimmed).map(|text| Cleaned {
-        text,
-        rescued: false,
+    let title = validate_line(first)?;
+
+    let rest = &lines[first_idx + 1..];
+    let blank_after_title = rest.first().is_some_and(|line| line.trim().is_empty());
+    let mut body = Vec::new();
+    let mut total_chars = 0usize;
+    let mut dropped = false;
+    for line in rest
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+    {
+        // 空行の後の本文は箇条書きだけを読む（それ以外の行は本文ではないため、捨てるが落とした扱いにはしない）
+        if blank_after_title && !starts_with_bullet(line) {
+            continue;
+        }
+        let Some(text) = body_line(line) else {
+            dropped = true;
+            continue;
+        };
+        let chars = text.chars().count();
+        if body.len() >= MAX_BODY_LINES || total_chars + chars > MAX_BODY_CHARS {
+            dropped = true;
+            continue;
+        }
+        total_chars += chars;
+        body.push(text);
+    }
+    Some(Memo {
+        title,
+        body,
+        body_dropped: dropped,
     })
 }
 
-/// つなぐ行数の上限（これを超える出力は、つながずに最初の 1 行だけを採る）
-const JOIN_MAX_LINES: usize = 4;
-
-/// つないだ出力の長さの上限（文字数）。複数ファイルの変更を 1 文にまとめると、1 ファイル 1 行の
-/// 出力を足して 100 文字を超えやすい（実測: 5 ファイルの混在で 4 行・約 130 文字）。
-/// 1 行の出力の上限（`MAX_CHARS`）より長くしてよいのは、行ごとの内容が落ちないことを優先するため
-const JOIN_MAX_CHARS: usize = 160;
-
-/// 複数行の出力を、行ごとに整えて「、」でつなぎ、末尾を 1 つの「。」で終える。
-/// 2〜`JOIN_MAX_LINES` 行のときだけつなぐ（それ以外は `None`）。途中に前置きの行があれば `None`。
-fn join_lines(lines: &[&str]) -> Option<String> {
-    if lines.len() < 2 || lines.len() > JOIN_MAX_LINES {
+/// 本文の 1 行を検証する。前置き（末尾が `:` の行など）も本文として採らない。
+fn body_line(line: &str) -> Option<String> {
+    if is_preamble(line) {
         return None;
     }
-    let mut parts: Vec<String> = Vec::with_capacity(lines.len());
-    for line in lines {
-        if is_preamble(line) {
-            return None;
-        }
-        let s = strip_bullet(line.trim());
-        let s = strip_quotes(s.trim()).trim();
-        let s = s.trim_end_matches(['。', '.', '、', ',']).trim();
-        if s.is_empty() {
-            return None;
-        }
-        parts.push(s.to_string());
+    validate_line(line)
+}
+
+/// 本文の行の先頭が箇条書きの記号か（「・」「-」「*」）
+fn starts_with_bullet(line: &str) -> bool {
+    line.starts_with(['・', '-', '*'])
+}
+
+/// 解析済みの提案を、入力と照らして検証する（設計 10.4 の根拠の確認、10.6 の機微情報と長い写し）。
+///
+/// - 要約が機微に見える・差分の長い写し（`TITLE_COPY_CHARS` 以上）を含むなら `None`（提案全体を採らない）
+/// - 本文の行は、機微に見える・長い写し（`BODY_COPY_CHARS` 以上）・根拠が無い（後述）のいずれかなら捨てる
+///   （`body_dropped` を立てる）
+/// - 根拠: 行が、変更されたファイルの名前（拡張子を除いた名前を含む）か、差分の本文の語（日本語は 2 文字以上、
+///   英数字は 3 文字以上のかたまり）のどれかを含むこと
+pub fn screen_memo(mut memo: Memo, input: &ChangeInput) -> Option<Memo> {
+    let corpus = diff_corpus(input);
+    if looks_sensitive(&memo.title).is_some() || copies_diff(&memo.title, &corpus, TITLE_COPY_CHARS)
+    {
+        return None;
     }
-    Some(format!("{}。", parts.join("、")))
+    let names = file_names(input);
+    let words = grounding_words(&corpus);
+    let mut kept = Vec::with_capacity(memo.body.len());
+    for line in std::mem::take(&mut memo.body) {
+        let ok = looks_sensitive(&line).is_none()
+            && !copies_diff(&line, &corpus, BODY_COPY_CHARS)
+            && grounded(&line, &names, &words);
+        if ok {
+            kept.push(line);
+        } else {
+            memo.body_dropped = true;
+        }
+    }
+    memo.body = kept;
+    Some(memo)
+}
+
+/// キャッシュに保存する文字列（要約・空行・本文を改行でつないだもの）。本文が無ければ要約だけ。
+pub fn memo_text(memo: &Memo) -> String {
+    if memo.body.is_empty() {
+        memo.title.clone()
+    } else {
+        format!("{}\n\n{}", memo.title, memo.body.join("\n"))
+    }
+}
+
+/// `memo_text` で作った文字列から提案に戻す。要約が空なら `None`。
+pub fn memo_from_text(text: &str) -> Option<Memo> {
+    let (title, body) = match text.split_once("\n\n") {
+        Some((title, body)) => (title, body),
+        None => (text, ""),
+    };
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let body = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    Some(Memo {
+        title: title.to_string(),
+        body,
+        body_dropped: false,
+    })
 }
 
 /// 1 行の出力を検証する。条件（前後の整理・文の数・長さ・Git 用語）を満たさなければ `None`。
@@ -131,11 +198,6 @@ fn join_lines(lines: &[&str]) -> Option<String> {
 /// - Git 用語を含むものは `None`（英字は大文字小文字を区別しない）
 /// - 日本語と数字の間の半角スペースは詰める（「第 3 章」→「第3章」）
 fn validate_line(line: &str) -> Option<String> {
-    validate_line_max(line, MAX_CHARS)
-}
-
-/// `validate_line` の、長さの上限（文字数）を指定する版
-fn validate_line_max(line: &str, max_chars: usize) -> Option<String> {
     let s = strip_bullet(line.trim());
     let s = strip_quotes(s.trim());
     let s = s.trim();
@@ -146,7 +208,7 @@ fn validate_line_max(line: &str, max_chars: usize) -> Option<String> {
         return None;
     }
     let s = close_japanese_digit_gaps(s);
-    if s.chars().count() > max_chars {
+    if s.chars().count() > MAX_CHARS {
         return None;
     }
     if contains_git_term(&s) {
@@ -155,7 +217,7 @@ fn validate_line_max(line: &str, max_chars: usize) -> Option<String> {
     Some(s)
 }
 
-/// 複数行の出力の 1 行目が前置き（本文の前置きの言い回し）か。純関数。
+/// 出力の行が前置き（本文の前置きの言い回し）か。純関数。
 ///
 /// - 末尾が `:` または `：` の行（「次の内容です:」など）
 /// - 先頭が `PREAMBLE_PREFIXES` のいずれかで、短い行（`PREAMBLE_MAX_CHARS` 未満）の行
@@ -164,7 +226,7 @@ fn validate_line_max(line: &str, max_chars: usize) -> Option<String> {
 /// （「メモリの設定を…」のような本文を誤って弾かないため）。
 fn is_preamble(line: &str) -> bool {
     let probe = strip_quotes(strip_bullet(line.trim()).trim()).trim();
-    if probe.ends_with(':') || probe.ends_with('：') {
+    if ends_with_colon(probe) {
         return true;
     }
     if probe.chars().count() >= PREAMBLE_MAX_CHARS {
@@ -174,6 +236,12 @@ fn is_preamble(line: &str) -> bool {
     PREAMBLE_PREFIXES
         .iter()
         .any(|prefix| lower.starts_with(&prefix.to_lowercase()))
+}
+
+/// 末尾が `:` または `：` の行か（「次の内容です:」など。導入の言い回しとみなす）
+fn ends_with_colon(line: &str) -> bool {
+    let probe = line.trim();
+    probe.ends_with(':') || probe.ends_with('：')
 }
 
 /// 先頭の箇条書き記号を取り除く。`-` と `*` は直後に空白がある場合だけ対象にする。
@@ -259,258 +327,350 @@ fn contains_git_term(s: &str) -> bool {
     ascii || GIT_TERMS_JA.iter().any(|term| s.contains(term))
 }
 
+/// 差分の本文を 1 つにまとめたもの（写しの検査と根拠の確認に使う）
+fn diff_corpus(input: &ChangeInput) -> String {
+    input
+        .files
+        .iter()
+        .filter_map(|file| file.diff_text.as_deref())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 根拠に使うファイル名（名前・旧名と、拡張子を除いた名前）。2 文字未満は、どの行にも含まれて根拠にならないため除く
+fn file_names(input: &ChangeInput) -> Vec<String> {
+    let mut out = Vec::new();
+    for file in &input.files {
+        for name in std::iter::once(file.name.as_str()).chain(file.old_name.as_deref()) {
+            if name.chars().count() >= 2 {
+                out.push(name.to_string());
+            }
+            if let Some(idx) = name.rfind('.') {
+                let stem = &name[..idx];
+                if stem.chars().count() >= 2 {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 行が根拠を持つか（ファイル名、または差分の本文の語を含む）
+fn grounded(line: &str, names: &[String], words: &[String]) -> bool {
+    names.iter().any(|name| line.contains(name.as_str()))
+        || words.iter().any(|word| line.contains(word.as_str()))
+}
+
+/// 差分の本文の語。日本語（ひらがな・カタカナ・漢字）は 2 文字以上、英数字は 3 文字以上のかたまり。
+fn grounding_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut run = String::new();
+    let mut run_is_ja = false;
+    for c in text.chars().chain(std::iter::once('\n')) {
+        let class = if is_word_ja(c) {
+            Some(true)
+        } else if c.is_ascii_alphanumeric() {
+            Some(false)
+        } else {
+            None
+        };
+        match class {
+            Some(ja) if !run.is_empty() && ja == run_is_ja => run.push(c),
+            Some(ja) => {
+                take_word(&mut run, run_is_ja, &mut words);
+                run.push(c);
+                run_is_ja = ja;
+            }
+            None => take_word(&mut run, run_is_ja, &mut words),
+        }
+    }
+    words
+}
+
+/// 連続する文字（かたまり）から語を取り出す（`run` は空にする）。
+///
+/// - 英数字は、かたまりが 3 文字以上なら、そのかたまり全体を語にする
+/// - 日本語は、かたまりの中の 2 文字の並びを語にする。かたまりは助詞（「は」「の」など）を含んで長くなるため、
+///   かたまり全体を語にすると、差分と同じ語順で書かれた行しか通らない（設計 10.4 の根拠の確認の意図から外れる）
+fn take_word(run: &mut String, is_ja: bool, words: &mut Vec<String>) {
+    let chars: Vec<char> = std::mem::take(run).chars().collect();
+    if is_ja {
+        words.extend(chars.windows(2).map(|pair| pair.iter().collect::<String>()));
+    } else if chars.len() >= 3 {
+        words.push(chars.iter().collect());
+    }
+}
+
+/// 語を作る日本語の文字（ひらがな・カタカナ・漢字）。記号と全角形は含めない
+fn is_word_ja(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3041}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompt::{ChangeKind, ChangedFile};
 
-    #[test]
-    fn accepts_good_single_sentences_from_evaluation() {
-        // 評価レポートの出力例（Git 用語を含まないもの）
-        let good = [
-            "第3章_実験.docxに温度を30度にした追加実験と、その結果を記載しました。",
-            "企画書.docx の予算と実施期間を変更しました。",
-            "家計簿.xlsxに旅行費用シートが追加され、合計セルが変更された。",
-            "発表資料_仮.pptxを発表資料_最終版.pptxに名前変更しました。",
-            "古い資料フォルダ内の会議メモと見積書の 2 つのファイルを削除しました。",
-        ];
-        for g in good {
-            let expected = close_japanese_digit_gaps(g);
-            assert_eq!(clean_summary(g).as_deref(), Some(expected.as_str()), "{g}");
+    fn file(name: &str, diff: Option<&str>) -> ChangedFile {
+        ChangedFile {
+            kind: ChangeKind::Modified,
+            name: name.into(),
+            old_name: None,
+            amount: None,
+            diff_text: diff.map(str::to_string),
+            sensitive: false,
         }
     }
 
+    fn input(files: Vec<ChangedFile>) -> ChangeInput {
+        ChangeInput { files }
+    }
+
     #[test]
-    fn rejects_over_100_chars() {
+    fn summary_only_output_is_accepted() {
+        let memo = parse_memo("契約書の支払期限を翌々月払いに変えた。").expect("要約");
+        assert_eq!(memo.title, "契約書の支払期限を翌々月払いに変えた。");
+        assert!(memo.body.is_empty());
+        assert!(!memo.body_dropped);
+    }
+
+    #[test]
+    fn summary_and_bullets_are_split() {
+        let raw = "在庫を見直した。\n\n・商品Aを40個から25個に変更\n・商品Cを10個から0個に変更";
+        let memo = parse_memo(raw).expect("解析");
+        assert_eq!(memo.title, "在庫を見直した。");
+        assert_eq!(
+            memo.body,
+            vec!["商品Aを40個から25個に変更", "商品Cを10個から0個に変更"]
+        );
+        assert!(!memo.body_dropped);
+    }
+
+    #[test]
+    fn bullet_marks_are_removed_in_all_forms() {
+        let raw = "要約。\n\n- 一行目の変更\n* 二行目の変更\n・三行目の変更";
+        let memo = parse_memo(raw).expect("解析");
+        assert_eq!(
+            memo.body,
+            vec!["一行目の変更", "二行目の変更", "三行目の変更"]
+        );
+    }
+
+    #[test]
+    fn lines_without_a_bullet_after_the_blank_line_are_ignored() {
+        let raw = "要約。\n\n以上です\n・本文の一行";
+        let memo = parse_memo(raw).expect("解析");
+        assert_eq!(memo.body, vec!["本文の一行"]);
+        assert!(!memo.body_dropped);
+    }
+
+    #[test]
+    fn old_multi_line_format_uses_the_rest_as_body_candidates() {
+        // 空行が無い（旧形式）: 最初の行が要約、残りが本文の候補
+        let raw = "報告書の数字を更新した\n表 1 の金額を変更\n表 2 の注釈を追加";
+        let memo = parse_memo(raw).expect("解析");
+        assert_eq!(memo.title, "報告書の数字を更新した");
+        assert_eq!(memo.body, vec!["表1の金額を変更", "表2の注釈を追加"]);
+    }
+
+    #[test]
+    fn preamble_as_the_first_line_is_rejected() {
+        assert_eq!(parse_memo("以下が保存メモです。\n\n・変更"), None);
+        assert_eq!(parse_memo("次の内容です:\n変更"), None);
+        assert_eq!(parse_memo("Here is the memo.\n変更"), None);
+        // 長い行は、同じ語で始まっても前置きとみなさない
+        // 1 行の出力は語では判定しない（旧規則）。末尾の「:」は 1 行でも前置き
+        assert!(parse_memo("保存メモです。").is_some());
+        assert_eq!(parse_memo("次の内容です:"), None);
+        // 前置きの判定は 40 文字未満の行だけが対象（既存の規則）
+        assert!(parse_memo("メモリの設定を見直し、起動時の確保量を減らして、再起動後の動作も確かめ、結果を記録した。").is_some());
+    }
+
+    #[test]
+    fn empty_and_invalid_summaries_are_rejected() {
+        assert_eq!(parse_memo(""), None);
+        assert_eq!(parse_memo("   \n\n"), None);
+        // 2 文
+        assert_eq!(parse_memo("一つ目。二つ目。"), None);
+        // Git 用語
+        assert_eq!(parse_memo("commit の内容を直した"), None);
+        assert_eq!(parse_memo("コミットを直した"), None);
+        // 100 文字超
         let long = "あ".repeat(101);
-        assert_eq!(clean_summary(&long), None);
-        let exact = "あ".repeat(100);
-        assert_eq!(clean_summary(&exact).as_deref(), Some(exact.as_str()));
+        assert_eq!(parse_memo(&long), None);
+        assert!(parse_memo(&"あ".repeat(100)).is_some());
     }
 
     #[test]
-    fn rejects_multi_sentence_on_one_line() {
-        assert_eq!(
-            clean_summary("予算を変更しました。実施期間も変更しました。"),
-            None
-        );
+    fn invalid_body_lines_are_dropped_and_flagged() {
+        let raw = "要約。\n\n・良い行\n・commit の行\n・二つ。目。";
+        let memo = parse_memo(raw).expect("要約は採る");
+        assert_eq!(memo.body, vec!["良い行"]);
+        assert!(memo.body_dropped);
     }
 
     #[test]
-    fn trailing_newline_is_not_multiline() {
-        // 末尾の改行は取り除いたうえで 1 行として扱う（救済は使わない）
-        let got = clean_summary_detail("予算を変更しました。\n").unwrap();
-        assert_eq!(got.text, "予算を変更しました。");
-        assert!(!got.rescued);
+    fn body_has_at_most_five_lines_and_400_chars() {
+        let six: String = (1..=6).map(|i| format!("・行{i}の変更\n")).collect();
+        let raw = format!("要約。\n\n{six}");
+        let memo = parse_memo(&raw).expect("解析");
+        assert_eq!(memo.body.len(), MAX_BODY_LINES);
+        assert!(memo.body_dropped);
+
+        let big: String = (0..5).map(|_| format!("・{}\n", "あ".repeat(90))).collect();
+        let memo = parse_memo(&format!("要約。\n\n{big}")).expect("解析");
+        // 90 文字 × 4 行 = 360 文字まで。5 行目（450 文字目）で全体の上限を超えるため捨てる
+        assert_eq!(memo.body.len(), 4);
+        assert!(memo.body_dropped);
     }
 
     #[test]
-    fn multiline_lines_are_joined_into_one_sentence() {
-        // ファイルごとに 1 行で返った出力は、行を「、」でつないで 1 文にする（他のファイルの内容を落とさない）
-        let got = clean_summary_detail("\n  \n報告書に考察を追加した。\n表も追加した。").unwrap();
-        assert_eq!(got.text, "報告書に考察を追加した、表も追加した。");
-        assert!(got.rescued);
-        // 箇条書き記号・行の前後の空白・末尾の句点はそろえてつなぐ
-        let got = clean_summary_detail("- 予算を150万円に変更  \r\n・期間を5月からにした").unwrap();
-        assert_eq!(got.text, "予算を150万円に変更、期間を5月からにした。");
-        assert!(got.rescued);
-        assert_eq!(
-            clean_summary("報告書に考察を追加した。\n表も追加した。\n図を差し替えた。").as_deref(),
-            Some("報告書に考察を追加した、表も追加した、図を差し替えた。")
-        );
+    fn japanese_digit_gaps_are_closed_in_summary_and_body() {
+        let memo = parse_memo("第 3 章を更新。\n\n・表 2 を直す").expect("解析");
+        assert_eq!(memo.title, "第3章を更新。");
+        assert_eq!(memo.body, vec!["表2を直す"]);
     }
 
     #[test]
-    fn multiline_falls_back_to_the_first_line_when_joining_does_not_work() {
-        // 前置きに当たる行が混ざる（前置きの判定は短い行の先頭語）ときは、最初の 1 行だけを採る
-        let got = clean_summary_detail("  予算を変更しました。  \r\n次の行").unwrap();
-        assert_eq!(got.text, "予算を変更しました。");
-        assert!(got.rescued);
-        // つなぐと 100 文字を超えても、160 文字以内ならつなぐ（行ごとの内容を落とさない）
-        let mid = format!("{}。\n{}。", "あ".repeat(60), "い".repeat(60));
-        let got = clean_summary_detail(&mid).unwrap();
+    fn grounding_accepts_file_names_and_stems_and_diff_words() {
+        let inp = input(vec![
+            file("契約書ひな形.docx", Some("+ 支払は翌々月払いとする")),
+            file("在庫表.xlsx", Some("+ Sheet1!B4: 120000 → 135000")),
+        ]);
+        let memo = Memo {
+            title: "要約".into(),
+            body: vec![
+                "契約書ひな形の内容を直した".into(), // ファイル名（拡張子なし）
+                "在庫表に変更を加えた".into(),       // 拡張子なしの名前
+                "支払の条件を変えた".into(),         // 差分の語「支払」
+                "Sheet1の値を増やした".into(),       // 差分の英数字の語
+                "まったく関係のない文章です".into(), // 根拠なし
+            ],
+            body_dropped: false,
+        };
+        let screened = screen_memo(memo, &inp).expect("要約は通る");
         assert_eq!(
-            got.text,
-            format!("{}、{}。", "あ".repeat(60), "い".repeat(60))
+            screened.body,
+            vec![
+                "契約書ひな形の内容を直した",
+                "在庫表に変更を加えた",
+                "支払の条件を変えた",
+                "Sheet1の値を増やした",
+            ]
         );
-        // つなぐと 160 文字を超えるときは、最初の 1 行だけを採る
-        let long = format!("{}。\n{}。", "あ".repeat(90), "い".repeat(90));
-        let got = clean_summary_detail(&long).unwrap();
-        assert_eq!(got.text, format!("{}。", "あ".repeat(90)));
-        // 5 行以上はつながず、最初の 1 行だけを採る
-        let many = "a1を更新\nb2を更新\nc3を更新\nd4を更新\ne5を更新";
-        let got = clean_summary_detail(many).unwrap();
-        assert_eq!(got.text, "a1を更新");
+        assert!(screened.body_dropped);
     }
 
     #[test]
-    fn multiline_without_a_valid_first_line_is_none() {
-        // 最初の行が複数文なら、後ろの行が正しくても採らない
-        assert_eq!(
-            clean_summary_detail("予算を変更しました。実施期間も変更しました。\n表を追加した。"),
-            None
-        );
-        // 最初の行が Git 用語を含むなら採らない
-        assert_eq!(
-            clean_summary_detail("README を commit しました。\n表を追加した。"),
-            None
-        );
-        // 空の行だけなら採らない
-        assert_eq!(clean_summary_detail("\n \n"), None);
-        // 最初の行が空でも、次の空でない行を救済の対象にする
-        let got = clean_summary_detail("\n\n表を追加した。\n次の行").unwrap();
-        assert_eq!(got.text, "表を追加した。");
-        assert!(got.rescued);
+    fn grounding_words_follow_the_length_rules() {
+        let words = grounding_words("+ 支 ab 税率10% Sheet1!B4 xyz");
+        // 日本語は 2 文字以上（「支」は 1 文字なので除く）。英数字は 3 文字以上（ab は除く）
+        assert!(words.contains(&"税率".to_string()));
+        assert!(words.contains(&"Sheet1".to_string()));
+        assert!(words.contains(&"xyz".to_string()));
+        assert!(!words.contains(&"支".to_string()));
+        assert!(!words.contains(&"ab".to_string()));
     }
 
     #[test]
-    fn rescue_is_not_used_for_single_line_outputs() {
-        let got = clean_summary_detail("予算を変更しました。").unwrap();
-        assert!(!got.rescued);
+    fn a_summary_that_copies_the_diff_is_refused() {
+        let diff = "+ 違約金は未払い額の一割とし、支払期日から三十日を経過した時点で発生する";
+        let inp = input(vec![file("契約.txt", Some(diff))]);
+        // 24 文字以上の写し: 要約として採らない
+        let copied = Memo {
+            title: "違約金は未払い額の一割とし、支払期日から三十日を経過した".into(),
+            body: vec![],
+            body_dropped: false,
+        };
+        assert_eq!(screen_memo(copied, &inp), None);
+        // 写しでなければ採る
+        let own = Memo {
+            title: "契約の違約金の定めを厳しくした".into(),
+            body: vec![],
+            body_dropped: false,
+        };
+        assert!(screen_memo(own, &inp).is_some());
     }
 
     #[test]
-    fn rejects_empty() {
-        assert_eq!(clean_summary(""), None);
-        assert_eq!(clean_summary("   \n "), None);
-        assert_eq!(clean_summary("「」"), None);
-        assert_eq!(clean_summary("- "), None);
+    fn a_body_line_that_copies_the_diff_is_dropped() {
+        let diff = "+ 違約金は未払い額の一割とする";
+        let inp = input(vec![file("契約.txt", Some(diff))]);
+        let memo = Memo {
+            title: "契約の違約金を変えた".into(),
+            body: vec![
+                "違約金は未払い額の一割とする".into(),
+                "違約金の定めを厳しくした".into(),
+            ],
+            body_dropped: false,
+        };
+        let screened = screen_memo(memo, &inp).expect("要約は通る");
+        assert_eq!(screened.body, vec!["違約金の定めを厳しくした"]);
+        assert!(screened.body_dropped);
     }
 
     #[test]
-    fn rejects_git_terms_case_insensitively() {
-        for raw in [
-            "Commit を追加しました。",
-            "変更の DIFF を確認しました。",
-            "README を push しました。",
-            "branch を作成しました。",
-            "Repository の設定を更新しました。",
-            "ファイルをマージしました。",
-            "コミットを作成しました。",
-            "ブランチを切り替えました。",
-            "プッシュしました。",
-            "リポジトリを更新しました。",
-        ] {
-            assert_eq!(clean_summary(raw), None, "{raw}");
-        }
+    fn sensitive_text_in_the_summary_refuses_the_whole_suggestion() {
+        let inp = input(vec![file("設定.txt", Some("+ x"))]);
+        let memo = Memo {
+            title: "接続先の認証情報を更新: password=hunter2".into(),
+            body: vec![],
+            body_dropped: false,
+        };
+        assert_eq!(screen_memo(memo, &inp), None);
     }
 
     #[test]
-    fn does_not_reject_words_that_only_contain_term_in_the_middle() {
-        // 単語の途中の一致（例: "undiff"）は用語とみなさない
-        assert_eq!(
-            clean_summary("予算を undiff の値に変更しました。").as_deref(),
-            Some("予算を undiff の値に変更しました。")
-        );
+    fn sensitive_body_lines_are_dropped() {
+        let inp = input(vec![file("設定.txt", Some("+ 接続の設定を変えた"))]);
+        let memo = Memo {
+            title: "接続の設定を変えた".into(),
+            body: vec![
+                "接続の設定を変えた。連絡先 test@example.com".into(),
+                "接続の設定を変えた".into(),
+            ],
+            body_dropped: false,
+        };
+        let screened = screen_memo(memo, &inp).expect("要約は通る");
+        assert_eq!(screened.body, vec!["接続の設定を変えた"]);
+        assert!(screened.body_dropped);
     }
 
     #[test]
-    fn strips_quotes_and_bullets() {
+    fn memo_text_round_trips_through_the_cache_format() {
+        let memo = Memo {
+            title: "要約".into(),
+            body: vec!["一つ目".into(), "二つ目".into()],
+            body_dropped: true,
+        };
+        let text = memo_text(&memo);
+        assert_eq!(text, "要約\n\n一つ目\n二つ目");
+        let back = memo_from_text(&text).expect("復元");
+        assert_eq!(back.title, "要約");
+        assert_eq!(back.body, vec!["一つ目", "二つ目"]);
+        assert!(!back.body_dropped);
+        // 本文が無いものは要約だけ
+        let only = Memo {
+            title: "要約だけ".into(),
+            body: vec![],
+            body_dropped: false,
+        };
+        assert_eq!(memo_text(&only), "要約だけ");
         assert_eq!(
-            clean_summary("「予算を変更しました。」").as_deref(),
-            Some("予算を変更しました。")
-        );
-        assert_eq!(
-            clean_summary("\"README を更新\"").as_deref(),
-            Some("README を更新")
-        );
-        assert_eq!(
-            clean_summary("- 予算を変更しました。").as_deref(),
-            Some("予算を変更しました。")
-        );
-        assert_eq!(
-            clean_summary("・予算を変更しました。").as_deref(),
-            Some("予算を変更しました。")
-        );
-        // 引用符の対になっていないものは残す
-        assert_eq!(
-            clean_summary("「予算を変更しました。").as_deref(),
-            Some("「予算を変更しました。")
-        );
-    }
-
-    #[test]
-    fn closes_gap_between_japanese_and_digits() {
-        assert_eq!(
-            clean_summary("第 3 章の実験を 5 回に修正しました。").as_deref(),
-            Some("第3章の実験を5回に修正しました。")
-        );
-        assert_eq!(
-            clean_summary("温度を 30 度に上げました。").as_deref(),
-            Some("温度を30度に上げました。")
-        );
-    }
-
-    #[test]
-    fn keeps_spaces_between_ascii_words_and_japanese() {
-        assert_eq!(
-            clean_summary("README.md の使い方を追加しました。").as_deref(),
-            Some("README.md の使い方を追加しました。")
-        );
-        // 英字と数字の間は変えない。数字と日本語の間は詰める（仕様どおり）
-        assert_eq!(
-            clean_summary("sales 2024 を更新しました。").as_deref(),
-            Some("sales 2024を更新しました。")
-        );
-        assert_eq!(
-            clean_summary("sales 2024 year を更新しました。").as_deref(),
-            Some("sales 2024 year を更新しました。")
+            memo_from_text("要約だけ").expect("復元").body,
+            Vec::<String>::new()
         );
     }
 
     #[test]
-    fn multiline_first_line_that_is_a_preamble_is_not_rescued() {
-        // 前置き（末尾がコロン）の次の行が正しくても、前置きの行は採らない
-        assert_eq!(
-            clean_summary_detail("以下の内容です:\n予算を変更しました。"),
-            None
-        );
-        assert_eq!(
-            clean_summary_detail("変更は次のとおりです：\n予算を変更しました。"),
-            None
-        );
-        // 先頭の語が前置きの言い回し（短い行）
-        for head in [
-            "以下の通りです\n予算を変更しました。",
-            "次の文です\n予算を変更しました。",
-            "保存メモ\n予算を変更しました。",
-            "メモ: 予算を変更しました。\n表も追加した。",
-            "回答\n予算を変更しました。",
-            "Here is the memo\n予算を変更しました。",
-            "Sure, here you go\n予算を変更しました。",
-            "「以下の通りです」\n予算を変更しました。",
-            "- 以下の通りです\n予算を変更しました。",
-        ] {
-            assert_eq!(clean_summary_detail(head), None, "{head}");
-        }
-        // 大文字小文字は区別しない
-        assert_eq!(
-            clean_summary_detail("here is the memo\n予算を変更しました。"),
-            None
-        );
-    }
-
-    #[test]
-    fn multiline_first_line_that_is_content_is_still_rescued() {
-        // 前置きの語を含んでいても、先頭でなければ本文
-        let got = clean_summary_detail("報告書に保存メモを追加した。\n表も追加した。").unwrap();
-        assert_eq!(got.text, "報告書に保存メモを追加した、表も追加した。");
-        assert!(got.rescued);
-        // 前置きの語で始まっても、長い行は本文として採る（40 文字以上）
-        let long = format!("メモ{}。\n次の行", "あ".repeat(40));
-        let got = clean_summary_detail(&long).unwrap();
-        assert_eq!(got.text, format!("メモ{}。", "あ".repeat(40)));
-        assert!(got.rescued);
-    }
-
-    #[test]
-    fn preamble_rule_does_not_apply_to_single_line_outputs() {
-        // 改行を含まない出力は、前置きの判定を行わない（通常の 1 行は弾かない）
-        let got = clean_summary_detail("以下の内容です:").unwrap();
-        assert_eq!(got.text, "以下の内容です:");
-        assert!(!got.rescued);
-        assert_eq!(
-            clean_summary("回答: 予算を変更しました。").as_deref(),
-            Some("回答: 予算を変更しました。")
-        );
+    fn strip_bullet_and_quotes_follow_the_old_rules() {
+        assert_eq!(strip_bullet("- x"), "x");
+        assert_eq!(strip_bullet("-x"), "-x");
+        assert_eq!(strip_quotes("「内容」"), "内容");
+        assert_eq!(strip_quotes("『内容』"), "内容");
     }
 }

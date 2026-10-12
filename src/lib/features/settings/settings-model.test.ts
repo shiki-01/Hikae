@@ -34,6 +34,7 @@ const current: AppSettings = {
 	aiModelSource: 'catalog',
 	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
+	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434'
 };
 

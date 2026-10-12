@@ -775,6 +775,7 @@ name = "core-llm"
 version = "0.0.1"
 dependencies = [
  "core-preview",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

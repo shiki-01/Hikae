@@ -17,6 +17,7 @@ fn one_file_input() -> ChangeInput {
     ChangeInput {
         files: vec![ChangedFile {
             kind: ChangeKind::Modified,
+            sensitive: false,
             name: "報告書.docx".into(),
             old_name: None,
             amount: Some("段落 +1 / -0".into()),
@@ -118,7 +119,7 @@ async fn invalid_custom_file_is_refused_before_starting_the_server() {
     std::fs::write(&bad, b"NOPE").unwrap();
     let svc = service(dir.path(), Backend::Builtin);
     assert_eq!(
-        svc.suggest_custom(&one_file_input(), &bad, GENERATE_TIMEOUT)
+        svc.suggest_custom(&one_file_input(), &bad, GENERATE_TIMEOUT, false)
             .await,
         Err(LlmError::CustomModelInvalid)
     );
@@ -131,7 +132,12 @@ async fn empty_input_returns_none_without_starting_anything() {
     let path = write_gguf(dir.path(), "mine.gguf");
     let svc = service(dir.path(), Backend::Builtin);
     let out = svc
-        .suggest_custom(&ChangeInput { files: vec![] }, &path, GENERATE_TIMEOUT)
+        .suggest_custom(
+            &ChangeInput { files: vec![] },
+            &path,
+            GENERATE_TIMEOUT,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(out, None);
@@ -144,19 +150,19 @@ async fn custom_gguf_is_started_with_its_own_path_and_answers() {
     let path = write_gguf(dir.path(), "mine.gguf");
     let svc = service(dir.path(), Backend::Builtin);
     let out = svc
-        .suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT)
+        .suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT, false)
         .await
         .unwrap();
-    assert_eq!(out.as_deref(), Some("保存メモです。"));
+    assert_eq!(out.map(|m| m.title).as_deref(), Some("保存メモです。"));
     // 偽サーバーは `-m` のファイルの存在を確かめ、そのフォルダに起動を記録する。
     // 記録が同じフォルダに残ること＝渡したパスで起動されたことの確認になる
     assert_eq!(starts(dir.path()), 1);
     // 同じファイルへの 2 回目の要求は、起動し直さずに使い回す
     let again = svc
-        .suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT)
+        .suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT, false)
         .await
         .unwrap();
-    assert_eq!(again.as_deref(), Some("保存メモです。"));
+    assert_eq!(again.map(|m| m.title).as_deref(), Some("保存メモです。"));
     assert_eq!(starts(dir.path()), 1);
     svc.stop().await;
 }
@@ -167,10 +173,10 @@ async fn switching_to_another_custom_file_restarts_the_server() {
     let first = write_gguf(dir.path(), "first.gguf");
     let second = write_gguf(dir.path(), "second.gguf");
     let svc = service(dir.path(), Backend::Builtin);
-    svc.suggest_custom(&one_file_input(), &first, GENERATE_TIMEOUT)
+    svc.suggest_custom(&one_file_input(), &first, GENERATE_TIMEOUT, false)
         .await
         .unwrap();
-    svc.suggest_custom(&one_file_input(), &second, GENERATE_TIMEOUT)
+    svc.suggest_custom(&one_file_input(), &second, GENERATE_TIMEOUT, false)
         .await
         .unwrap();
     assert_eq!(starts(dir.path()), 2);
@@ -188,7 +194,7 @@ async fn custom_gguf_is_refused_under_the_ollama_backend() {
         },
     );
     assert_eq!(
-        svc.suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT)
+        svc.suggest_custom(&one_file_input(), &path, GENERATE_TIMEOUT, false)
             .await,
         Err(LlmError::InvalidModel)
     );

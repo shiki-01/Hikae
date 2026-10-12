@@ -252,6 +252,7 @@ describe('設定の変換', () => {
 		ai_runner: 'builtin' as const,
 		ai_model: '',
 		ai_scope: 'text-diff' as const,
+		ai_suggest_body: true,
 		ai_ollama_url: 'http://localhost:11434',
 		git_executable: 'bundled' as const,
 		show_technical_info: false,
@@ -287,6 +288,7 @@ describe('設定の変換', () => {
 			aiModelSource: 'catalog',
 			aiCustomGgufPath: '',
 			aiScope: 'text-diff',
+			aiSuggestBody: true,
 			aiOllamaUrl: 'http://localhost:11434'
 		});
 	});

@@ -18,6 +18,7 @@ mod ignore_rules;
 mod index_lock;
 mod memo;
 mod memo_input;
+mod memo_text;
 mod models;
 mod new_file_diff;
 mod open_path;
@@ -62,6 +63,7 @@ pub use index_lock::{
 };
 pub use memo::{suggest_memo, MemoChange, MemoChangeKind, MemoLabels};
 pub use memo_input::{MemoTextDiff, MEMO_DIFF_MAX_LINES, MEMO_TEXT_MAX_BYTES};
+pub use memo_text::{normalize_memo, MEMO_MAX_CHARS, MEMO_MAX_LINES};
 pub use models::{
     new_restore_points, quiet_record_is_discardable, AddConflictAction, AddConflictDecision,
     AddConflictPolicy, AddFilesOutcome, AddRefusal, AddRejectReason, AddedFile, AfterRestoreSave,

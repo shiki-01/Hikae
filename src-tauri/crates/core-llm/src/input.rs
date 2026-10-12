@@ -1,11 +1,14 @@
-// 保存メモの入力の組み立てと、キャッシュのキー（設計書 10.4 の 1〜2、5）。
+// 保存メモの入力の組み立てと、キャッシュのキー（設計書 10.4 の 1〜2、5。10.6 の入力側の対策）。
 //
 // - Tauri・git に依存しない純関数。呼び出し側（app）が集めた変更を `SourceChange` にして渡す
 // - 変更量・差分の文字列の形も、ここで決める（UI の DiffView と同じ「Sheet1!B3: 120 → 150」の形）
-// - キャッシュのキーは「組み立てたメッセージ＋モデル ID」の SHA-256。作業フォルダの状態に依存する
-//   入力そのものを基準にするため、ツリーの OID は使わない（設計書 10.4 の追記を参照）
+// - 機微なファイル（`sensitive_file`）は本文も変更量も渡さない。差分の本文と名前は `mask_secrets` で伏せ字にする
+// - キャッシュのキーは「組み立てたメッセージ＋モデル ID」の SHA-256。伏せ字の後の入力から作るため、
+//   元の機微な文字列はキーにもメッセージにも残らない
 
 use crate::prompt::{build_messages, ChangeInput, ChangeKind, ChangedFile};
+use crate::redact::{mask_secrets, sensitive_file};
+use crate::suggestion::SuggestNotice;
 use sha2::{Digest, Sha256};
 
 /// 呼び出し側が集めた変更 1 件
@@ -22,20 +25,64 @@ pub struct SourceChange {
     pub diff_text: Option<String>,
 }
 
-/// 変更一覧から、モデルへ渡す入力を作る。ファイル名は最後の要素だけを使う（フォルダは渡さない）。
-/// 件数と本文の上限は `prompt` 側で切り詰める。
-pub fn change_input(changes: &[SourceChange]) -> ChangeInput {
-    ChangeInput {
-        files: changes
-            .iter()
-            .map(|c| ChangedFile {
-                kind: c.kind,
-                name: file_name(&c.path).to_string(),
-                old_name: c.old_path.as_deref().map(|p| file_name(p).to_string()),
-                amount: c.amount.clone(),
-                diff_text: c.diff_text.clone(),
-            })
-            .collect(),
+/// モデルへ渡す入力と、利用者に出す注記
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    pub input: ChangeInput,
+    pub notices: Vec<SuggestNotice>,
+}
+
+/// 変更一覧から、伏せ字を施したモデルへの入力と注記を作る。ファイル名は最後の要素だけを使う（フォルダは渡さない）。
+///
+/// - 機微なファイル（`sensitive_file` が真）は、本文も変更量も渡さない（名前と種類だけ）。注記 `sensitive-file-skipped`
+/// - 名前と本文は `mask_secrets` で伏せ字にする。1 件でも伏せたら注記 `sensitive-masked`
+/// - 件数と本文の上限は `prompt` 側で切り詰める
+pub fn prepare_input(changes: &[SourceChange]) -> Prepared {
+    let mut masked = false;
+    let mut skipped = false;
+    let mut mask = |text: &str| -> String {
+        let (out, n) = mask_secrets(text);
+        if n > 0 {
+            masked = true;
+        }
+        out
+    };
+    let mut files = Vec::with_capacity(changes.len());
+    for change in changes {
+        let sensitive =
+            sensitive_file(&change.path) || change.old_path.as_deref().is_some_and(sensitive_file);
+        if sensitive {
+            skipped = true;
+        }
+        let name = mask(file_name(&change.path));
+        let old_name = change.old_path.as_deref().map(|p| mask(file_name(p)));
+        files.push(ChangedFile {
+            kind: change.kind,
+            name,
+            old_name,
+            amount: if sensitive {
+                None
+            } else {
+                change.amount.clone()
+            },
+            diff_text: if sensitive {
+                None
+            } else {
+                change.diff_text.as_deref().map(&mut mask)
+            },
+            sensitive,
+        });
+    }
+    let mut notices = Vec::new();
+    if masked {
+        notices.push(SuggestNotice::SensitiveMasked);
+    }
+    if skipped {
+        notices.push(SuggestNotice::SensitiveFileSkipped);
+    }
+    Prepared {
+        input: ChangeInput { files },
+        notices,
     }
 }
 
@@ -69,11 +116,12 @@ pub fn cell_line(sheet: &str, cell: &str, before: Option<&str>, after: Option<&s
 }
 
 /// 入力とモデル ID から、生成済みメモのキャッシュのキーを作る（小文字の 16 進 64 桁）。
-/// 同じ入力・同じモデルなら同じキーになり、どちらかが変われば別のキーになる。
-pub fn cache_key(input: &ChangeInput, model_ref: &str) -> String {
+/// 同じ入力・同じモデル・同じ形式（要約のみか本文もか）なら同じキーになり、どれかが変われば別のキーになる。
+/// `body` は、プロンプトが変わることを表すため、メッセージに含まれる（キーの計算に使うのは伏せ字の後の入力だけ）。
+pub fn cache_key(input: &ChangeInput, model_ref: &str, body: bool) -> String {
     let payload = serde_json::json!({
         "model": model_ref,
-        "messages": build_messages(input),
+        "messages": build_messages(input, body),
     });
     let bytes = serde_json::to_vec(&payload).unwrap_or_default();
     let digest = Sha256::digest(&bytes);
@@ -92,6 +140,7 @@ fn file_name(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redact::MASK;
 
     fn change(kind: ChangeKind, path: &str) -> SourceChange {
         SourceChange {
@@ -105,7 +154,7 @@ mod tests {
 
     #[test]
     fn names_are_the_last_path_element_and_order_is_kept() {
-        let input = change_input(&[
+        let prepared = prepare_input(&[
             change(ChangeKind::Modified, "資料/第3章.docx"),
             SourceChange {
                 kind: ChangeKind::Renamed,
@@ -115,6 +164,7 @@ mod tests {
                 diff_text: None,
             },
         ]);
+        let input = prepared.input;
         assert_eq!(input.files.len(), 2);
         assert_eq!(input.files[0].name, "第3章.docx");
         assert_eq!(input.files[0].old_name, None);
@@ -122,6 +172,7 @@ mod tests {
         assert_eq!(input.files[1].name, "新.txt");
         assert_eq!(input.files[1].old_name.as_deref(), Some("旧.txt"));
         assert_eq!(input.files[1].amount.as_deref(), Some("行 +0 / -0"));
+        assert!(prepared.notices.is_empty());
     }
 
     #[test]
@@ -142,19 +193,67 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_is_stable_and_follows_the_input_and_the_model() {
-        let base = change_input(&[change(ChangeKind::Added, "a.txt")]);
-        let key = cache_key(&base, "m1");
+    fn sensitive_files_send_no_body_and_no_amount() {
+        let mut secret = change(ChangeKind::Added, "config/.env");
+        secret.amount = Some(text_amount(2, 0));
+        secret.diff_text = Some("+ DATABASE_URL=postgres://a:b@host/db".to_string());
+        let prepared = prepare_input(&[secret]);
+        let file = &prepared.input.files[0];
+        assert!(file.sensitive);
+        assert_eq!(file.name, ".env");
+        assert_eq!(file.amount, None);
+        assert_eq!(file.diff_text, None);
+        assert_eq!(prepared.notices, vec![SuggestNotice::SensitiveFileSkipped]);
+    }
+
+    #[test]
+    fn secrets_in_the_diff_are_masked_before_the_input_is_built() {
+        let mut change_text = change(ChangeKind::Modified, "設定/接続.txt");
+        change_text.amount = Some(text_amount(1, 0));
+        change_text.diff_text = Some(
+            "+ password = hunter2!\n+ 連絡先 test@example.com\n+ 接続の設定を変えた".to_string(),
+        );
+        let prepared = prepare_input(&[change_text]);
+        let text = prepared.input.files[0]
+            .diff_text
+            .clone()
+            .unwrap_or_default();
+        assert!(!text.contains("hunter2"));
+        assert!(!text.contains("example.com"));
+        assert!(text.contains("接続の設定を変えた"));
+        assert!(text.contains(MASK));
+        assert_eq!(prepared.notices, vec![SuggestNotice::SensitiveMasked]);
+        assert!(!prepared.input.files[0].sensitive);
+    }
+
+    #[test]
+    fn masked_input_gives_the_same_key_as_the_masked_text() {
+        // キーは伏せ字の後の入力から作る。元の文字列は入力にも、キーの計算にも残らない
+        let mut raw = change(ChangeKind::Modified, "a.txt");
+        raw.diff_text = Some("+ password = hunter2!".to_string());
+        let prepared = prepare_input(&[raw]);
+        let key = cache_key(&prepared.input, "m1", true);
+        let serialized = format!("{:?}", prepared.input);
+        assert!(!serialized.contains("hunter2"));
+        assert_eq!(key, cache_key(&prepared.input.clone(), "m1", true));
+    }
+
+    #[test]
+    fn cache_key_is_stable_and_follows_the_input_the_model_and_the_form() {
+        let base = prepare_input(&[change(ChangeKind::Added, "a.txt")]).input;
+        let key = cache_key(&base, "m1", true);
         assert_eq!(key.len(), 64);
         assert!(key
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
-        assert_eq!(key, cache_key(&base.clone(), "m1"));
+        assert_eq!(key, cache_key(&base.clone(), "m1", true));
         // モデルが違えば別のキー
-        assert_ne!(key, cache_key(&base, "m2"));
+        assert_ne!(key, cache_key(&base, "m2", true));
+        // 要約のみと本文ありでは別のキー（プロンプトが違う）
+        assert_ne!(key, cache_key(&base, "m1", false));
         // 入力が違えば別のキー（差分本文だけの違いも含む）
         let mut other = base.clone();
         other.files[0].diff_text = Some("+ 新しい行".to_string());
-        assert_ne!(key, cache_key(&other, "m1"));
+        assert_ne!(key, cache_key(&other, "m1", true));
     }
 }

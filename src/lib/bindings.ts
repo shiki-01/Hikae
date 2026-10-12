@@ -313,6 +313,11 @@ export const commands = {
 	 *  （`ai_suggest_memo`）。進行中が無ければ何もしない。
 	 */
 	aiCancelSuggest: () => __TAURI_INVOKE<void>("ai_cancel_suggest"),
+	/**
+	 *  保存欄のメモに、パスワード・鍵・個人情報のように見える文字列があるかを調べる（読み取りのみ）。
+	 *  内容は返さず、種類だけを返す（設計書 10.6）。保存は止めない。警告と確認に使う。
+	 */
+	checkMemoSensitive: (text: string) => __TAURI_INVOKE<SensitiveKind[]>("check_memo_sensitive", { text }),
 	/**  Ollama の一覧（`GET /api/tags`）。失敗は接続の失敗として返す */
 	aiListOllamaModels: (url: string) => typedError<string[], AppError>(__TAURI_INVOKE("ai_list_ollama_models", { url })),
 	/**  接続先の形式と到達性を確認する。形式が正しくないときは `ok` を偽にする（エラーにはしない）。 */
@@ -543,6 +548,8 @@ export type AppSettings = {
 	ai_model: string,
 	/**  AI に渡す範囲 */
 	ai_scope: AiScope,
+	/**  保存メモの本文（詳細の箇条書き）も提案する。オフのときは要約だけを求める。Phase 2（設計書 10.6） */
+	ai_suggest_body: boolean,
 	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
 	ai_ollama_url: string,
 	/**  git 実行ファイル */
@@ -1284,6 +1291,33 @@ export type SaveSizeChoice = {
 	exclude: string[],
 };
 
+/**  検出された機微情報の種類（画面の文言を選ぶために使う。内容は含まない） */
+export type SensitiveKind = 
+/**  秘密鍵（PEM のブロック） */
+"private-key" | 
+/**  クラウドのアクセスキー（AWS など） */
+"access-key" | 
+/**  各サービスのトークン・API キー */
+"token" | 
+/**  JWT・Bearer のトークン */
+"bearer-token" | 
+/**  URL 内の認証情報（`ユーザー:パスワード@`） */
+"url-credential" | 
+/**  `パスワード: …` のようなラベル付きの値 */
+"labeled-value" | 
+/**  メールアドレス */
+"email" | 
+/**  電話番号 */
+"phone" | 
+/**  クレジットカード番号（Luhn を満たすもの） */
+"card-number" | 
+/**  マイナンバー相当（前後が数字でない連続 12 桁） */
+"long-number" | 
+/**  高エントロピーの長い文字列（英数字と記号 32 文字以上） */
+"high-entropy" | 
+/**  伏せ字そのもの（出力に入っていたら、その行は捨てる） */
+"masked";
+
 /**  現在のログイン状態。トークンは含めない。 */
 export type SessionInfo = {
 	/**  ログイン済みか（オフラインでユーザー情報を確認できない場合も true） */
@@ -1343,6 +1377,8 @@ export type SettingsPatch_Deserialize = {
 	ai_model?: string | null,
 	/**  AI に渡す範囲 */
 	ai_scope?: AiScope | null,
+	/**  保存メモの本文（詳細の箇条書き）も提案する。オフのときは要約だけを求める。Phase 2（設計書 10.6） */
+	ai_suggest_body?: boolean | null,
 	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
 	ai_ollama_url?: string | null,
 	/**  git 実行ファイル */
@@ -1407,6 +1443,8 @@ export type SettingsPatch_Serialize = {
 	ai_model?: string | null,
 	/**  AI に渡す範囲 */
 	ai_scope?: AiScope | null,
+	/**  保存メモの本文（詳細の箇条書き）も提案する。オフのときは要約だけを求める。Phase 2（設計書 10.6） */
+	ai_suggest_body?: boolean | null,
 	/**  Ollama の接続先 URL（`ai_runner` が `ollama` のとき）。http / https のみ */
 	ai_ollama_url?: string | null,
 	/**  git 実行ファイル */
@@ -1543,10 +1581,24 @@ export type SuggestFailure =
 /**  利用者の操作、または新しい要求により取り消された（画面には出さない） */
 "cancelled";
 
-/**  保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由 */
+/**  提案に付ける注記（画面が短い文を選ぶ。内容は含まない） */
+export type SuggestNotice = 
+/**  入力の中の機微に見える部分を伏せて作った */
+"sensitive-masked" | 
+/**  機微なファイルの内容を使わなかった（名前と種類だけを渡した） */
+"sensitive-file-skipped" | 
+/**  安全のために本文の行を捨てた */
+"body-dropped";
+
+/**
+ *  保存メモの提案の結果。`title` があれば成功（`body` は本文の行を改行でつないだもの。無ければ null）。
+ *  無ければ `failure` の理由。`notices` は、入力の伏せ字・機微なファイルの除外・本文の省略を画面に短く知らせる
+ */
 export type SuggestResult = {
-	text: string | null,
+	title: string | null,
+	body: string | null,
 	failure: SuggestFailure | null,
+	notices: SuggestNotice[],
 };
 
 /**  同期状態が変わった */

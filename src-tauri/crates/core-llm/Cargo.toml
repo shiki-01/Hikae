@@ -19,6 +19,9 @@ tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs", "io-u
 tokio-util = { version = "0.7" }
 # モデルファイルの SHA-256 検証
 sha2 = "0.10"
+# 機微情報の検出と伏せ字（設計書 10.6）。tauri が既に同じ版を使うため新しい crate は増えない。
+# Unicode の \s \b と (?i) に必要な機能だけを有効にする
+regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 # 設定の型を TS へ出力するときだけ有効にする（app が指定）
 specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
 

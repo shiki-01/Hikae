@@ -10,6 +10,10 @@
 		type?: 'button' | 'submit' | 'reset';
 		title?: string;
 		ariaLabel?: string;
+		/** 開閉の状態（開閉ボタン用） */
+		ariaExpanded?: boolean;
+		/** 開閉する領域の ID（開閉ボタン用） */
+		ariaControls?: string;
 		class?: string;
 		children?: Snippet;
 		onclick?: (event: MouseEvent) => void;
@@ -23,6 +27,8 @@
 		type = 'button',
 		title,
 		ariaLabel,
+		ariaExpanded,
+		ariaControls,
 		class: className = '',
 		children,
 		onclick
@@ -51,6 +57,8 @@
 	{type}
 	{title}
 	aria-label={ariaLabel}
+	aria-expanded={ariaExpanded}
+	aria-controls={ariaControls}
 	aria-busy={loading || undefined}
 	disabled={disabled || loading}
 	{onclick}

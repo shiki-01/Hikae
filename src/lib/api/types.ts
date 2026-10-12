@@ -599,10 +599,33 @@ export interface AiEndpointCheck {
 /** 保存メモの提案が得られなかった理由（`cancelled` は画面に出さない） */
 export type AiSuggestFailure = 'timeout' | 'invalid' | 'not-ready' | 'unavailable' | 'cancelled';
 
-/** 保存メモの提案の結果。`text` があれば成功、無ければ `failure` の理由 */
+/** 提案に付ける注記（内容は含まない。短い文は画面が選ぶ） */
+export type AiSuggestNotice = 'sensitive-masked' | 'sensitive-file-skipped' | 'body-dropped';
+
+/** 保存メモに含まれる機微に見える文字列の種類（内容は含まない） */
+export type SensitiveKind =
+	| 'private-key'
+	| 'access-key'
+	| 'token'
+	| 'bearer-token'
+	| 'url-credential'
+	| 'labeled-value'
+	| 'email'
+	| 'phone'
+	| 'card-number'
+	| 'long-number'
+	| 'high-entropy'
+	| 'masked';
+
+/**
+ * 保存メモの提案の結果。`title` があれば成功（`body` は本文の行を改行でつないだもの。無ければ null）。
+ * 無ければ `failure` の理由
+ */
 export interface AiSuggestion {
-	text: string | null;
+	title: string | null;
+	body: string | null;
 	failure: AiSuggestFailure | null;
+	notices: AiSuggestNotice[];
 }
 
 /** 生成の試行が失敗した理由 */
@@ -682,6 +705,8 @@ export interface AppSettings {
 	aiCustomGgufPath: string;
 	/** AI に渡す範囲 */
 	aiScope: AiScopeMode;
+	/** 保存メモの本文（詳細の箇条書き）も提案する。オフのときは要約だけ */
+	aiSuggestBody: boolean;
 	/** Ollama の接続先 URL */
 	aiOllamaUrl: string;
 }
@@ -880,6 +905,8 @@ export interface ProjectApi {
 	 * 失敗は `failure` で返す（エラーにはしない）
 	 */
 	aiSuggestMemo(projectId: string, fresh: boolean): Promise<AiSuggestion>;
+	/** 保存欄のメモの機微に見える文字列の種類（読み取りのみ。内容は返さない）。保存は止めない */
+	checkMemoSensitive(text: string): Promise<SensitiveKind[]>;
 	/** 進行中の提案を取り消す（llama-server 自体は止めない） */
 	aiCancelSuggest(): Promise<void>;
 	/** Ollama に導入されているモデル名の一覧 */

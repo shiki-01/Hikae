@@ -46,12 +46,12 @@ const aiOn = {
 	aiCustomGgufPath: ''
 } as const;
 
-function ok(text: string): AiSuggestion {
-	return { text, failure: null };
+function ok(title: string): AiSuggestion {
+	return { title, body: null, notices: [], failure: null };
 }
 
 function failed(failure: AiSuggestFailure): AiSuggestion {
-	return { text: null, failure };
+	return { title: null, body: null, notices: [], failure };
 }
 
 describe('変更一覧の内容の文字列', () => {
@@ -117,7 +117,12 @@ describe('提案の状態遷移', () => {
 		state = reduceSuggest(state, { type: 'start', seq: 1 });
 		expect(state).toEqual({ kind: 'generating', seq: 1 });
 		state = reduceSuggest(state, { type: 'done', seq: 1, result: ok('予算を変更しました。') });
-		expect(state).toEqual({ kind: 'result', text: '予算を変更しました。' });
+		expect(state).toEqual({
+			kind: 'result',
+			title: '予算を変更しました。',
+			body: null,
+			notices: []
+		});
 	});
 
 	it('失敗は理由を保持する', () => {
@@ -141,7 +146,10 @@ describe('提案の状態遷移', () => {
 	});
 
 	it('変更一覧が変わったら（reset）結果・失敗は破棄される', () => {
-		const result = reduceSuggest({ kind: 'result', text: '古い提案' }, { type: 'reset' });
+		const result = reduceSuggest(
+			{ kind: 'result', title: '古い提案', body: null, notices: [] },
+			{ type: 'reset' }
+		);
 		expect(result).toEqual(SUGGEST_IDLE);
 		const failure = reduceSuggest({ kind: 'failed', failure: 'invalid' }, { type: 'reset' });
 		expect(failure).toEqual(SUGGEST_IDLE);
@@ -153,7 +161,7 @@ describe('提案の状態遷移', () => {
 		const stale = reduceSuggest(state, { type: 'done', seq: 1, result: ok('古い') });
 		expect(stale).toEqual({ kind: 'generating', seq: 2 });
 		const fresh = reduceSuggest(stale, { type: 'done', seq: 2, result: ok('新しい') });
-		expect(fresh).toEqual({ kind: 'result', text: '新しい' });
+		expect(fresh).toEqual({ kind: 'result', title: '新しい', body: null, notices: [] });
 	});
 
 	it('待機中に届いた結果は無視する', () => {

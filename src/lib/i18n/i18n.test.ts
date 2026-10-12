@@ -61,7 +61,12 @@ describe('i18n', () => {
 			'have',
 			'received',
 			'stage',
-			'level'
+			'level',
+			// 保存メモの詳細の目安（文字数と行数）
+			'chars',
+			'lines',
+			'max_chars',
+			'max_lines'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

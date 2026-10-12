@@ -15,6 +15,7 @@ import type {
 	AiModelStatus,
 	AiTestResult,
 	AiSuggestion,
+	SensitiveKind,
 	FilePreview,
 	PreviewSheet,
 	PreviewSlide,
@@ -498,6 +499,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 	aiModelSource: 'catalog',
 	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
+	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434'
 };
 
@@ -1732,18 +1734,29 @@ export const mockApi: ProjectApi = {
 		// 新しい要求は進行中の要求を取り消す（実装と同じ）
 		const generation = ++mockSuggestGeneration;
 		await sleep(120);
-		if (generation !== mockSuggestGeneration) return { text: null, failure: 'cancelled' };
+		if (generation !== mockSuggestGeneration)
+			return { title: null, body: null, notices: [], failure: 'cancelled' };
 		const overrides = readOverrides()[projectId] ?? {};
 		const settings = {
 			...readStorage<AppSettings>('hikae.settings', DEFAULT_SETTINGS),
 			...overrides
 		};
 		if (settings.memoSuggestion !== 'ai' || !mockModelReady(settings)) {
-			return { text: null, failure: 'not-ready' };
+			return { title: null, body: null, notices: [], failure: 'not-ready' };
 		}
 		const state = states.get(projectId);
-		if (!state || state.changes.length === 0) return { text: null, failure: 'not-ready' };
-		return { text: `AI 提案（モック）: ${suggestMemo(state.changes)}`, failure: null };
+		if (!state || state.changes.length === 0)
+			return { title: null, body: null, notices: [], failure: 'not-ready' };
+		return {
+			title: `AI 提案（モック）: ${suggestMemo(state.changes)}`,
+			body: '（モック）詳細の 1 行目\n（モック）詳細の 2 行目',
+			failure: null,
+			notices: []
+		};
+	},
+
+	async checkMemoSensitive(): Promise<SensitiveKind[]> {
+		return [];
 	},
 
 	async aiCancelSuggest(): Promise<void> {
