@@ -10,7 +10,7 @@ Oct 7, 2026 · @shiki
 
 | 論点 | 決定 | 主な影響 |
 | --- | --- | --- |
-| 対象 OS | Windows / macOS | Tauri で WebView2 と WKWebView の2系統を検証 |
+| 対象 OS | Windows / macOS（デスクトップ版）。iOS / Android は閲覧とアップロードに絞ったモバイル版（14 章。2026-10-14 に追加） | Tauri で WebView2 と WKWebView の2系統を検証。モバイル版は git を使わず GitHub API で動く |
 | 基盤 | Tauri 2 + SvelteKit（Svelte 5）+ Master CSS（rc） | Rust 側に Git・LLM・ファイル監視を集約 |
 | リモート | GitHub のみ | 認証・リポジトリ作成・所有者一覧を GitHub API に一本化 |
 | 利用形態 | 1人で複数 PC 間の同期・バックアップ | 競合は「自分の別 PC との不一致」として扱う |
@@ -903,6 +903,8 @@ Rust 側は Cargo workspace で機能ごとに crate を分け、Tauri 層（`ap
 | `extensions/office-extractor`（workspace の member、bin は 3 つ） | 組み込みの Office 抽出器（WASM、WASI preview1）。docx・xlsx・pptx ごとに 1 つの bin。入力は stdin、出力は stdout の JSON（11 章） | `core-preview`（`default-features = false`。wasmtime を含めない） |
 | `core-llm` | モデル管理（DL・検証・削除）、サイドカー制御、Ollama 接続、プロンプト生成（Phase 2 で実装済み。10.5） | core-preview（宣言のみ。実際の使用は無い） |
 | `core-store` | SQLite、設定、プロジェクト登録、操作ジャーナル、プロジェクト単位のロック（`ProjectLocks`） | なし |
+| `core-remote`（14 章） | モバイル版の GitHub REST API による一覧・閲覧・取得・アップロード（git を使わない） | core-github |
+| `src-tauri/mobile`（`hikae-mobile`、14 章） | モバイル用の Tauri アプリ（コマンド、トークンの保管） | core-remote、core-github、core-preview（`default-features = false`） |
 | `app` | Tauri コマンド・イベント、スケジューラ、プロジェクト単位の操作キュー | 上記すべて |
 | `src/lib/features/*` | projects, changes, history, compare, conflict, settings, ai, extensions, app-health, notifications | 生成された TS バインディング |
 | `src/lib/ext-ui`、`extensions-ui/*` | 表示拡張（iframe の中で動く UI）の部品と入口。`extensions-ui/` は `vite.ext.config.ts` でビルドし、拡張フォルダの `ui/` に置く（11.5） | 本体の `#lib`（表示拡張の中だけで動く） |
@@ -1426,3 +1428,120 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | 履歴 100 件の取得が約 4 秒かかる | 計測（Windows）で、100 件の取得が約 4 秒（1 件あたり約 40ms）。返す 1 件ごとに `git diff --numstat` を起動して変更ファイル数を数えているため（`core-ops` の `history`）。ファイルの大きい保存（500MB の差分）が並ぶと、1 件あたりはさらに長い | 対応済み（2026-10-09）。ページ全体で、少ない回数（150 件ずつ）の `show --first-parent --name-only -z` にまとめた。100 件の取得は約 0.37 秒（`docs/notes/phase1-measurements.md` 3.2.1） |
 | 変更が続く間は自動保存が作られない | 最後の変更から静止するまで待つため、ビルドや同期ソフトが常に書き込むフォルダでは、いつまでも作られない | 設計の通り（7章）。待ち時間の上限は設けていない。必要になれば、最長の待ち時間の導入を設計として検討する |
 | `.gitignore` の判定が簡易 | ファイル監視で無視するのは、プロジェクト直下の `.gitignore` と `.git/info/exclude` だけ。サブフォルダの `.gitignore` とグローバルの除外設定は読まない | 読まない場合は「無視しない」側に倒れ、余分な通知（変更一覧の取り直しと自動保存の試行）が増えるだけで、変更の見落としにはならない。保存の対象そのものは git が決める |
+
+## 14. モバイル版（閲覧とアップロード）
+
+2026-10-14 に着手を決定した（利用者の指示。Phase 1・2 とは別の追加スコープ。0 章の「対象 OS」への追記として扱う）。対象は iOS と Android。デスクトップ版と同じリポジトリ（モノレポ）で開発する。
+
+### 14.1 スコープ
+
+| やる | やらない（当面） |
+| --- | --- |
+| GitHub 上のリポジトリの一覧と、フォルダ・ファイルの閲覧 | 端末への clone・作業フォルダ・ファイル監視 |
+| 閲覧できる形式の表示（テキスト・画像・PDF・docx・xlsx・pptx） | 取り込み・ぶつかり解消・元に戻す・自動保存・ローカル LLM |
+| 端末へのダウンロード（共有・保存） | 履歴の巻き戻し（過去の版の閲覧と取り出しだけ行う） |
+| 端末のファイル・写真・テキスト・クリップボードの内容を、指定したフォルダへ追加して保存（アップロード） | 既存ファイルの編集・削除・名前変更・移動 |
+| GitHub ログイン（Device Flow） | 新規リポジトリの作成、Organization の管理 |
+
+### 14.2 方針
+
+- **git CLI を使わない**。iOS は子プロセスを起動できず、Android でも git を同梱できないため、GitHub REST API（Contents と Git Data）だけでリモートのリポジトリを直接読み書きする。端末にリポジトリを持たない。
+- 用語は 2 章の対応表に従う。モバイルの「追加して保存」は、commit と push を 1 回の操作にまとめたもの（画面には Git 用語を出さない）。
+- 既存の安全上の不変条件のうち、git CLI・作業フォルダ・復元点に関するもの（1〜4、6、7）は、この版が git CLI も作業フォルダも持たないため直接は当てはまらない。代わりに 14.5 の規則を守る。トークンの扱い（不変条件 9）は同じく最優先。
+
+### 14.3 構成
+
+| 部品 | 責務 | 依存先 |
+| --- | --- | --- |
+| `core-remote`（新規） | GitHub REST API による一覧・閲覧・取得・アップロード。Tauri と git に依存しない | `core-github`（トークン型・HTTP の共通部品・エラー） |
+| `src-tauri/mobile`（新規。package 名 `hikae-mobile`） | モバイル用の Tauri アプリ。コマンド（14.8）、トークンの保管、`#[tauri::mobile_entry_point]`、`tauri.conf.json`。デスクトップの `app` には依存しない（keyring の Windows / macOS 向け feature、wasmtime、`trash`、llama-server の制御、ファイル監視を持ち込まないため） | `core-remote`、`core-github`、`core-preview`（`default-features = false`。wasmtime を含めない） |
+| `src/routes/m/`、`src/lib/features/mobile/` | モバイル用の画面。部品（`components`）・トークン・i18n はデスクトップと共有する。デスクトップの 2 ペイン画面は使わない | `src/lib/api/mobile.ts` |
+
+- 画面は同じ SvelteKit の SPA に同居させる。モバイルのアプリは起動時に `window.__HIKAE_MOBILE__ = true` を初期化スクリプトで設定し、ルートがこれを見て `/m` へ移る。ブラウザ単体（`pnpm dev`）では `/m` を直接開き、モックの API で動かす。
+- 依存方向: `core-remote` は `core-git` / `core-ops` / `core-safety` に依存しない。デスクトップの crate は `core-remote` に依存しない。
+- Tauri CLI が 2 つの `tauri.conf.json`（`app/` と `mobile/`）を取り違えないよう、モバイルのコマンドは環境変数 `TAURI_APP_PATH=src-tauri/mobile` を付けて実行する（`package.json` の `tauri:mobile` スクリプト）。
+
+### 14.4 閲覧（読み取り）
+
+- 保存先の一覧: `GET /user/repos`（`core-github` の `GithubApi` を再利用）。
+- フォルダの一覧: `GET /repos/{owner}/{name}/contents/{path}?ref={ref}`。`ref` が無いときは既定ブランチ（`GET /repos/{owner}/{name}` の `default_branch`）。1 フォルダ 1,000 件までの GitHub 側の制限に従い、超えたときは「一部のみ表示」と案内する。
+- ファイルの取得: 一覧の `sha` を使い `GET /repos/{owner}/{name}/git/blobs/{sha}`（base64）。1 ファイル 25 MiB まで。超えるものは「大きすぎて、このアプリでは開けません」とし、取得しない。
+- 過去の版: `GET /repos/{owner}/{name}/commits?path=&per_page=30` と、`ref` に保存の ID を渡した取得。過去の版は閲覧と端末への保存だけで、巻き戻しはしない。
+- プレビューは Rust 側で形式を判定して返す。テキスト（UTF-8。それ以外は文字コードを推定せず「表示できません」）、画像（png・jpeg・gif・webp・svg は画像として）、PDF、docx・xlsx・pptx（`core-preview` のネイティブ抽出。WASM 抽出器と拡張ホストは使わない）。iframe の表示拡張はモバイルでは使わず、画面側の部品で描く。PDF は `pdfjs-dist` を本体の画面の中で、デスクトップの表示拡張と同じくワーカーなしで使う。
+
+### 14.5 アップロード（追加して保存）の規則
+
+手順（`core-remote::upload`）:
+
+1. 既定ブランチの先頭（`GET /repos/{o}/{n}/git/ref/heads/{branch}`）と、そのコミットのツリーを取得する。
+2. 追加するファイルごとに、同名のファイルが既にあるかを調べる（`plan_upload`。画面はこの結果で確認ダイアログを出す）。
+3. 同名のときの扱いは、1 件ごとに「置き換える」「両方残す」「追加しない」から選ぶ（デスクトップのファイル追加（4.7）と同じ）。「両方残す」は `名前 (2).拡張子` の形で、既存と重ならない名前にする。「置き換える」は古い版が履歴に残るので取り出せる。
+4. 内容ごとに blob を作る（`POST .../git/blobs`、`encoding: base64`。バイト列をそのまま送る）。
+5. `POST .../git/trees`（`base_tree` に 1 のツリー、各ファイルは通常ファイル `100644`）、`POST .../git/commits`（親は 1 のコミット 1 つだけ。author と committer は GitHub のログイン名と noreply アドレス `{id}+{login}@users.noreply.github.com`。デスクトップの署名と同じ）。
+6. `PATCH .../git/refs/heads/{branch}` を **`force: false`** で呼ぶ。
+
+守る規則:
+
+- ref の更新は常に fast-forward のみ（`force: false`）。強制更新・ref の削除・ブランチの作成と削除・タグの操作は実装しない。`core-remote` の公開関数は、これらを呼べない形にする（HTTP の呼び出しは許可リスト方式の内部関数 1 か所を通し、許可するのは上記のメソッドとパスの形だけ。許可リストに無い組み合わせは実行時に拒否する）。
+- 6 が `422`（他の端末が先に更新して fast-forward にならない）のときは、1 から作り直す（blob は再利用する）。最大 3 回。それでも失敗したら何も変更せず、「他の場所で更新されたため追加できませんでした。もう一度試してください」と返す。データは無事（リモートは変わっていない）。
+- 既存のファイルは、利用者が「置き換える」を選んだものだけを変更する。選ばれていないパスの内容は変えない（`base_tree` を使うため、ほかのファイルは親のまま）。
+- パスの検査: 空、絶対パス、`..`、`.git` の階層、`\` と制御文字、Windows で作れない名前（E18 と同じ基準。予約名、末尾の `.` と空白、`< > : " | ? *`、259 文字を超えるパス）を拒否する。Unicode は NFC に正規化する（macOS の別ファイル扱いを避ける。13.1）。
+- サイズ: 1 ファイル 25 MiB、1 回の追加で合計 60 MiB まで。超える場合は 1 件も送らず断る（E07 / E08 と同じ考え方。上限は画面メモリと IPC の都合による暫定値で、実機の結果で見直す）。
+- 失敗の分類は `core-github` の `AuthError` と同じ（401 → 再認証、403 → 権限なし or 上限、ネットワーク、サーバー障害）。エラー表示は 3 要素（5 章）。
+- 保存メッセージの既定は「スマホから追加（{n} 件）」。画面で編集できる。メモ生成（LLM）はしない。
+
+### 14.6 認証と秘密情報
+
+- 認証はデスクトップと同じ Device Flow。ログインページの URL は `https://github.com/login/device` に固定して、`tauri-plugin-opener` の Rust 側から開く（画面側には権限を与えない）。
+- トークンは Rust 側だけで持つ。画面（JS）には渡さない。GitHub への通信はすべて Rust から行う。ファイル・ログ・エラー・イベントに出さない（不変条件 9）。
+- 保管先: iOS は Keychain（`keyring` の `apple-native`）。Android は Android Keystore で包んだ暗号化ストレージ（Tauri のモバイルプラグインとして実装する。`SecretStore` trait の実装を差し替える）。**Android の保管は実機とビルド環境が要り、未確認**。平文のファイルへの保存はしない。
+- 画面が閉じられる・アプリが中断されても、ログインの待機は再開できる（`device_code` は Rust 側に保持）。
+
+### 14.7 画面（`/m`）
+
+下端のタブバー（ファイル / アップロード / 設定）。幅は 320〜430px を基準に、1 カラムで作る。タップ領域は 44px 以上。
+
+| 画面 | 内容 |
+| --- | --- |
+| M0 ログイン | 確認コードを大きく表示し、「GitHub を開く」で確認ページを開く。待機中の表示と、期限切れ・拒否のときの再試行 |
+| M1 保存先の選択 | 保存先（リポジトリ）の一覧。最後に開いたものを覚える（端末内の設定。`localStorage`） |
+| M2 ファイル | パンくず付きのフォルダ一覧。ファイルをタップで表示（M3）。長押しではなく「⋯」で、ダウンロード・過去の版 |
+| M3 プレビュー | 14.4 の形式別の表示。上部に「ダウンロード」「過去の版」 |
+| M4 アップロード | 追加先のフォルダ（M2 で開いている場所が既定）を選び、「ファイルを選ぶ」「写真を選ぶ」「テキストを入力」「クリップボードから貼り付け」で項目を積む。項目ごとに名前を編集できる。同名があるときは項目ごとに 3 択。「追加して保存」で実行し、進行状況と結果（保存した件数・追加しなかった件数）を出す |
+| M5 設定 | アカウント、ログアウト、保存先の切り替え、バージョン |
+
+- ファイルと写真の選択は WebView の `<input type="file" multiple>` を使い、`File` から base64 を作って渡す（OS 間で動作が揃い、`fs` の権限を画面に与えずに済む）。
+- クリップボードは `navigator.clipboard`（文字列は `readText`、画像は `read`）を使う。失敗したときは貼り付け用の入力欄にフォールバックする。
+- ダウンロードは `navigator.share({ files })` を優先し、使えなければ `<a download>` にフォールバックする。**端末ごとの動作は未確認**。
+- 文言はすべて i18n キー（`mobile.*`）。Git 用語を出さない。
+
+### 14.8 コマンド（Tauri）と型
+
+型は Rust の定義から生成する（`export-bindings` に相当する bin を `hikae-mobile` に置き、生成物は `src/lib/bindings-mobile.ts`。手で編集しない）。コマンド名は `mobile_` で始める。
+
+| コマンド | 引数 | 返り値 |
+| --- | --- | --- |
+| `mobile_account` | なし | `MobileAccount \| null`（`login`、`id`、`avatar_url`） |
+| `mobile_start_login` / `mobile_open_login_page` / `mobile_wait_login` / `mobile_cancel_login` / `mobile_logout` | なし | デスクトップの `start_login` 等と同じ型（`LoginPrompt`、終了の種類） |
+| `mobile_list_repos` | なし | `Vec<MobileRepo>`（`owner`、`name`、`private`、`default_branch`、`pushed_at`、`description`） |
+| `mobile_list_dir` | `owner`、`name`、`path`、`ref?` | `DirListing`（`branch`、`head_sha`、`truncated`、`entries: Vec<DirEntry>`。`DirEntry` は `name`、`path`、`kind`（`file` / `dir`）、`size`、`sha`） |
+| `mobile_preview` | `owner`、`name`、`path`、`sha` | `MobilePreview`（`kind`: `text` / `image` / `pdf` / `document` / `unsupported` / `too_large`。本文は種類ごと） |
+| `mobile_download` | `owner`、`name`、`path`、`sha` | `DownloadedFile`（`file_name`、`mime`、`content_base64`） |
+| `mobile_file_history` | `owner`、`name`、`path` | `Vec<VersionInfo>`（`sha`、`message`、`date`、`author`） |
+| `mobile_plan_upload` | `owner`、`name`、`items: Vec<{ target_dir, name, size }>` | `UploadPlan`（`branch`、`items: Vec<{ target_path, exists }>`） |
+| `mobile_upload` | `owner`、`name`、`message?`、`items: Vec<{ target_dir, name, content_base64, on_exists }>` | `UploadResult`（`commit_sha`、`saved`、`skipped`、`renamed: Vec<{ from, to }>`） |
+
+エラーはデスクトップの `AppError` と同じ形（コードと 3 要素の文言用の情報）で返し、`ProjectApi` のモバイル版（`src/lib/api/mobile.ts`）が既存のエラー表示（`src/lib/api/errors.ts`）に渡す。
+
+### 14.9 テストと検証
+
+- `core-remote`: `httpmock` で GitHub API をモックする統合テスト（一覧・取得・upload の成功、`422` の再試行と上限、同名の 3 択、パス検査、サイズ上限、許可リスト外の呼び出しの拒否、トークンがエラーや `Debug` に出ないこと）。
+- 画面: `vitest` と jsdom のスモークテスト（モックの API）と、純関数のテスト。
+- CI: デスクトップの CI に `hikae-mobile` のビルドと clippy を足す（Windows・macOS のホスト上のコンパイルまで）。iOS・Android のビルドは、利用者の環境（Xcode / Android Studio）で行う。
+
+### 14.10 未確認・未実装
+
+- iOS・Android の実機での起動、Device Flow、ファイル選択、クリップボード、共有によるダウンロード、PDF の表示。
+- Android のトークン保管（14.6）、`tauri ios init` / `tauri android init` による生成物（`gen/`）の取り扱い。
+- 25 MiB / 60 MiB の上限の妥当性、1 回の追加の所要時間（API の呼び出しが 1 ファイルにつき 1 回増える）。
+- 履歴（過去の版）の絞り込みと、大きなフォルダ（1,000 件超）の表示。
