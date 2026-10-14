@@ -5,16 +5,20 @@
 // 調べ、作れない名前があれば、何も取り込まずに知らせる。検査は Windows でだけ行う。
 //
 // 判定は文字列だけを見る純関数（`find_unsupported_names`）で、OS には依存しない。
-// 見つけるのは次の 4 種類。回避は「元の PC で名前を変えて保存し直す」案内とする
+// 見つけるのは次の 5 種類。回避は「元の PC で名前を変えて保存し直す」案内とする
 // （git 側で該当ファイルだけを飛ばすことはできない。`core.protectNTFS` などの既定値は維持する）。
 //
 // - 予約名: `CON`、`PRN`、`AUX`、`NUL`、`COM1`〜`COM9`、`LPT1`〜`LPT9`（拡張子が付いても同じ。`Aux.txt`）
 // - 末尾が `.` または空白の名前
 // - 使えない文字（`< > : " | ? * \` と制御文字）
 // - 長すぎるパス（プロジェクトのフォルダを含めて 259 文字を超える、または 1 つの名前が 255 文字を超える）
+// - 大文字小文字だけが違う別のパス（`Readme.md` と `README.md`。Windows では同じファイルになる）
+//
+// 同じパスの重複は衝突とみなさない。ほかの理由で既に問題とされたパスは、その理由のまま報告する。
 
 use crate::models::OpsError;
 use core_git::GitRunner;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Windows で扱えるパスの最大の長さ（`MAX_PATH` 260 から終端の NUL を除く）
@@ -35,6 +39,8 @@ pub enum UnsupportedReason {
     InvalidCharacter,
     /// パスまたは名前が長すぎる
     TooLong,
+    /// 大文字小文字だけが違う別のパスがツリーにある（Windows では同じファイルになる）
+    CaseCollision,
 }
 
 /// Windows では作れないパス
@@ -117,14 +123,32 @@ pub fn root_path_len(root: &Path) -> usize {
 
 /// Windows では作れない名前を探す（純関数）。`root_len` はプロジェクトのフォルダのパスの長さ。
 /// 入力の順序を保ち、問題のあるパスだけを返す。
+///
+/// 大文字小文字だけが違う別のパス（入力全体を `to_lowercase()` したものが同じで、文字列が異なるもの）は
+/// `CaseCollision` とする。同じパスの重複は衝突とみなさない。ほかの理由で既に問題とされたパスは、
+/// その理由をそのまま使い、同じパスを 2 回返すことはしない。
 pub fn find_unsupported_names<'a>(
     paths: impl IntoIterator<Item = &'a str>,
     root_len: usize,
 ) -> Vec<UnsupportedName> {
+    let paths: Vec<&str> = paths.into_iter().collect();
+    let keys: Vec<String> = paths.iter().map(|p| p.to_lowercase()).collect();
+    // 小文字にしたパスごとに、異なる元のパスの集まりを持つ（同じパスの重複は 1 つに数える）
+    let mut variants: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (&path, key) in paths.iter().zip(&keys) {
+        variants.entry(key.as_str()).or_default().insert(path);
+    }
     paths
-        .into_iter()
-        .filter_map(|path| {
-            problem_of(path, root_len).map(|reason| UnsupportedName {
+        .iter()
+        .zip(&keys)
+        .filter_map(|(&path, key)| {
+            let reason = problem_of(path, root_len).or_else(|| {
+                let collides = variants
+                    .get(key.as_str())
+                    .is_some_and(|same| same.len() >= 2);
+                collides.then_some(UnsupportedReason::CaseCollision)
+            })?;
+            Some(UnsupportedName {
                 path: path.to_string(),
                 reason,
             })
@@ -291,6 +315,91 @@ mod tests {
         );
         assert!(find_unsupported_names(["a.txt", "b/c.txt"], 10).is_empty());
         assert!(find_unsupported_names(std::iter::empty::<&str>(), 10).is_empty());
+    }
+
+    fn collision(path: &str) -> UnsupportedName {
+        UnsupportedName {
+            path: path.to_string(),
+            reason: UnsupportedReason::CaseCollision,
+        }
+    }
+
+    #[test]
+    fn case_only_differences_of_the_whole_path_collide() {
+        // 両方とも、入力全体を小文字にすると同じになる
+        assert_eq!(
+            find_unsupported_names(["Readme.md", "README.md"], 10),
+            vec![collision("Readme.md"), collision("README.md")]
+        );
+        // フォルダ名だけが違うパスも、ファイル名まで同じなら衝突する
+        assert_eq!(
+            find_unsupported_names(["Docs/a.txt", "docs/a.txt"], 10),
+            vec![collision("Docs/a.txt"), collision("docs/a.txt")]
+        );
+    }
+
+    #[test]
+    fn different_paths_in_different_folders_do_not_collide() {
+        // フォルダ名が違い、ファイル名も違うなら衝突ではない
+        assert!(find_unsupported_names(["Docs/a.txt", "docs/b.txt"], 10).is_empty());
+        // 同じ名前でも、フォルダが違えば別のパス（小文字にしても一致しない）
+        assert!(find_unsupported_names(["a/x.txt", "b/x.txt"], 10).is_empty());
+    }
+
+    #[test]
+    fn identical_repeated_paths_are_not_a_collision() {
+        assert!(find_unsupported_names(["Readme.md", "Readme.md"], 10).is_empty());
+        assert!(find_unsupported_names(["a.txt", "a.txt", "b.txt"], 10).is_empty());
+    }
+
+    #[test]
+    fn existing_reasons_are_kept_and_not_reported_twice() {
+        // 大文字小文字だけが違う「Aux」の組は、どちらも予約名として報告する（衝突の理由で上書きしない）
+        assert_eq!(
+            find_unsupported_names(["Aux.txt", "aux.TXT"], 10),
+            vec![
+                UnsupportedName {
+                    path: "Aux.txt".to_string(),
+                    reason: UnsupportedReason::ReservedName
+                },
+                UnsupportedName {
+                    path: "aux.TXT".to_string(),
+                    reason: UnsupportedReason::ReservedName
+                },
+            ]
+        );
+        // 問題のあるパスと、衝突しているだけのパスが混ざったとき、それぞれの理由で 1 回ずつ返す
+        let paths = ["Readme.md", "AUX.md", "README.md", "aux.md"];
+        assert_eq!(
+            find_unsupported_names(paths, 10),
+            vec![
+                collision("Readme.md"),
+                UnsupportedName {
+                    path: "AUX.md".to_string(),
+                    reason: UnsupportedReason::ReservedName
+                },
+                collision("README.md"),
+                UnsupportedName {
+                    path: "aux.md".to_string(),
+                    reason: UnsupportedReason::ReservedName
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn collisions_keep_the_input_order_and_ignore_other_paths() {
+        let paths = ["z.txt", "README.md", "a.txt", "readme.MD", "Readme.md"];
+        assert_eq!(
+            find_unsupported_names(paths, 10),
+            vec![
+                collision("README.md"),
+                collision("readme.MD"),
+                collision("Readme.md"),
+            ]
+        );
+        // 衝突がなければ何も返さない
+        assert!(find_unsupported_names(["a.txt", "b.txt", "A.TXT2"], 10).is_empty());
     }
 
     #[test]

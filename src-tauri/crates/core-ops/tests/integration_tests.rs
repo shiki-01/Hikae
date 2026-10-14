@@ -1609,8 +1609,9 @@ fn test_31_relocation_without_remote_uses_initial_commit() -> Result<(), Box<dyn
     // 別のプロジェクト（初期の保存が違う）は拒否
     let other = parent.join("other-local");
     ops.init_project(&other, None, &identity)?;
-    common::write_test_file(&other, "a.txt", "a")?;
-    save_commit(&ops, &other, "first")?;
+    // 同じ秒に同じ内容・メモで保存すると同一の OID になるため、内容とメモを変える
+    common::write_test_file(&other, "a.txt", "other")?;
+    save_commit(&ops, &other, "other first")?;
     assert_eq!(
         ops.check_relocation_with(&other, None, Some(&initial))?,
         core_ops::RelocateCheck::DifferentRepository

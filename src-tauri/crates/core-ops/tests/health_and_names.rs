@@ -277,6 +277,40 @@ fn pull_refuses_names_windows_cannot_create_and_changes_nothing() {
 }
 
 #[test]
+fn pull_refuses_case_only_collisions_and_changes_nothing() {
+    let p = pair("e18-case");
+    // Windows では同じファイルになる 2 つのパス（Linux の git では別々に作れる）
+    push_unsupported_names_from_b(&p, &["Readme.md", "README.md", "ok.txt"]);
+
+    let head_before = get_head_commit(&p.a).expect("head");
+    let refs_before = refs_under_hikae(&p.a);
+    write_test_file(&p.a, "draft.txt", "unsaved").expect("write");
+
+    let ops = new_ops().with_windows_name_check(true);
+    let err = ops.pull(&p.a).expect_err("must be refused");
+    let OpsError::UnsupportedFileNames(names) = err else {
+        panic!("expected UnsupportedFileNames, got {err:?}");
+    };
+    // 並び順は git の ls-tree の順に依存させず、パスで並べ替えてから比べる
+    let mut listed: Vec<(&str, UnsupportedReason)> =
+        names.iter().map(|n| (n.path.as_str(), n.reason)).collect();
+    listed.sort_by_key(|(path, _)| *path);
+    assert_eq!(
+        listed,
+        vec![
+            ("README.md", UnsupportedReason::CaseCollision),
+            ("Readme.md", UnsupportedReason::CaseCollision),
+        ]
+    );
+
+    // 何も取り込まず、保存も復元点も作っていない
+    assert_eq!(get_head_commit(&p.a).expect("head"), head_before);
+    assert_eq!(refs_under_hikae(&p.a), refs_before);
+    assert!(p.a.join("draft.txt").exists());
+    assert!(!p.a.join("ok.txt").exists());
+}
+
+#[test]
 fn pull_without_the_check_is_not_affected() {
     let p = pair("e18-off");
     // 検査を無効にした場合は、普通の名前の取り込みがそのまま成功する
