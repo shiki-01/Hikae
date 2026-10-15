@@ -78,7 +78,8 @@ echo "確認コードを取得しました: $code"
 # 落ちていないこと
 adb shell pidof "$PKG" > /dev/null || fail "アプリが終了しています（確認コードの表示後）"
 adb logcat -d > "$OUT/logcat.txt"
-if grep -E "FATAL EXCEPTION|panicked at" "$OUT/logcat.txt"; then
-	fail "ログに致命的なエラーがあります"
+# アプリのクラッシュだけを見る（FATAL EXCEPTION は uiautomator 自身のものも出るため、プロセス名で絞る）
+if grep -E "Process: $PKG|panicked at" "$OUT/logcat.txt"; then
+	fail "アプリのクラッシュまたは panic がログにあります"
 fi
 echo "OK"

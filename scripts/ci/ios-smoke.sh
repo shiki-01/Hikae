@@ -24,7 +24,9 @@ fail() {
 xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
 xcrun simctl install "$UDID" "$APP"
-xcrun simctl launch "$UDID" "$BUNDLE_ID"
+# アプリの標準出力を console.log に取る。HIKAE_SELFTEST を付けると、アプリは起動時に Keychain の読み書きを自己確認して結果を出力する
+SIMCTL_CHILD_HIKAE_SELFTEST=1 xcrun simctl launch --console "$UDID" "$BUNDLE_ID" > "$OUT/console.log" 2>&1 &
+CONSOLE_PID=$!
 
 # 起動直後・20 秒後・40 秒後に生きているか確かめる
 sleep 20
@@ -34,6 +36,12 @@ running || fail "アプリが終了しています（20 秒後）"
 sleep 20
 xcrun simctl io "$UDID" screenshot "$OUT/02-later.png"
 running || fail "アプリが終了しています（40 秒後）"
+
+# Keychain（トークンの保管）の自己確認の結果
+kill "$CONSOLE_PID" 2> /dev/null || true
+echo "--- アプリの標準出力 ---"
+cat "$OUT/console.log" || true
+grep -q "HIKAE_SELFTEST keychain=ok" "$OUT/console.log" || fail "Keychain の自己確認が成功していません（HIKAE_SELFTEST keychain=ok が出力されていません）"
 
 # 診断用: アプリのログ
 xcrun simctl spawn "$UDID" log show --last 2m --style compact \

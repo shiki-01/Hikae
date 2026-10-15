@@ -45,6 +45,10 @@ impl MobileState {
         }
     }
 
+    pub fn tokens(&self) -> Tokens {
+        self.tokens.clone()
+    }
+
     fn cached_user(&self) -> Option<User> {
         self.user.lock().ok().and_then(|g| g.clone())
     }

@@ -63,6 +63,16 @@ pub fn run() {
         .plugin(tauri_plugin_hikae_secure_store::init())
         .setup(|app| {
             app.manage(MobileState::new(app.handle().clone()));
+            // CI のシミュレータ確認用: 環境変数があるときだけ、トークンの保管（Keychain）の読み書きを確かめて結果を標準出力へ出す
+            if std::env::var_os("HIKAE_SELFTEST").is_some() {
+                let tokens = app.state::<MobileState>().tokens();
+                tauri::async_runtime::spawn(async move {
+                    match tokens.selftest().await {
+                        Ok(result) => println!("HIKAE_SELFTEST keychain={result}"),
+                        Err(error) => println!("HIKAE_SELFTEST keychain=FAILED {error}"),
+                    }
+                });
+            }
             // 画面は、このフラグを見て `/m`（モバイルの画面）へ移る（設計書 14.3）
             let window =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())

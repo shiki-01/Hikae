@@ -91,4 +91,32 @@ impl Tokens {
     pub async fn delete(&self) -> Result<(), AuthError> {
         self.run(|t| t.delete_sync()).await
     }
+
+    /// 保管先の読み書きの自己テスト（CI のシミュレータ確認用。環境変数 `HIKAE_SELFTEST` があるときだけ呼ばれる）。
+    /// すでにトークンがあるときは、利用者のトークンに触れないよう何もしない
+    pub async fn selftest(&self) -> Result<String, String> {
+        match self.load().await {
+            Ok(Some(_)) => return Ok("skipped (token exists)".to_string()),
+            Ok(None) => {}
+            Err(e) => return Err(format!("load failed: {e:?}")),
+        }
+        let probe = "selftest-token-0123456789";
+        self.save(AccessToken::new(probe.to_string()))
+            .await
+            .map_err(|e| format!("save failed: {e:?}"))?;
+        let loaded = self
+            .load()
+            .await
+            .map_err(|e| format!("load after save failed: {e:?}"))?;
+        let same = loaded.as_ref().map(|t| t.expose_secret() == probe) == Some(true);
+        self.delete()
+            .await
+            .map_err(|e| format!("delete failed: {e:?}"))?;
+        let gone = matches!(self.load().await, Ok(None));
+        if same && gone {
+            Ok("ok".to_string())
+        } else {
+            Err(format!("mismatch (same={same}, gone={gone})"))
+        }
+    }
 }
