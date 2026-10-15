@@ -461,13 +461,61 @@ impl RemoteClient {
                         "保存先のフォルダが、ファイルになっています".to_string(),
                     ))
                 }
-                // フォルダが無いときは空として扱う（新しく作られる）
-                Err(RemoteError::NotFound) => Vec::new(),
+                // フォルダが無いときは空として扱う（新しく作られる）。
+                // ただし、途中の階層が既存のファイルのときは作れない（tree の作成が失敗する）ので、先に止める
+                Err(RemoteError::NotFound) => {
+                    self.check_ancestors_are_folders(token, owner, name, head, dir)
+                        .await?;
+                    Vec::new()
+                }
                 Err(e) => return Err(e),
             };
             map.insert(dir.clone(), entries);
         }
         Ok(map)
+    }
+
+    /// 存在しないフォルダ `dir` の祖先をたどり、最も近い既存の階層で、`dir` へ向かう次の名前が
+    /// ファイル（フォルダ以外）になっていないかを確かめる。なっていれば `InvalidPath`。
+    async fn check_ancestors_are_folders(
+        &self,
+        token: &AccessToken,
+        owner: &str,
+        name: &str,
+        head: &str,
+        dir: &str,
+    ) -> Result<(), RemoteError> {
+        let segments: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
+        // 近い祖先（親）から根へ向かって調べる。`child` は、その祖先の直下で `dir` へ向かう名前
+        for depth in (0..segments.len()).rev() {
+            let ancestor = segments[..depth].join("/");
+            let child = segments[depth];
+            match self.folder(token, owner, name, &ancestor, head).await {
+                Ok(Folder::Listed(listing)) => {
+                    let wanted = key(child);
+                    let blocked = listing
+                        .entries
+                        .iter()
+                        .any(|e| key(&e.name) == wanted && e.kind != "dir");
+                    return if blocked {
+                        Err(RemoteError::InvalidPath(
+                            "保存先の途中に、同じ名前のファイルがあります".to_string(),
+                        ))
+                    } else {
+                        Ok(())
+                    };
+                }
+                Ok(Folder::File) => {
+                    return Err(RemoteError::InvalidPath(
+                        "保存先の途中が、ファイルになっています".to_string(),
+                    ))
+                }
+                // この祖先も無いときは、さらに上を調べる
+                Err(RemoteError::NotFound) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     /// blob を 1 つ作り、その ID を返す。
