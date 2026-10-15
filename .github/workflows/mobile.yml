@@ -56,11 +56,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
+      # ランナーに入っている Android SDK を使う（android-actions/setup-android は、新しい cmdline-tools で失敗した）
       - name: Android SDK / NDK
         run: |
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;${NDK_VERSION}"
+          SDKMANAGER=$(ls -d "${ANDROID_HOME}"/cmdline-tools/*/bin/sdkmanager | tail -n 1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" "ndk;${NDK_VERSION}"
           echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
