@@ -49,3 +49,6 @@ $RECYCLE.BIN/
 
 # 表示拡張（iframe の UI）のビルド出力（scripts/build-extensions.mjs が vite.ext.config.ts で生成する）
 /src-tauri/app/resources/extensions/*/ui/
+
+# iOS の署名用の秘密情報（scripts/setup-ios-signing.mjs の出力）
+/ios-signing/

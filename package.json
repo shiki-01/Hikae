@@ -10,7 +10,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"test": "vitest run && node --test scripts/build-extensions-cache.test.mjs",
+		"test": "vitest run && node --test scripts/build-extensions-cache.test.mjs scripts/setup-ios-signing.test.mjs",
 		"tauri": "tauri",
 		"tauri:mobile": "node scripts/tauri-mobile.mjs"
 	},

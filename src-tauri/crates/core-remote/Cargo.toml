@@ -20,6 +20,8 @@ core-preview = { path = "../core-preview", default-features = false }
 
 [dev-dependencies]
 httpmock = "0.8"
+# 状態を持つ疑似 GitHub サーバー（tests/fake）。スレッドを 1 本立てて HTTP を受ける
+tiny_http = "0.12"
 tokio = { version = "1", features = ["macros", "rt"] }
 # テスト用の最小の docx・xlsx・pptx を組み立てる（core-preview と同じ版と圧縮方式）
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
