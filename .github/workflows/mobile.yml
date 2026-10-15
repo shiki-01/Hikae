@@ -194,6 +194,18 @@ jobs:
           echo "APP=$APP"
           bash scripts/ci/ios-smoke.sh "$APP" ios-smoke-out
 
+      # iOS（シミュレータ）上で、Keychain（トークンの保管。keyring の apple-native）と、GitHub 通信の部品の
+      # テストを動かす。起動中のシミュレータの中で実行する（ios-sim-runner.sh）。
+      # 保管のテストは Keychain に触れるため、普段は `#[ignore]` になっている
+      - name: Rust tests on the simulator (Keychain, core-github, core-remote)
+        if: env.HAS_IOS_SIGNING != 'true'
+        working-directory: src-tauri
+        env:
+          CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER: ${{ github.workspace }}/scripts/ci/ios-sim-runner.sh
+        run: |
+          cargo test -p core-github -p core-remote --target aarch64-apple-ios-sim
+          cargo test -p core-github --target aarch64-apple-ios-sim -- --ignored test_token_store
+
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_IOS_SIGNING != 'true'
         with:
