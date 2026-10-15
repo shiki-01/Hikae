@@ -2,6 +2,7 @@
 members = [
 	"app",
 	"mobile",
+	"plugins/secure-store",
 	"crates/core-git",
 	"crates/core-safety",
 	"crates/core-ops",

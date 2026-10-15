@@ -8,8 +8,10 @@ mod commands;
 mod dto;
 mod error;
 mod preview_dto;
+mod tokens;
 
 use commands::MobileState;
+use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
 
 fn specta_builder() -> Builder<tauri::Wry> {
@@ -58,8 +60,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(MobileState::new())
+        .plugin(tauri_plugin_hikae_secure_store::init())
         .setup(|app| {
+            app.manage(MobileState::new(app.handle().clone()));
             // 画面は、このフラグを見て `/m`（モバイルの画面）へ移る（設計書 14.3）
             let window =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())

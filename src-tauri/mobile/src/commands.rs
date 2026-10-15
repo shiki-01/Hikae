@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use core_github::{
     is_login_page_url, resolve_client_id, AccessToken, AuthError, DeviceFlowClient,
-    LoginCoordinator, LoginEnd, TokenStore, User, UserClient, LOGIN_PAGE_URL,
+    LoginCoordinator, LoginEnd, User, UserClient, LOGIN_PAGE_URL,
 };
 use core_remote::{preview, PlanItem, RemoteClient, UploadItem, UploadRequest};
 
@@ -15,6 +15,7 @@ use crate::dto::{
     MobileVersion, PlanItemInput, UploadItemInput, UploadPlan, UploadResult,
 };
 use crate::error::MobileError;
+use crate::tokens::Tokens;
 
 /// Hikae の GitHub OAuth App の client_id（公開情報。秘密ではない。デスクトップ版と同じもの）。
 /// Device Flow では client secret を使わないので、ここにもリポジトリにも置かない
@@ -28,14 +29,16 @@ fn client_id() -> Result<String, AuthError> {
 
 /// アプリの状態。トークンは持たない（毎回、保管先から読んで使い終わったら捨てる）
 pub struct MobileState {
+    tokens: Tokens,
     login: Arc<LoginCoordinator>,
     user: Mutex<Option<User>>,
     remote: RemoteClient,
 }
 
 impl MobileState {
-    pub fn new() -> Self {
+    pub fn new(app: tauri::AppHandle) -> Self {
         Self {
+            tokens: Tokens::new(app),
             login: Arc::new(LoginCoordinator::new()),
             user: Mutex::new(None),
             remote: RemoteClient::new(),
@@ -53,26 +56,10 @@ impl MobileState {
     }
 }
 
-impl Default for MobileState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// 保管先（keyring）の読み書きは同期の処理なので、ブロッキング用のスレッドで行う
-async fn blocking<T, F>(f: F) -> Result<T, MobileError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, AuthError> + Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| MobileError::task_failed(&format!("{e:?}")))?
-        .map_err(MobileError::from)
-}
-
-async fn require_token() -> Result<AccessToken, MobileError> {
-    blocking(TokenStore::load)
+async fn require_token(state: &MobileState) -> Result<AccessToken, MobileError> {
+    state
+        .tokens
+        .load()
         .await?
         .ok_or_else(|| MobileError::from(AuthError::Unauthorized))
 }
@@ -108,7 +95,7 @@ fn clamp_u32(v: u64) -> u32 {
 pub async fn mobile_account(
     state: tauri::State<'_, MobileState>,
 ) -> Result<Option<MobileAccount>, MobileError> {
-    let Some(token) = blocking(TokenStore::load).await? else {
+    let Some(token) = state.tokens.load().await? else {
         return Ok(None);
     };
     match current_user(&state, &token).await {
@@ -167,7 +154,7 @@ pub async fn mobile_wait_login(
         LoginEnd::Token(token) => {
             // トークンは端末の安全な保管先にだけ保存する
             let to_save = token.clone();
-            blocking(move || TokenStore::save(&to_save)).await?;
+            state.tokens.save(to_save).await?;
             // ユーザー情報の取得に失敗してもログイン自体は成功（次回の mobile_account で再取得する）
             match UserClient::new().fetch_user(&token).await {
                 Ok(user) => state.set_user(Some(user)),
@@ -192,7 +179,7 @@ pub fn mobile_cancel_login(state: tauri::State<'_, MobileState>) {
 #[specta::specta]
 pub async fn mobile_logout(state: tauri::State<'_, MobileState>) -> Result<(), MobileError> {
     state.login.cancel();
-    blocking(TokenStore::delete).await?;
+    state.tokens.delete().await?;
     state.set_user(None);
     Ok(())
 }
@@ -204,7 +191,7 @@ pub async fn mobile_logout(state: tauri::State<'_, MobileState>) -> Result<(), M
 pub async fn mobile_list_repos(
     state: tauri::State<'_, MobileState>,
 ) -> Result<Vec<MobileRepo>, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let repos = state.remote.list_repos(&token).await?;
     Ok(repos.into_iter().map(MobileRepo::from).collect())
 }
@@ -219,7 +206,7 @@ pub async fn mobile_list_dir(
     path: String,
     git_ref: Option<String>,
 ) -> Result<DirListing, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let listing = state
         .remote
         .list_dir(&token, &owner, &name, &path, git_ref.as_deref())
@@ -268,7 +255,7 @@ pub async fn mobile_preview(
     sha: String,
     git_ref: Option<String>,
 ) -> Result<MobilePreview, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let bytes = match read_file_bytes(
         &state,
         &token,
@@ -303,7 +290,7 @@ pub async fn mobile_download(
     sha: String,
     git_ref: Option<String>,
 ) -> Result<MobileDownload, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let bytes = read_file_bytes(
         &state,
         &token,
@@ -330,7 +317,7 @@ pub async fn mobile_file_history(
     name: String,
     path: String,
 ) -> Result<Vec<MobileVersion>, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let versions = state
         .remote
         .file_history(&token, &owner, &name, &path)
@@ -348,7 +335,7 @@ pub async fn mobile_plan_upload(
     name: String,
     items: Vec<PlanItemInput>,
 ) -> Result<UploadPlan, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let items: Vec<PlanItem> = items
         .into_iter()
         .map(|i| PlanItem {
@@ -373,7 +360,7 @@ pub async fn mobile_upload(
     message: Option<String>,
     items: Vec<UploadItemInput>,
 ) -> Result<UploadResult, MobileError> {
-    let token = require_token().await?;
+    let token = require_token(&state).await?;
     let user = current_user(&state, &token).await?;
     let mut upload_items = Vec::with_capacity(items.len());
     for item in items {

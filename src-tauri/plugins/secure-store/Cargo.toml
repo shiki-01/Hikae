@@ -1,0 +1,22 @@
+[package]
+name = "tauri-plugin-hikae-secure-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Android Keystore で包んだ小さな秘密情報の保管（モバイル版のトークン用）。Android 以外では何もしない"
+# tauri-plugin の仕組み（Android プロジェクトの登録）に必要
+links = "tauri-plugin-hikae-secure-store"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[lints]
+workspace = true

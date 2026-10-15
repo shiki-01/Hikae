@@ -126,6 +126,9 @@ impl DeviceFlowClient {
         let start = std::time::Instant::now();
         let expires = Duration::from_secs(device.expires_in);
         let mut interval = device.interval;
+        // 通信の失敗が続いた回数（モバイルでは、確認ページを開いている間にアプリが中断され、
+        // 戻った直後の 1 回が失敗することがある。一時的な失敗は待って再試行する）
+        let mut network_failures: u32 = 0;
 
         loop {
             // キャンセル確認
@@ -141,7 +144,21 @@ impl DeviceFlowClient {
             }
 
             // ポーリング
-            let token_result = self.request_token(device.device_code()).await?;
+            let token_result = match self.request_token(device.device_code()).await {
+                Ok(result) => {
+                    network_failures = 0;
+                    result
+                }
+                Err(AuthError::NetworkUnavailable) => {
+                    network_failures += 1;
+                    if network_failures > MAX_NETWORK_FAILURES {
+                        return Err(AuthError::NetworkUnavailable);
+                    }
+                    wait_or_cancel(interval, cancel_token).await?;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
 
             match token_result {
                 TokenPollResult::Success(token) => return Ok(token),
@@ -173,7 +190,7 @@ impl DeviceFlowClient {
             .form(&params)
             .send()
             .await
-            .map_err(|_| AuthError::FailedToRequestToken)?;
+            .map_err(|_| AuthError::NetworkUnavailable)?;
 
         // GitHub の Device Flow は 200 OK で error フィールドを返すことに注意
         let body = response
@@ -228,6 +245,9 @@ async fn wait_or_cancel(secs: u64, cancel: Option<&CancellationToken>) -> Result
         }
     }
 }
+
+/// 通信の失敗が続いても再試行する回数の上限（これを超えたら `NetworkUnavailable` で止める）
+const MAX_NETWORK_FAILURES: u32 = 12;
 
 /// ポーリングの結果
 enum TokenPollResult {
@@ -366,6 +386,29 @@ mod tests {
 
         assert_eq!(token.expose_secret(), "test_access_token");
         mock.assert();
+    }
+
+    /// 通信の失敗が続くときは、一定回数だけ再試行してから `NetworkUnavailable` で止まる
+    #[tokio::test]
+    async fn test_poll_for_token_gives_up_after_repeated_network_failures() {
+        // 何も待ち受けていないポート
+        let client = DeviceFlowClient::with_endpoints(
+            "test_client_id".to_string(),
+            "http://127.0.0.1:1/login/device/code".to_string(),
+            "http://127.0.0.1:1/login/oauth/access_token".to_string(),
+        );
+        let device = DeviceCode::new(
+            "test_device_code".to_string(),
+            "ABC-1234".to_string(),
+            "https://github.com/login/device".to_string(),
+            60,
+            0, // 待機なし
+        );
+        let err = client
+            .poll_for_token(&device, None)
+            .await
+            .expect_err("should fail");
+        assert!(matches!(err, AuthError::NetworkUnavailable));
     }
 
     /// GitHub は `Accept: application/json` が無いと、トークン応答を form 形式
