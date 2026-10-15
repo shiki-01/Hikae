@@ -126,15 +126,18 @@ jobs:
         run: brew install xcodegen
 
       # Xcode のプロジェクトの生成は署名なしでも行い、設定（アイコン・Info.plist）の誤りを早く見つける
+      # チーム ID が空だと init が失敗するため、シークレットが無いときは仮の値を入れる（署名なしの確認用）
       - name: iOS プロジェクトの生成
         env:
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM || 'AAAAAAAAAA' }}
         run: pnpm tauri:mobile ios init --ci
 
       # 実験: 署名なしのシミュレータ向けビルド（通るか確かめる。失敗しても全体は止めない）
       - name: Simulator build (experimental)
         if: env.HAS_IOS_SIGNING != 'true'
         continue-on-error: true
+        env:
+          APPLE_DEVELOPMENT_TEAM: AAAAAAAAAA
         run: pnpm tauri:mobile ios build --debug --target aarch64-sim --ci
 
       # ビルド番号（CFBundleVersion）は実行番号。TestFlight は同じ版の中でビルド番号が増え続ける必要がある。
