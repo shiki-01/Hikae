@@ -10,10 +10,26 @@ OUT="${2:-smoke-out}"
 PKG=com.shiki01.hikae.mobile
 mkdir -p "$OUT"
 
-fail() {
-	echo "::error::$1"
+# 失敗したときに、原因が job のログだけで分かるよう、画面の文字とログの抜粋を出す
+# （artifact は取得できない環境もあるため）
+diagnose() {
 	adb logcat -d > "$OUT/logcat.txt" || true
 	adb exec-out screencap -p > "$OUT/failure.png" || true
+	dump_ui failure
+	echo "::group::画面の文字（uiautomator）"
+	grep -ohE '(text|content-desc)="[^"]+"' "$OUT"/failure.xml 2>/dev/null | sort -u | head -60 || true
+	echo "::endgroup::"
+	echo "::group::プロセス"
+	adb shell pidof "$PKG" || echo "（プロセスなし）"
+	echo "::endgroup::"
+	echo "::group::logcat（アプリ・WebView・Rust の抜粋）"
+	grep -iE "chromium|tauri|RustStdoutStderr|hikae|AndroidRuntime|WebView|console|panicked|FATAL" "$OUT/logcat.txt" | tail -n 150 || true
+	echo "::endgroup::"
+}
+
+fail() {
+	echo "::error::$1"
+	diagnose
 	exit 1
 }
 

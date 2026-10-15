@@ -13,6 +13,14 @@ UDID=$(xcrun simctl list devices available | grep -E "iPhone" | head -n 1 | sed 
 [ -n "$UDID" ] || { echo "::error::iPhone のシミュレータが見つかりません"; exit 1; }
 echo "シミュレータ: $UDID"
 
+# 失敗したときに、原因が job のログだけで分かるよう、アプリのログを出す（artifact は取得できない環境もあるため）
+fail() {
+	echo "::error::$1"
+	xcrun simctl spawn "$UDID" log show --last 3m --style compact \
+		--predicate 'process == "hikae-mobile" OR process == "Hikae"' 2>&1 | tail -n 100 || true
+	exit 1
+}
+
 xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
 xcrun simctl install "$UDID" "$APP"
@@ -22,10 +30,10 @@ xcrun simctl launch "$UDID" "$BUNDLE_ID"
 sleep 20
 xcrun simctl io "$UDID" screenshot "$OUT/01-start.png"
 running() { xcrun simctl spawn "$UDID" launchctl list | grep -q "UIKitApplication:$BUNDLE_ID"; }
-running || { echo "::error::アプリが終了しています（20 秒後）"; exit 1; }
+running || fail "アプリが終了しています（20 秒後）"
 sleep 20
 xcrun simctl io "$UDID" screenshot "$OUT/02-later.png"
-running || { echo "::error::アプリが終了しています（40 秒後）"; exit 1; }
+running || fail "アプリが終了しています（40 秒後）"
 
 # 診断用: アプリのログ
 xcrun simctl spawn "$UDID" log show --last 2m --style compact \
@@ -35,4 +43,6 @@ if ls ~/Library/Logs/DiagnosticReports/*ikae* > /dev/null 2>&1; then
 	cp ~/Library/Logs/DiagnosticReports/*ikae* "$OUT/" || true
 	exit 1
 fi
+echo "--- アプリのログ（末尾） ---"
+tail -n 40 "$OUT/app.log" || true
 echo "OK"

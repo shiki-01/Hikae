@@ -4,7 +4,7 @@
 # 2. APK を入れて起動する確認（android-smoke.sh）
 set -euo pipefail
 
-APK=$(find apk -name '*.apk' | head -n 1)
+APK=$(find src-tauri/mobile/gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)
 test -n "$APK" || { echo "::error::APK が見つかりません"; exit 1; }
 echo "APK: $APK"
 
