@@ -4,7 +4,7 @@ pub mod api;
 pub mod credential;
 pub mod device_flow;
 pub mod error;
-mod http;
+pub mod http;
 pub mod login;
 pub mod store;
 pub mod token;

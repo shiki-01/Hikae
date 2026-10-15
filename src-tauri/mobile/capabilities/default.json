@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "メインウィンドウの基本権限（モバイル版。opener と通信の権限は画面に与えない）",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

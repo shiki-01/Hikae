@@ -1,11 +1,13 @@
 [workspace]
 members = [
 	"app",
+	"mobile",
 	"crates/core-git",
 	"crates/core-safety",
 	"crates/core-ops",
 	"crates/core-watch",
 	"crates/core-github",
+	"crates/core-remote",
 	"crates/core-preview",
 	"crates/core-llm",
 	"crates/core-store",
@@ -31,6 +33,7 @@ core-safety = { path = "crates/core-safety" }
 core-ops = { path = "crates/core-ops" }
 core-watch = { path = "crates/core-watch" }
 core-github = { path = "crates/core-github" }
+core-remote = { path = "crates/core-remote" }
 core-preview = { path = "crates/core-preview" }
 core-llm = { path = "crates/core-llm" }
 core-store = { path = "crates/core-store" }

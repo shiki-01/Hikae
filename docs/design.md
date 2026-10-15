@@ -1459,7 +1459,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 
 - 画面は同じ SvelteKit の SPA に同居させる。モバイルのアプリは起動時に `window.__HIKAE_MOBILE__ = true` を初期化スクリプトで設定し、ルートがこれを見て `/m` へ移る。ブラウザ単体（`pnpm dev`）では `/m` を直接開き、モックの API で動かす。
 - 依存方向: `core-remote` は `core-git` / `core-ops` / `core-safety` に依存しない。デスクトップの crate は `core-remote` に依存しない。
-- Tauri CLI が 2 つの `tauri.conf.json`（`app/` と `mobile/`）を取り違えないよう、モバイルのコマンドは環境変数 `TAURI_APP_PATH=src-tauri/mobile` を付けて実行する（`package.json` の `tauri:mobile` スクリプト）。
+- Tauri CLI が 2 つの `tauri.conf.json`（`app/` と `mobile/`）を取り違えないよう、モバイルのコマンドは環境変数 `TAURI_APP_PATH=src-tauri/mobile` を付けて実行する（確認済み。付けないとデスクトップ版が選ばれる）（`package.json` の `tauri:mobile` スクリプト（`scripts/tauri-mobile.mjs`））。
 
 ### 14.4 閲覧（読み取り）
 

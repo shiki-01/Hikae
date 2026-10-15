@@ -7,7 +7,7 @@ use reqwest::{Client, RequestBuilder, StatusCode};
 use std::time::Duration;
 
 /// 応答が止まったままにならないよう、接続と全体にタイムアウトを付けたクライアントを作る。
-pub(crate) fn client() -> Client {
+pub fn client() -> Client {
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
@@ -16,12 +16,12 @@ pub(crate) fn client() -> Client {
 }
 
 /// 送信前の失敗（接続できない、DNS、タイムアウトなど）。本文や URL は含めない。
-pub(crate) fn classify_send_error(_e: reqwest::Error) -> AuthError {
+pub fn classify_send_error(_e: reqwest::Error) -> AuthError {
     AuthError::NetworkUnavailable
 }
 
 /// 成功以外の状態コードを分類する。`rate_limit_remaining` は `x-ratelimit-remaining` ヘッダの値。
-pub(crate) fn classify_status(status: StatusCode, rate_limit_remaining: Option<&str>) -> AuthError {
+pub fn classify_status(status: StatusCode, rate_limit_remaining: Option<&str>) -> AuthError {
     match status.as_u16() {
         401 => AuthError::Unauthorized,
         403 if rate_limit_remaining == Some("0") => AuthError::RateLimited,
@@ -33,7 +33,7 @@ pub(crate) fn classify_status(status: StatusCode, rate_limit_remaining: Option<&
 }
 
 /// 応答ヘッダから `x-ratelimit-remaining` を読む
-pub(crate) fn rate_limit_remaining(response: &reqwest::Response) -> Option<String> {
+pub fn rate_limit_remaining(response: &reqwest::Response) -> Option<String> {
     response
         .headers()
         .get("x-ratelimit-remaining")
@@ -43,7 +43,7 @@ pub(crate) fn rate_limit_remaining(response: &reqwest::Response) -> Option<Strin
 
 /// GitHub API 用の共通ヘッダ（User-Agent、Accept、Bearer 認証）を付ける。
 /// 認証ヘッダは sensitive にして、デバッグ出力にも値が出ないようにする。
-pub(crate) fn with_github_headers(builder: RequestBuilder, token: &AccessToken) -> RequestBuilder {
+pub fn with_github_headers(builder: RequestBuilder, token: &AccessToken) -> RequestBuilder {
     let mut builder = builder
         .header("User-Agent", "Hikae")
         .header("Accept", "application/vnd.github+json");
