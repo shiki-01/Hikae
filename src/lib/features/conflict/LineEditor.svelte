@@ -89,7 +89,7 @@
 							? t('conflict.line_empty')
 							: row.hunk.theirs}</pre>
 					<div class="flex flex-direction:column gap:2 min-width:0">
-						<div class="flex flex-wrap:wrap gap:1">
+						<div class="flex flex-flow:row|wrap gap:1">
 							<Button
 								size="sm"
 								variant={isPicked(pick, 'mine') ? 'primary' : 'secondary'}

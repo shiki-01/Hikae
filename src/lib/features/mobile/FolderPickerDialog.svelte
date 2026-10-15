@@ -41,7 +41,7 @@
 	<div class="flex flex-direction:column gap:3">
 		<nav
 			aria-label={t('mobile.files.breadcrumb')}
-			class="flex flex-wrap:wrap align-items:center gap:1 type-small"
+			class="flex flex-flow:row|wrap align-items:center gap:1 type-small"
 		>
 			<button
 				type="button"

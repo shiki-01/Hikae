@@ -96,7 +96,7 @@
 		<p class="m:0 type-small fg:state-danger">{t('ai.download_failed')}</p>
 	{/if}
 
-	<div class="flex justify-content:flex-end gap:2 flex-wrap:wrap">
+	<div class="flex justify-content:flex-end gap:2 flex-flow:row|wrap">
 		{#if buttons.cancel}
 			<Button variant="secondary" size="sm" onclick={() => onaction('cancel')}>
 				{t('ai.cancel')}

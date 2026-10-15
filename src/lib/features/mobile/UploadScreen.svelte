@@ -312,7 +312,7 @@
 			>
 		</div>
 
-		<div class="flex flex-wrap:wrap gap:2 p:4 bb:1px|solid|border">
+		<div class="flex flex-flow:row|wrap gap:2 p:4 bb:1px|solid|border">
 			<input
 				bind:this={fileInput}
 				type="file"

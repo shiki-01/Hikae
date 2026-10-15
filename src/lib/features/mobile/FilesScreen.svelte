@@ -87,7 +87,7 @@
 
 	<nav
 		aria-label={t('mobile.files.breadcrumb')}
-		class="flex flex-wrap:wrap align-items:center gap:1 px:3 py:1 bb:1px|solid|border type-small"
+		class="flex flex-flow:row|wrap align-items:center gap:1 px:3 py:1 bb:1px|solid|border type-small"
 	>
 		<button
 			type="button"

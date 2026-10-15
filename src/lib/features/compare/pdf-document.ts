@@ -3,6 +3,8 @@
 // 理由: 表示拡張は sandbox="allow-scripts"（opaque origin）で、Chromium は opaque origin の文書から作る
 // blob URL のワーカーを拒否する（実機相当の headless Chrome で確かめた）。pdf.js は `globalThis.pdfjsWorker` が
 // あれば、ワーカーを作らずにその処理を使う。データはホストから postMessage で受け取るため、ネットワークは使わない。
+// pdf.js より先に評価されるよう、最初に import する（古い WebView に Map の getOrInsertComputed を補う）
+import '#lib/utils/upsert-polyfill.js';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs';
 

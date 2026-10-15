@@ -24,7 +24,7 @@
 </script>
 
 <div
-	class="flex flex-wrap:wrap gap:3 p:3 flex:1 min-h:0 overflow:auto bg:bg"
+	class="flex flex-flow:row|wrap gap:3 p:3 flex:1 min-h:0 overflow:auto bg:bg"
 	data-testid="side-by-side"
 >
 	{#each columns as column, index (index)}

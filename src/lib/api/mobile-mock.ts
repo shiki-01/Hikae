@@ -115,15 +115,29 @@ function daysAgo(days: number): string {
 	return new Date(Date.now() - days * DAY).toISOString();
 }
 
-// 最小の PDF（pdf.js が読めれば十分。xref が無い簡素なもの）
-const MINI_PDF = [
-	'%PDF-1.4',
-	'1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj',
-	'2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj',
-	'3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Resources<<>>>>endobj',
-	'trailer<</Root 1 0 R>>',
-	'%%EOF'
-].join('\n');
+// 最小の PDF（1 ページに英字を 1 行描く）。xref のオフセットは組み立てながら数える（pdf.js が壊れた PDF と見なさないように）
+function buildMiniPdf(): string {
+	const stream = 'BT /F1 24 Tf 40 100 Td (Hikae PDF sample) Tj ET';
+	const objects = [
+		'<< /Type /Catalog /Pages 2 0 R >>',
+		'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+		'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+		`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+	];
+	let out = '%PDF-1.4\n';
+	const offsets: number[] = [];
+	objects.forEach((body, i) => {
+		offsets.push(out.length);
+		out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+	});
+	const xref = out.length;
+	out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+	for (const offset of offsets) out += `${String(offset).padStart(10, '0')} 00000 n \n`;
+	out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+	return out;
+}
+const MINI_PDF = buildMiniPdf();
 
 // 1x1 の PNG
 const MINI_PNG =

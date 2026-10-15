@@ -355,7 +355,7 @@
 						/>
 					</div>
 					{#if current.aiModelSource === 'custom-gguf'}
-						<div class="flex align-items:flex-end gap:3 flex-wrap:wrap">
+						<div class="flex align-items:flex-end gap:3 flex-flow:row|wrap">
 							<div class="flex-grow:1 min-w:0">
 								<TextField
 									label={t('ai.custom_path')}
@@ -390,7 +390,7 @@
 						oninput={(value) => (urlDraft = value)}
 						onblur={saveUrl}
 					/>
-					<div class="flex align-items:center gap:3 flex-wrap:wrap">
+					<div class="flex align-items:center gap:3 flex-flow:row|wrap">
 						<Button
 							variant="secondary"
 							size="sm"

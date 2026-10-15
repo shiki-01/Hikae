@@ -55,7 +55,7 @@
 						})}</span
 					>
 					<span class="type-body">{version.message}</span>
-					<div class="flex flex-wrap:wrap gap:2">
+					<div class="flex flex-flow:row|wrap gap:2">
 						<Button variant="secondary" class="min-h:44px" onclick={() => onview(version)}
 							>{t('mobile.file.view_version')}</Button
 						>
