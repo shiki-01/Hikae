@@ -1550,9 +1550,10 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 
 | 範囲 | 状況 |
 | --- | --- |
-| `core-remote`（一覧・閲覧・取得・過去の版・アップロード・許可リスト・パス検査・`preview`） | 実装済み。`httpmock` のテストで確認（fast-forward のみ・force を送らない・422 の再試行と上限・同名の 3 択を含む）。実際の GitHub では未確認 |
-| `hikae-mobile`（コマンド、DTO、エラー、ログイン、`bindings-mobile.ts` の生成） | 実装済み。デスクトップのホスト上で `cargo clippy` まで確認。iOS・Android のビルドは未確認 |
-| 画面 `/m`（M0〜M5） | 実装済み。`vitest` とモック API のスモークテストで確認。実機の見た目は未確認 |
-| トークンの保管 | iOS は keyring の `apple-native`（実機で未確認）。Android は Android Keystore（AES-256-GCM）で包んだ保管のプラグイン `tauri-plugin-hikae-secure-store`（`src-tauri/plugins/secure-store`）を実装し、APK のビルドまでは CI で確認。実機で未確認 |
+| `core-remote`（一覧・閲覧・取得・過去の版・アップロード・許可リスト・パス検査・`preview`） | 実装済み。`httpmock` のテストで確認（fast-forward のみ・force を送らない・422 の再試行と上限・同名の 3 択を含む）。GitHub を模した状態を持つサーバー（`fake_github`）でも確認（閲覧・アップロード・ファイルの下へのアップロードの拒否）。実際の GitHub は `examples/live_smoke.rs` で手動確認できる |
+| `hikae-mobile`（コマンド、DTO、エラー、ログイン、`bindings-mobile.ts` の生成） | 実装済み。`cargo clippy` まで確認。iOS・Android のビルドと起動は CI で確認（下の行） |
+| 画面 `/m`（M0〜M5） | 実装済み。`vitest` とモック API の e2e（Playwright。ログイン〜アップロード、各種プレビュー）で確認。実機の見た目は未確認 |
+| トークンの保管 | iOS は keyring の `apple-native`（実機で未確認）。Android は Android Keystore（AES-256-GCM）で包んだ保管のプラグイン `tauri-plugin-hikae-secure-store`（`src-tauri/plugins/secure-store`）を実装し、APK のビルドと、エミュレータ上の 7 件のテストは CI で確認。実機で未確認。iOS の Keychain は署名なしのシミュレータでは確認できず、CI は情報として出力するのみ（署名つきの実機で確認する） |
 | `tauri ios init` / `tauri android init`（`gen/` の生成） | GitHub Actions（`.github/workflows/mobile.yml`）が毎回生成する。`gen/` はコミットしない。Android の APK（デバッグ署名）と、iOS の署名なしシミュレータ向けビルドは CI で成功を確認（2026-10-15）。署名して TestFlight へ出す経路は、シークレットが必要で未確認（`docs/notes/mobile-testflight.md`） |
-| 画面の既知の問題 | 14.10 のほか、Master CSS の `flex-wrap:wrap` が生成されない可能性（既存コードと同じ書き方）、ホーム画面のセーフエリアは `env(safe-area-inset-*)` を入れたが実機未確認 |
+| 画面の既知の問題 | 14.10 のほか、ホーム画面のセーフエリアは `env(safe-area-inset-*)` を入れたが実機未確認。Master CSS rc は `flex-wrap:wrap` を生成しないため `flex-flow:row\|wrap` を使う。pdf.js 6.3.289 は `Map.getOrInsertComputed` が必要で、ポリフィルを入れている |
+| CI で確認した範囲 | Android エミュレータ（起動・ログイン画面・GitHub への HTTPS 接続・クラッシュなし）、iOS シミュレータ（署名なしビルド・起動・crate のテスト）。Android の TLS は `webpki-roots` を使う |
