@@ -26,8 +26,11 @@ function nodes() {
 }
 
 if (command === 'center') {
-	for (const node of nodes()) {
-		if (!(node.text.includes(pattern) || node.desc.includes(pattern))) continue;
+	// 文字が完全に一致する要素を優先する（説明文の中に同じ文字列が含まれることがあるため）。無ければ部分一致
+	const all = nodes();
+	const exact = all.filter((n) => n.text === pattern || n.desc === pattern);
+	const partial = all.filter((n) => n.text.includes(pattern) || n.desc.includes(pattern));
+	for (const node of [...exact, ...partial]) {
 		const b = node.bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
 		if (!b) continue;
 		const [x1, y1, x2, y2] = b.slice(1).map(Number);
