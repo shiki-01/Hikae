@@ -78,11 +78,19 @@ jobs:
       - name: Android プロジェクトの生成
         run: pnpm tauri:mobile android init --ci
 
-      # versionCode は実行番号（Google Play に出すときに増え続ける必要がある）
+      # versionCode は実行番号（Google Play に出すときに増え続ける必要がある）。
+      # Google の Maven（dl.google.com）が一時的に 502 を返すことがあるため、最大 3 回まで試す
       - name: Build APK (debug, arm64)
-        run: >
-          pnpm tauri:mobile android build --debug --apk --target aarch64 --ci
-          --config '{"bundle":{"android":{"versionCode":${{ github.run_number }}}}}'
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm tauri:mobile android build --debug --apk --target aarch64 --ci \
+              --config '{"bundle":{"android":{"versionCode":${{ github.run_number }}}}}'; then
+              exit 0
+            fi
+            echo "ビルドに失敗しました（${attempt} 回目）。再試行します"
+            sleep 20
+          done
+          exit 1
 
       - uses: actions/upload-artifact@v4
         with:
@@ -132,10 +140,9 @@ jobs:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM || 'AAAAAAAAAA' }}
         run: pnpm tauri:mobile ios init --ci
 
-      # 実験: 署名なしのシミュレータ向けビルド（通るか確かめる。失敗しても全体は止めない）
-      - name: Simulator build (experimental)
+      # 署名なしのシミュレータ向けビルド（Xcode のプロジェクト・アイコン・Info.plist の確認）
+      - name: Simulator build (unsigned)
         if: env.HAS_IOS_SIGNING != 'true'
-        continue-on-error: true
         env:
           APPLE_DEVELOPMENT_TEAM: AAAAAAAAAA
         run: pnpm tauri:mobile ios build --debug --target aarch64-sim --ci
