@@ -123,14 +123,19 @@ jobs:
         run: cargo build -p hikae-mobile --lib --target aarch64-apple-ios
 
       - name: Install XcodeGen
-        if: env.HAS_IOS_SIGNING == 'true'
         run: brew install xcodegen
 
+      # Xcode のプロジェクトの生成は署名なしでも行い、設定（アイコン・Info.plist）の誤りを早く見つける
       - name: iOS プロジェクトの生成
-        if: env.HAS_IOS_SIGNING == 'true'
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: pnpm tauri:mobile ios init --ci
+
+      # 実験: 署名なしのシミュレータ向けビルド（通るか確かめる。失敗しても全体は止めない）
+      - name: Simulator build (experimental)
+        if: env.HAS_IOS_SIGNING != 'true'
+        continue-on-error: true
+        run: pnpm tauri:mobile ios build --debug --target aarch64-sim --ci
 
       # ビルド番号（CFBundleVersion）は実行番号。TestFlight は同じ版の中でビルド番号が増え続ける必要がある。
       # 証明書とプロビジョニングプロファイルは tauri CLI が取り込む
