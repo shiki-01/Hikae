@@ -36,7 +36,7 @@ Claude 側ではできない作業（Apple のアカウントでの操作）。�
 | `APPLE_API_ISSUER`          | API キーの Issuer ID                           |
 | `APPLE_API_KEY_P8`          | API キーの `.p8`（base64）                     |
 
-先頭の 4 つが揃うと、署名して ipa を作る（artifact に出る）。残りの 3 つも揃うと、TestFlight へアップロードする。**何も登録しなくても、ワークフローは動く**（iOS は Rust のコンパイル確認だけを行い、Android は APK を作る）。
+先頭の 4 つが揃うと、署名して ipa を作る（artifact に出る）。**署名して ipa を作る手順と TestFlight へのアップロードは、シークレットが無いため CI では一度も実行していない**（署名なしの iOS ビルドと Android の APK は CI で成功を確認済み）。最初の実行で失敗したら、Actions のログを見て直す（第 5 章）。残りの 3 つも揃うと、TestFlight へアップロードする。**何も登録しなくても、ワークフローは動く**（iOS は Rust のコンパイル確認だけを行い、Android は APK を作る）。
 
 ## 2. ビルドと配布の流れ
 

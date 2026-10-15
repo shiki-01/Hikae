@@ -8,7 +8,7 @@ name: Mobile
 
 on:
   push:
-    branches: [main, 'claude/**']
+    branches: [main]
     paths:
       - '.github/workflows/mobile.yml'
       - 'src-tauri/mobile/**'
