@@ -67,10 +67,15 @@ pub fn run() {
             if std::env::var_os("HIKAE_SELFTEST").is_some() {
                 let tokens = app.state::<MobileState>().tokens();
                 tauri::async_runtime::spawn(async move {
-                    match tokens.selftest().await {
-                        Ok(result) => println!("HIKAE_SELFTEST keychain={result}"),
-                        Err(error) => println!("HIKAE_SELFTEST keychain=FAILED {error}"),
-                    }
+                    let line = match tokens.selftest().await {
+                        Ok(result) => format!("HIKAE_SELFTEST keychain={result}"),
+                        Err(error) => format!("HIKAE_SELFTEST keychain=FAILED {error}"),
+                    };
+                    println!("{line}");
+                    // 標準出力が取れない環境のために、一時フォルダのファイルにも書く（シミュレータのコンテナから読む）
+                    let _ = std::fs::write(std::env::temp_dir().join("hikae-selftest.txt"), line);
+                });
+            }
                 });
             }
             // 画面は、このフラグを見て `/m`（モバイルの画面）へ移る（設計書 14.3）

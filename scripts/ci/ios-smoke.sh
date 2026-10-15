@@ -37,11 +37,20 @@ sleep 20
 xcrun simctl io "$UDID" screenshot "$OUT/02-later.png"
 running || fail "アプリが終了しています（40 秒後）"
 
-# Keychain（トークンの保管）の自己確認の結果
+# Keychain（トークンの保管）の自己確認の結果。アプリが一時フォルダに書くファイルを、コンテナから読む（最大 30 秒待つ）
 kill "$CONSOLE_PID" 2> /dev/null || true
+CONTAINER=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data)
+RESULT_FILE="$CONTAINER/tmp/hikae-selftest.txt"
+for _ in $(seq 1 15); do
+	[ -f "$RESULT_FILE" ] && break
+	sleep 2
+done
 echo "--- アプリの標準出力 ---"
 cat "$OUT/console.log" || true
-grep -q "HIKAE_SELFTEST keychain=ok" "$OUT/console.log" || fail "Keychain の自己確認が成功していません（HIKAE_SELFTEST keychain=ok が出力されていません）"
+echo "--- 自己確認の結果（$RESULT_FILE） ---"
+cat "$RESULT_FILE" 2> /dev/null || echo "（ファイルなし）"
+echo
+grep -q "HIKAE_SELFTEST keychain=ok" "$RESULT_FILE" 2> /dev/null || fail "Keychain の自己確認が成功していません（HIKAE_SELFTEST keychain=ok がありません）"
 
 # 診断用: アプリのログ
 xcrun simctl spawn "$UDID" log show --last 2m --style compact \
