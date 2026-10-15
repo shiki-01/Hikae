@@ -2243,6 +2243,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hikae-mobile"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "core-github",
+ "core-remote",
+ "serde",
+ "specta",
+ "specta-typescript",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tauri-specta",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

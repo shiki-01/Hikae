@@ -1,6 +1,9 @@
 <script lang="ts">
 	import '#lib/styles/tokens.css';
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import { api } from '#lib/api/index.js';
 	import { t } from '#lib/i18n/index.js';
@@ -20,7 +23,18 @@
 
 	useBackendEvents(queryClient);
 
+	// モバイル版（docs/design.md 14.3）。アプリは起動時に window.__HIKAE_MOBILE__ を true にする。
+	// その場合、デスクトップの画面は使わず /m へ移る。ブラウザ単体（pnpm dev）では /m を直接開ける
+	const mobileApp = typeof window !== 'undefined' && window.__HIKAE_MOBILE__ === true;
+	const onMobileRoute = $derived(page.url.pathname === '/m' || page.url.pathname.startsWith('/m/'));
+
+	$effect(() => {
+		if (mobileApp && !onMobileRoute) void goto(resolve('/m'), { replaceState: true });
+	});
+
 	onMount(() => {
+		// モバイル版では、デスクトップの起動時の通知（作業フォルダの操作）は行わない
+		if (mobileApp) return;
 		// 起動時に自動で閉じた、途中で止まった操作は、画面の準備ができてから一度だけ知らせる（設計書 6.3）
 		void api
 			.takeClosedInterruptedNotices()
@@ -37,10 +51,15 @@
 </script>
 
 <QueryClientProvider client={queryClient}>
-	<AppHealthGate>
+	{#if onMobileRoute}
+		<!-- モバイル版の画面は、デスクトップの起動時の確認（Git の部品）を通らない -->
 		{@render children()}
-	</AppHealthGate>
-	<RemoteFollowUpDialogs />
+	{:else if !mobileApp}
+		<AppHealthGate>
+			{@render children()}
+		</AppHealthGate>
+		<RemoteFollowUpDialogs />
+	{/if}
 	<ErrorDialog />
 	<ToastHost />
 </QueryClientProvider>
