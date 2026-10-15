@@ -1,0 +1,23 @@
+[package]
+name = "core-remote"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+core-github = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+base64 = "0.22"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+httpmock = "0.8"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true
