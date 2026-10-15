@@ -21,6 +21,7 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      - 'scripts/ci/**'
   pull_request:
     paths:
       - '.github/workflows/mobile.yml'
@@ -36,6 +37,12 @@ on:
 concurrency:
   group: mobile-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # Rust の版を固定する（src-tauri/rust-toolchain.toml と同じ値にする）。
+  # Xcode や Gradle のビルド手順の中から呼ばれる cargo は、作業ディレクトリの外にいて rust-toolchain.toml を読まず、
+  # ランナーの既定の版（古いことがある）で動いてしまうため、環境変数で全体に効かせる
+  RUSTUP_TOOLCHAIN: '1.99.0'
 
 jobs:
   android:
@@ -66,10 +73,9 @@ jobs:
           echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        working-directory: src-tauri
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustup target add aarch64-linux-android
+        run: >
+          rustup toolchain install 1.99.0 --profile minimal
+          --target aarch64-linux-android --target x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -81,10 +87,10 @@ jobs:
 
       # versionCode は実行番号（Google Play に出すときに増え続ける必要がある）。
       # Google の Maven（dl.google.com）が一時的に 502 を返すことがあるため、最大 3 回まで試す
-      - name: Build APK (debug, arm64)
+      - name: Build APK (debug, arm64 + x86_64)
         run: |
           for attempt in 1 2 3; do
-            if pnpm tauri:mobile android build --debug --apk --target aarch64 --ci \
+            if pnpm tauri:mobile android build --debug --apk --target aarch64 x86_64 --ci \
               --config '{"bundle":{"android":{"versionCode":${{ github.run_number }}}}}'; then
               exit 0
             fi
@@ -98,6 +104,79 @@ jobs:
           name: hikae-android-debug-apk
           path: src-tauri/mobile/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+
+  # エミュレータ（Android 14）に APK を入れて、起動・ログイン画面・確認コードの取得（実際に GitHub へ HTTPS で通信する）と、
+  # Android Keystore を使う保管（SecretBox）の動きを確かめる
+  android-smoke:
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Android SDK / NDK
+        run: |
+          SDKMANAGER=$(ls -d "${ANDROID_HOME}"/cmdline-tools/*/bin/sdkmanager | tail -n 1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        run: >
+          rustup toolchain install 1.99.0 --profile minimal
+          --target aarch64-linux-android --target x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: hikae-android-debug-apk
+          path: apk
+
+      # プラグインの Gradle プロジェクト（gen/android）を使うため、プロジェクトを生成しておく
+      - name: Android プロジェクトの生成
+        run: pnpm tauri:mobile android init --ci
+
+      - name: Emulator tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: bash scripts/ci/android-emulator-tests.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hikae-android-smoke
+          path: |
+            smoke-out
+            src-tauri/mobile/gen/android/**/build/reports/androidTests
+          if-no-files-found: ignore
 
   ios:
     runs-on: macos-latest
@@ -116,10 +195,9 @@ jobs:
           cache: pnpm
 
       - name: Install Rust toolchain
-        working-directory: src-tauri
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustup target add aarch64-apple-ios
+        run: >
+          rustup toolchain install 1.99.0 --profile minimal
+          --target aarch64-apple-ios --target aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -147,6 +225,22 @@ jobs:
         env:
           APPLE_DEVELOPMENT_TEAM: AAAAAAAAAA
         run: pnpm tauri:mobile ios build --debug --target aarch64-sim --ci
+
+      # シミュレータで起動して、落ちないことと画面を確かめる（スクリーンショットは artifact に残る）
+      - name: Simulator smoke test
+        if: env.HAS_IOS_SIGNING != 'true'
+        run: |
+          APP=$(find "$HOME/Library/Developer/Xcode/DerivedData" src-tauri/mobile/gen/apple -type d -name '*.app' -path '*iphonesimulator*' 2>/dev/null | head -n 1)
+          test -n "$APP" || { echo "::error::.app が見つかりません"; exit 1; }
+          echo "APP=$APP"
+          bash scripts/ci/ios-smoke.sh "$APP" ios-smoke-out
+
+      - uses: actions/upload-artifact@v4
+        if: always() && env.HAS_IOS_SIGNING != 'true'
+        with:
+          name: hikae-ios-simulator-smoke
+          path: ios-smoke-out
+          if-no-files-found: ignore
 
       # ビルド番号（CFBundleVersion）は実行番号。TestFlight は同じ版の中でビルド番号が増え続ける必要がある。
       # 証明書とプロビジョニングプロファイルは tauri CLI が取り込む

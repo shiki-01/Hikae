@@ -8,11 +8,24 @@ use std::time::Duration;
 
 /// 応答が止まったままにならないよう、接続と全体にタイムアウトを付けたクライアントを作る。
 pub fn client() -> Client {
-    Client::builder()
+    let builder = Client::builder()
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| Client::new())
+        .timeout(Duration::from_secs(30));
+    // Android では OS の証明書の検証（rustls-platform-verifier）に JNI の初期化が要り、
+    // 初期化していないと最初の HTTPS 通信で panic する。同梱のルート証明書で検証して避ける
+    #[cfg(target_os = "android")]
+    let builder = builder.use_preconfigured_tls(android_tls_config());
+    builder.build().unwrap_or_else(|_| Client::new())
+}
+
+/// Android 用の TLS 設定。Mozilla のルート証明書（webpki-roots）で GitHub の証明書を検証する
+#[cfg(target_os = "android")]
+fn android_tls_config() -> rustls::ClientConfig {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 /// 送信前の失敗（接続できない、DNS、タイムアウトなど）。本文や URL は含めない。
