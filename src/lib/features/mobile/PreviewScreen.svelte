@@ -25,17 +25,30 @@
 		() => repo.owner,
 		() => repo.name,
 		() => target.path,
-		() => target.sha
+		() => target.sha,
+		() => target.versionRef
 	);
 
 	let versionsOpen = $state(false);
+
+	/** 表示している版（現在の版なら null）をそのまま保存する */
+	function downloadShown(): void {
+		void downloadEntry(
+			repo.owner,
+			repo.name,
+			target.path,
+			target.sha,
+			target.versionRef ?? undefined
+		);
+	}
 
 	function viewVersion(version: MobileVersion): void {
 		versionsOpen = false;
 		openPreview({
 			path: target.path,
 			name: target.name,
-			sha: version.sha,
+			sha: target.sha,
+			versionRef: version.sha,
 			versionLabel: target.versionLabel
 		});
 	}
@@ -47,7 +60,7 @@
 		size="sm"
 		class="min-h:44px"
 		ariaLabel={t('mobile.common.download')}
-		onclick={() => void downloadEntry(repo.owner, repo.name, target.path, target.sha)}
+		onclick={downloadShown}
 	>
 		<Download size={16} aria-hidden="true" />
 		<span>{t('mobile.common.download')}</span>
@@ -74,11 +87,7 @@
 			onlogin={() => (nav.needsLogin = true)}
 		/>
 	{:else if preview.data}
-		<PreviewBody
-			preview={preview.data}
-			name={target.name}
-			ondownload={() => void downloadEntry(repo.owner, repo.name, target.path, target.sha)}
-		/>
+		<PreviewBody preview={preview.data} name={target.name} ondownload={downloadShown} />
 	{/if}
 </div>
 
@@ -90,6 +99,7 @@
 		fileName={target.name}
 		onclose={() => (versionsOpen = false)}
 		onview={viewVersion}
-		ondownload={(version) => void downloadEntry(repo.owner, repo.name, target.path, version.sha)}
+		ondownload={(version) =>
+			void downloadEntry(repo.owner, repo.name, target.path, target.sha, version.sha)}
 	/>
 {/if}

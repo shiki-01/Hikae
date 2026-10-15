@@ -387,6 +387,7 @@ export const mobileMockApi: MobileApi = {
 		};
 	},
 
+	// `sha` と `ref`（過去の版のコミット）は見ない。モックは版ごとの内容を持たず、現在の内容を返す
 	async preview(owner, name, path): Promise<MobilePreview> {
 		await sleep(WAIT);
 		const file = fileAt(treeOf(owner, name), path);
@@ -394,6 +395,7 @@ export const mobileMockApi: MobileApi = {
 		return previewOf(path, file);
 	},
 
+	// `sha` と `ref` は preview と同じく見ない（現在の内容を返す）
 	async download(owner, name, path) {
 		await sleep(WAIT);
 		const file = fileAt(treeOf(owner, name), path);

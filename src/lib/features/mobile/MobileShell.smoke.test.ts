@@ -70,6 +70,37 @@ describe('モバイル版のスモークテスト', () => {
 		expect(await screen.findByText(/打ち合わせ/)).toBeTruthy();
 	});
 
+	it('過去の版を開くと preview は blob の sha と版の ref 付きで呼ばれ、現在の版は ref なし', async () => {
+		const preview = vi.spyOn(mobileApi, 'preview');
+		renderWithClient(MobileShell);
+		await openFamilyRepo();
+		await fireEvent.click(await screen.findByText(DOCS));
+		const path = `${DOCS}/${MINUTES}`;
+		const listing = await mobileApi.listDir(OWNER, FAMILY, DOCS);
+		const blobSha = listing.entries.find((entry) => entry.name === MINUTES)?.sha;
+		const versions = await mobileApi.fileHistory(OWNER, FAMILY, path);
+
+		// 現在の版は、ref を渡さない
+		await fireEvent.click(await screen.findByText(MINUTES));
+		await screen.findByRole('heading', { name: MINUTES });
+		expect(preview).toHaveBeenLastCalledWith(OWNER, FAMILY, path, blobSha, undefined);
+
+		// 過去の版は、sha に blob の sha、ref に版のコミットの sha を渡す
+		await fireEvent.click(screen.getByRole('button', { name: t('mobile.common.back') }));
+		await fireEvent.click(
+			await screen.findByRole('button', { name: t('mobile.files.more', { name: MINUTES }) })
+		);
+		await fireEvent.click(screen.getByRole('button', { name: t('mobile.common.versions') }));
+		await fireEvent.click(
+			(await screen.findAllByRole('button', { name: t('mobile.file.view_version') }))[0]
+		);
+		await screen.findByRole('heading', { name: MINUTES });
+		await vi.waitFor(() =>
+			expect(preview).toHaveBeenLastCalledWith(OWNER, FAMILY, path, blobSha, versions[0].sha)
+		);
+		expect(versions[0].sha).not.toBe(blobSha);
+	});
+
 	it('テキストを追加して「追加して保存」を押すと、同名がなければそのまま保存される（M4）', async () => {
 		const upload = vi.spyOn(mobileApi, 'upload');
 		renderWithClient(MobileShell);

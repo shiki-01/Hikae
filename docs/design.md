@@ -1453,7 +1453,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 
 | 部品 | 責務 | 依存先 |
 | --- | --- | --- |
-| `core-remote`（新規） | GitHub REST API による一覧・閲覧・取得・アップロード。Tauri と git に依存しない | `core-github`（トークン型・HTTP の共通部品・エラー） |
+| `core-remote`（新規） | GitHub REST API による一覧・閲覧・取得・アップロードと、表示用の形式判定・抽出（`preview`）。Tauri と git に依存しない | `core-github`（トークン型・HTTP の共通部品・エラー）、`core-preview`（`default-features = false`。wasmtime を含めない。edition 2021 では `workspace = true` と併用すると `default-features = false` が無視されるため、パス指定で書く） |
 | `src-tauri/mobile`（新規。package 名 `hikae-mobile`） | モバイル用の Tauri アプリ。コマンド（14.8）、トークンの保管、`#[tauri::mobile_entry_point]`、`tauri.conf.json`。デスクトップの `app` には依存しない（keyring の Windows / macOS 向け feature、wasmtime、`trash`、llama-server の制御、ファイル監視を持ち込まないため） | `core-remote`、`core-github`、`core-preview`（`default-features = false`。wasmtime を含めない） |
 | `src/routes/m/`、`src/lib/features/mobile/` | モバイル用の画面。部品（`components`）・トークン・i18n はデスクトップと共有する。デスクトップの 2 ペイン画面は使わない | `src/lib/api/mobile.ts` |
 
@@ -1517,7 +1517,7 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 
 ### 14.8 コマンド（Tauri）と型
 
-型は Rust の定義から生成する（`export-bindings` に相当する bin を `hikae-mobile` に置き、生成物は `src/lib/bindings-mobile.ts`。手で編集しない）。コマンド名は `mobile_` で始める。
+型は Rust の定義から生成する（`cargo run -p hikae-mobile --bin export-bindings-mobile`。生成物は `src/lib/bindings-mobile.ts`。手で編集しない）。画面側の型は `src/lib/api/mobile-types.ts`、実装は `src/lib/api/mobile.ts`（Tauri）と `mobile-mock.ts`（ブラウザ単体）。コマンド名は `mobile_` で始める。
 
 | コマンド | 引数 | 返り値 |
 | --- | --- | --- |
@@ -1525,8 +1525,8 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | `mobile_start_login` / `mobile_open_login_page` / `mobile_wait_login` / `mobile_cancel_login` / `mobile_logout` | なし | デスクトップの `start_login` 等と同じ型（`LoginPrompt`、終了の種類） |
 | `mobile_list_repos` | なし | `Vec<MobileRepo>`（`owner`、`name`、`private`、`default_branch`、`pushed_at`、`description`） |
 | `mobile_list_dir` | `owner`、`name`、`path`、`ref?` | `DirListing`（`branch`、`head_sha`、`truncated`、`entries: Vec<DirEntry>`。`DirEntry` は `name`、`path`、`kind`（`file` / `dir`）、`size`、`sha`） |
-| `mobile_preview` | `owner`、`name`、`path`、`sha` | `MobilePreview`（`kind`: `text` / `image` / `pdf` / `document` / `unsupported` / `too_large`。本文は種類ごと） |
-| `mobile_download` | `owner`、`name`、`path`、`sha` | `DownloadedFile`（`file_name`、`mime`、`content_base64`） |
+| `mobile_preview` | `owner`、`name`、`path`、`sha`（一覧のファイルの blob の ID）、`git_ref?`（過去の版のコミットの ID。指定時はその時点のファイルの blob を引き直す） | `MobilePreview`（`kind`: `text` / `image` / `pdf` / `document` / `unsupported` / `too_large`。本文は種類ごと） |
+| `mobile_download` | `owner`、`name`、`path`、`sha`、`git_ref?`（`mobile_preview` と同じ） | `DownloadedFile`（`file_name`、`mime`、`content_base64`） |
 | `mobile_file_history` | `owner`、`name`、`path` | `Vec<VersionInfo>`（`sha`、`message`、`date`、`author`） |
 | `mobile_plan_upload` | `owner`、`name`、`items: Vec<{ target_dir, name, size }>` | `UploadPlan`（`branch`、`items: Vec<{ target_path, exists }>`） |
 | `mobile_upload` | `owner`、`name`、`message?`、`items: Vec<{ target_dir, name, content_base64, on_exists }>` | `UploadResult`（`commit_sha`、`saved`、`skipped`、`renamed: Vec<{ from, to }>`） |
@@ -1545,3 +1545,14 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 - Android のトークン保管（14.6）、`tauri ios init` / `tauri android init` による生成物（`gen/`）の取り扱い。
 - 25 MiB / 60 MiB の上限の妥当性、1 回の追加の所要時間（API の呼び出しが 1 ファイルにつき 1 回増える）。
 - 履歴（過去の版）の絞り込みと、大きなフォルダ（1,000 件超）の表示。
+
+### 14.11 実装状況（2026-10-15）
+
+| 範囲 | 状況 |
+| --- | --- |
+| `core-remote`（一覧・閲覧・取得・過去の版・アップロード・許可リスト・パス検査・`preview`） | 実装済み。`httpmock` のテストで確認（fast-forward のみ・force を送らない・422 の再試行と上限・同名の 3 択を含む）。実際の GitHub では未確認 |
+| `hikae-mobile`（コマンド、DTO、エラー、ログイン、`bindings-mobile.ts` の生成） | 実装済み。デスクトップのホスト上で `cargo clippy` まで確認。iOS・Android のビルドは未確認 |
+| 画面 `/m`（M0〜M5） | 実装済み。`vitest` とモック API のスモークテストで確認。実機の見た目は未確認 |
+| トークンの保管 | iOS は keyring の `apple-native`（未確認）。**Android は保管先が無く、アプリを閉じるとログインが消える**（keyring が Android に対応していないため。Keystore を使うモバイルプラグインが必要で未実装） |
+| `tauri ios init` / `tauri android init`（`gen/` の生成） | 未実施（Xcode と Android Studio の環境が必要）。手順は `pnpm tauri:mobile ios init` / `android init` |
+| 画面の既知の問題 | 14.10 のほか、Master CSS の `flex-wrap:wrap` が生成されない可能性（既存コードと同じ書き方）、ホーム画面のセーフエリアは `env(safe-area-inset-*)` を入れたが実機未確認 |

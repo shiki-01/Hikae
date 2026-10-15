@@ -53,15 +53,23 @@
 	}
 
 	function previewEntry(entry: MobileDirEntry): void {
-		openPreview({ path: entry.path, name: entry.name, sha: entry.sha, versionLabel: null });
+		openPreview({
+			path: entry.path,
+			name: entry.name,
+			sha: entry.sha,
+			versionRef: null,
+			versionLabel: null
+		});
 	}
 
-	function openVersionPreview(path: string, name: string, version: MobileVersion): void {
+	/** 過去の版を開く。`sha` は一覧のファイルの blob の sha、`versionRef` は版のコミットの sha */
+	function openVersionPreview(entry: MobileDirEntry, version: MobileVersion): void {
 		versionsTarget = null;
 		openPreview({
-			path,
-			name,
-			sha: version.sha,
+			path: entry.path,
+			name: entry.name,
+			sha: entry.sha,
+			versionRef: version.sha,
 			versionLabel: formatDateTime(new Date(version.date))
 		});
 	}
@@ -185,8 +193,9 @@
 			path={target.path}
 			fileName={target.name}
 			onclose={() => (versionsTarget = null)}
-			onview={(version) => openVersionPreview(target.path, target.name, version)}
-			ondownload={(version) => void downloadEntry(repo.owner, repo.name, target.path, version.sha)}
+			onview={(version) => openVersionPreview(target, version)}
+			ondownload={(version) =>
+				void downloadEntry(repo.owner, repo.name, target.path, target.sha, version.sha)}
 		/>
 	{/if}
 {/if}

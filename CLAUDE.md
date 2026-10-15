@@ -60,6 +60,8 @@
     ├── crates/core-preview   # 種別判定、docx・xlsx・pptx・テキストの抽出、差分、拡張ホスト（wasmtime。feature `host`）
     ├── crates/core-llm       # モデルの導入（DL・検証）、llama-server の制御、Ollama 接続、提案の生成
     ├── crates/core-store     # SQLite（設定、プロジェクト、操作ジャーナル、skip-worktree、LLM の記録）
+    ├── crates/core-remote    # モバイル版: GitHub REST API による閲覧とアップロード（git を使わない。design.md 14 章）
+    ├── mobile/               # モバイル版の Tauri アプリ（hikae-mobile。iOS / Android。`pnpm tauri:mobile ...`）
     ├── extensions/office-extractor  # docx・xlsx・pptx の WASM 抽出器（wasm32-wasip1。bin は 3 つ）
     └── app/              # Tauri コマンド・イベント、操作キュー、スケジューラ
         └── resources/
@@ -68,6 +70,7 @@
             └── llama/        # 同梱の llama-server（生成物）
 ```
 
+- モバイル版（iOS / Android。`docs/design.md` 14 章）は git CLI を使わず `core-remote` で GitHub API を呼ぶ。画面は `src/routes/m/` と `src/lib/features/mobile/`。型生成は `cargo run -p hikae-mobile --bin export-bindings-mobile`（`src/lib/bindings-mobile.ts`）。ref の更新は fast-forward のみ（`force` を送らない）で、許可リスト（`core-remote/src/allow.rs`）を通る
 - `core-*` crate は Tauri に依存させない（単体テストと CLI での動作確認を可能にするため）
 - 依存方向は `docs/design.md` 8.3 の表に従う。逆方向の依存を追加しない
 
