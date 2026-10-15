@@ -40,8 +40,9 @@ concurrency:
 
 env:
   # Rust の版を固定する（src-tauri/rust-toolchain.toml と同じ値にする）。
-  # Xcode や Gradle のビルド手順の中から呼ばれる cargo は、作業ディレクトリの外にいて rust-toolchain.toml を読まず、
-  # ランナーの既定の版（古いことがある）で動いてしまうため、環境変数で全体に効かせる
+  # Xcode や Gradle のビルド手順の中から呼ばれる cargo は、作業ディレクトリが違って rust-toolchain.toml を読まず、
+  # 環境変数も引き継がれないため、ランナーの既定の版（古いことがある）で動いてしまう。
+  # そこで、環境変数に加えて、各ジョブで `rustup default 1.99.0` も行う
   RUSTUP_TOOLCHAIN: '1.99.0'
 
 jobs:
@@ -74,8 +75,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: >
-          rustup toolchain install 1.99.0 --profile minimal
-          --target aarch64-linux-android --target x86_64-linux-android
+          rustup toolchain install 1.99.0 --profile minimal --target aarch64-linux-android --target x86_64-linux-android
+          && rustup default 1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -120,7 +121,9 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          # Google Play 開発者サービスの無いイメージ。google_apis だと、gms のプロセスが落ちたときに
+          # アプリ（WebView が gms のフォント提供を使う）まで巻き添えで終了して、確認が不安定になった
+          target: default
           profile: pixel_6
           disable-animations: true
           script: bash scripts/ci/android-emulator-tests.sh
@@ -152,8 +155,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: >
-          rustup toolchain install 1.99.0 --profile minimal
-          --target aarch64-apple-ios --target aarch64-apple-ios-sim
+          rustup toolchain install 1.99.0 --profile minimal --target aarch64-apple-ios --target aarch64-apple-ios-sim
+          && rustup default 1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
