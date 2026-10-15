@@ -1,2 +1,8 @@
 minimumReleaseAgeExclude:
   - svelte@5.57.2
+
+# `pnpm <script>` の前に依存関係を確かめて、必要なら pnpm install を走らせる機能を切る。
+# モバイル版の iOS ビルドは、Xcode のビルド手順（環境変数が限られ、端末も無い）から `pnpm tauri ios xcode-script` を
+# 呼ぶ。そこで確認が走ると、node_modules を作り直そうとして「TTY が無い」と止まる（CI で確認）。
+# 依存の更新は、これまでどおり `pnpm install` を手で（CI では `--frozen-lockfile` で）実行する
+verifyDepsBeforeRun: false
