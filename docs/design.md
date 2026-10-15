@@ -1553,6 +1553,6 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 | `core-remote`（一覧・閲覧・取得・過去の版・アップロード・許可リスト・パス検査・`preview`） | 実装済み。`httpmock` のテストで確認（fast-forward のみ・force を送らない・422 の再試行と上限・同名の 3 択を含む）。実際の GitHub では未確認 |
 | `hikae-mobile`（コマンド、DTO、エラー、ログイン、`bindings-mobile.ts` の生成） | 実装済み。デスクトップのホスト上で `cargo clippy` まで確認。iOS・Android のビルドは未確認 |
 | 画面 `/m`（M0〜M5） | 実装済み。`vitest` とモック API のスモークテストで確認。実機の見た目は未確認 |
-| トークンの保管 | iOS は keyring の `apple-native`（未確認）。**Android は保管先が無く、アプリを閉じるとログインが消える**（keyring が Android に対応していないため。Keystore を使うモバイルプラグインが必要で未実装） |
-| `tauri ios init` / `tauri android init`（`gen/` の生成） | 未実施（Xcode と Android Studio の環境が必要）。手順は `pnpm tauri:mobile ios init` / `android init` |
+| トークンの保管 | iOS は keyring の `apple-native`（実機で未確認）。Android は Android Keystore（AES-256-GCM）で包んだ保管のプラグイン `tauri-plugin-hikae-secure-store`（`src-tauri/plugins/secure-store`）を実装し、APK のビルドまでは CI で確認。実機で未確認 |
+| `tauri ios init` / `tauri android init`（`gen/` の生成） | GitHub Actions（`.github/workflows/mobile.yml`）が毎回生成する。`gen/` はコミットしない。Android の APK（デバッグ署名）と、iOS の署名なしシミュレータ向けビルドは CI で成功を確認（2026-10-15）。署名して TestFlight へ出す経路は、シークレットが必要で未確認（`docs/notes/mobile-testflight.md`） |
 | 画面の既知の問題 | 14.10 のほか、Master CSS の `flex-wrap:wrap` が生成されない可能性（既存コードと同じ書き方）、ホーム画面のセーフエリアは `env(safe-area-inset-*)` を入れたが実機未確認 |
