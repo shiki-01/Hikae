@@ -23,7 +23,10 @@
 	}
 </script>
 
-<div class="flex flex-direction:column h:100% min-h:0 bg:bg fg:fg">
+<div
+	class="flex flex-direction:column h:100% min-h:0 bg:bg fg:fg"
+	style="padding-top: env(safe-area-inset-top)"
+>
 	{#if account.isPending}
 		<div class="flex flex:1 align-items:center justify-content:center gap:2 fg:fg-muted">
 			<Spinner />

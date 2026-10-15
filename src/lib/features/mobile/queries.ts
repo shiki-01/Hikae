@@ -7,8 +7,8 @@ export const mobileKeys = {
 	account: ['mobile', 'account'] as const,
 	repos: ['mobile', 'repos'] as const,
 	dir: (owner: string, name: string, path: string) => ['mobile', 'dir', owner, name, path] as const,
-	preview: (owner: string, name: string, path: string, sha: string) =>
-		['mobile', 'preview', owner, name, path, sha] as const,
+	preview: (owner: string, name: string, path: string, sha: string, ref: string | null) =>
+		['mobile', 'preview', owner, name, path, sha, ref] as const,
 	history: (owner: string, name: string, path: string) =>
 		['mobile', 'history', owner, name, path] as const
 };
@@ -41,15 +41,18 @@ export function useDirListing(
 	}));
 }
 
+/** `getRef` は過去の版のコミットの sha。現在の版なら null */
 export function usePreview(
 	getOwner: () => string,
 	getName: () => string,
 	getPath: () => string,
-	getSha: () => string
+	getSha: () => string,
+	getRef: () => string | null = () => null
 ) {
 	return createQuery(() => ({
-		queryKey: mobileKeys.preview(getOwner(), getName(), getPath(), getSha()),
-		queryFn: () => mobileApi.preview(getOwner(), getName(), getPath(), getSha()),
+		queryKey: mobileKeys.preview(getOwner(), getName(), getPath(), getSha(), getRef()),
+		queryFn: () =>
+			mobileApi.preview(getOwner(), getName(), getPath(), getSha(), getRef() ?? undefined),
 		// 同じ版の内容は変わらないので、取り直さない
 		staleTime: Infinity
 	}));

@@ -385,3 +385,47 @@ async fn an_unreachable_server_is_reported_as_network_unavailable() {
         Err(RemoteError::Auth(AuthError::NetworkUnavailable))
     ));
 }
+
+#[tokio::test]
+async fn file_at_returns_the_blob_of_that_commit() {
+    let server = MockServer::start();
+    let m = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/alice/notes/contents/docs/a.txt")
+            .query_param("ref", HEAD);
+        then.status(200).json_body(json!({
+            "name": "a.txt", "path": "docs/a.txt", "type": "file",
+            "sha": "5555555555555555555555555555555555555555", "size": 12
+        }));
+    });
+    let (sha, size) = client(&server)
+        .file_at(&token(), "alice", "notes", "docs/a.txt", HEAD)
+        .await
+        .expect("file_at");
+    assert_eq!(sha, "5555555555555555555555555555555555555555");
+    assert_eq!(size, 12);
+    m.assert_calls(1);
+}
+
+#[tokio::test]
+async fn file_at_refuses_folders_and_bad_refs_without_calling() {
+    let server = MockServer::start();
+    let any = server.mock(|when, then| {
+        when.method(GET);
+        then.status(200).json_body(json!([]));
+    });
+    // フォルダ（配列）は NotFound
+    let err = client(&server)
+        .file_at(&token(), "alice", "notes", "docs", HEAD)
+        .await
+        .expect_err("folder");
+    assert!(matches!(err, RemoteError::NotFound));
+    any.assert_calls(1);
+    // 基準が ID の形でないときは通信しない
+    let err = client(&server)
+        .file_at(&token(), "alice", "notes", "docs/a.txt", "main")
+        .await
+        .expect_err("bad ref");
+    assert!(matches!(err, RemoteError::InvalidPath(_)));
+    any.assert_calls(1);
+}

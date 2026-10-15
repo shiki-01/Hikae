@@ -11,11 +11,15 @@ export interface RepoRef {
 	name: string;
 }
 
-/** プレビューの対象。過去の版のときは `sha` がそのコミットの sha で、`versionLabel` に日付を入れる */
+/**
+ * プレビューの対象。`sha` は一覧にある blob の sha（過去の版でも同じ）。
+ * 過去の版のときは `versionRef` にそのコミットの sha を入れ、`versionLabel` に日付を入れる。現在の版は `versionRef` が null
+ */
 export interface PreviewTarget {
 	path: string;
 	name: string;
 	sha: string;
+	versionRef: string | null;
 	versionLabel: string | null;
 }
 

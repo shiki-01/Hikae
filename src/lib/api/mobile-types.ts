@@ -117,10 +117,25 @@ export interface MobileApi {
 	logout(): Promise<void>;
 	listRepos(): Promise<MobileRepo[]>;
 	listDir(owner: string, name: string, path: string, ref?: string): Promise<MobileDirListing>;
-	/** `sha` は一覧のファイルの blob の sha。過去の版を開くときはそのコミットの sha */
-	preview(owner: string, name: string, path: string, sha: string): Promise<MobilePreview>;
-	/** `sha` の扱いは `preview` と同じ */
-	download(owner: string, name: string, path: string, sha: string): Promise<MobileDownload>;
+	/**
+	 * `sha` は一覧のファイルの blob の sha。`ref`（過去の版のコミットの sha）を指定したときは、
+	 * その時点のファイルを返し、`sha` は無視される
+	 */
+	preview(
+		owner: string,
+		name: string,
+		path: string,
+		sha: string,
+		ref?: string
+	): Promise<MobilePreview>;
+	/** `sha` と `ref` の扱いは `preview` と同じ */
+	download(
+		owner: string,
+		name: string,
+		path: string,
+		sha: string,
+		ref?: string
+	): Promise<MobileDownload>;
 	fileHistory(owner: string, name: string, path: string): Promise<MobileVersion[]>;
 	planUpload(owner: string, name: string, items: PlanItemInput[]): Promise<UploadPlan>;
 	upload(

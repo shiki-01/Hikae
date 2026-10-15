@@ -64,7 +64,7 @@
 								{#each section.rows as row, rowIndex (rowIndex)}
 									<tr>
 										{#each row as cell, cellIndex (cellIndex)}
-											<td class="b:1px|solid|border p:2 align-top white-space:pre-wrap">{cell}</td>
+											<td class="b:1px|solid|border p:2 white-space:pre-wrap">{cell}</td>
 										{/each}
 									</tr>
 								{/each}

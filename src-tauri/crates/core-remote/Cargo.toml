@@ -14,10 +14,15 @@ serde_json = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 base64 = "0.22"
 unicode-normalization = "0.1"
+# 表示用の抽出（docx・xlsx・pptx のネイティブ抽出）。wasmtime を含めないため default-features を切る。
+# workspace 継承（workspace = true）だと、edition 2021 では default-features = false が無視されるため、パスで直接書く
+core-preview = { path = "../core-preview", default-features = false }
 
 [dev-dependencies]
 httpmock = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }
+# テスト用の最小の docx・xlsx・pptx を組み立てる（core-preview と同じ版と圧縮方式）
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [lints]
 workspace = true

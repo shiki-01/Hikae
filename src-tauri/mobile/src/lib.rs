@@ -1,6 +1,9 @@
 // Hikae モバイル版（iOS / Android）の Tauri アプリ。設計書 14 章。
 // git は使わず、GitHub REST API（core-remote）でリモートのリポジトリを閲覧し、ファイルを追加する。
 
+// Tauri のコマンドは Result<_, MobileError> を返す形に決まっている（app と同じ扱い）
+#![allow(clippy::result_large_err)]
+
 mod commands;
 mod dto;
 mod error;
@@ -58,8 +61,9 @@ pub fn run() {
         .manage(MobileState::new())
         .setup(|app| {
             // 画面は、このフラグを見て `/m`（モバイルの画面）へ移る（設計書 14.3）
-            let window = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .initialization_script("window.__HIKAE_MOBILE__ = true;");
+            let window =
+                tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                    .initialization_script("window.__HIKAE_MOBILE__ = true;");
             // デスクトップ上で動かすときだけ、スマホの画面に近い大きさにする
             #[cfg(desktop)]
             let window = window.title("Hikae").inner_size(430.0, 860.0);

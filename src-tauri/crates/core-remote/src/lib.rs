@@ -10,6 +10,7 @@ mod encode;
 mod error;
 mod model;
 mod path;
+pub mod preview;
 mod read;
 mod upload;
 

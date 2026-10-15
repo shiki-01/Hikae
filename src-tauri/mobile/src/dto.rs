@@ -77,8 +77,8 @@ pub struct DirEntry {
     pub name: String,
     pub path: String,
     pub kind: EntryKind,
-    /// バイト数。TS では number として扱う（25 MiB 程度までで、2^53 を超えない）
-    pub size: f64,
+    /// バイト数（4 GiB を超える場合は上限に丸める。閲覧できるのは 25 MiB までなので表示にしか使わない）
+    pub size: u32,
     pub sha: String,
 }
 
@@ -107,7 +107,7 @@ impl From<cr::DirListing> for DirListing {
                         cr::EntryKind::File => EntryKind::File,
                         cr::EntryKind::Dir => EntryKind::Dir,
                     },
-                    size: e.size as f64,
+                    size: u32::try_from(e.size).unwrap_or(u32::MAX),
                     sha: e.sha,
                 })
                 .collect(),
@@ -152,12 +152,27 @@ pub enum DocFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MobilePreview {
-    Text { text: String, truncated: bool },
-    Image { mime: String, content_base64: String },
-    Pdf { content_base64: String },
-    Document { format: DocFormat, sections: Vec<DocSection> },
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    Image {
+        mime: String,
+        content_base64: String,
+    },
+    Pdf {
+        content_base64: String,
+    },
+    Document {
+        format: DocFormat,
+        sections: Vec<DocSection>,
+    },
     Unsupported,
     TooLarge,
 }
@@ -175,7 +190,7 @@ pub struct MobileDownload {
 pub struct PlanItemInput {
     pub target_dir: String,
     pub name: String,
-    pub size: f64,
+    pub size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]

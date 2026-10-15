@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 
 /// 読み取りと、失敗した追加のあとでも言える一文（リモートは変更されていない）
 pub const REMOTE_UNCHANGED: &str = "GitHub 上のファイルは変更されていません。";
-/// 追加が成功したあとの通信で失敗したときの一文
-pub const REMOTE_SAFE: &str = "GitHub 上のファイルは無事です。";
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]

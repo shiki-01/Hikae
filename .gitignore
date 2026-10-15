@@ -12,6 +12,7 @@ node_modules/
 # Rust / Tauri
 target/
 /src-tauri/app/gen/
+/src-tauri/mobile/gen/schemas/
 
 # OS の一時ファイル
 .DS_Store

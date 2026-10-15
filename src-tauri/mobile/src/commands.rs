@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use core_github::{
-    is_login_page_url, resolve_client_id, AccessToken, AuthError, DeviceFlowClient, LoginCoordinator,
-    LoginEnd, TokenStore, User, UserClient, LOGIN_PAGE_URL,
+    is_login_page_url, resolve_client_id, AccessToken, AuthError, DeviceFlowClient,
+    LoginCoordinator, LoginEnd, TokenStore, User, UserClient, LOGIN_PAGE_URL,
 };
 use core_remote::{preview, PlanItem, RemoteClient, UploadItem, UploadRequest};
 
@@ -227,6 +227,32 @@ pub async fn mobile_list_dir(
     Ok(listing.into())
 }
 
+/// 表示・ダウンロードの対象の内容を読む。`git_ref`（過去の版のコミット）があるときは、
+/// その時点のファイルの blob を引いてから読む。無いときは一覧の `sha`（blob の ID）をそのまま使う
+async fn read_file_bytes(
+    state: &MobileState,
+    token: &AccessToken,
+    owner: &str,
+    name: &str,
+    path: &str,
+    sha: &str,
+    git_ref: Option<&str>,
+) -> Result<Vec<u8>, core_remote::RemoteError> {
+    match git_ref {
+        Some(commit) => {
+            let (blob, size) = state
+                .remote
+                .file_at(token, owner, name, path, commit)
+                .await?;
+            state
+                .remote
+                .fetch_blob(token, owner, name, &blob, Some(size))
+                .await
+        }
+        None => state.remote.fetch_blob(token, owner, name, sha, None).await,
+    }
+}
+
 fn file_name_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -240,18 +266,30 @@ pub async fn mobile_preview(
     name: String,
     path: String,
     sha: String,
+    git_ref: Option<String>,
 ) -> Result<MobilePreview, MobileError> {
     let token = require_token().await?;
-    let bytes = match state.remote.fetch_blob(&token, &owner, &name, &sha, None).await {
+    let bytes = match read_file_bytes(
+        &state,
+        &token,
+        &owner,
+        &name,
+        &path,
+        &sha,
+        git_ref.as_deref(),
+    )
+    .await
+    {
         Ok(b) => b,
         Err(core_remote::RemoteError::TooLarge) => return Ok(MobilePreview::TooLarge),
         Err(e) => return Err(e.into()),
     };
     let file_name = file_name_of(&path).to_string();
     // 抽出（zip の展開と XML の解析）は CPU を使うので、ブロッキング用のスレッドで行う
-    let built = tauri::async_runtime::spawn_blocking(move || preview::build_preview(&file_name, bytes))
-        .await
-        .map_err(|e| MobileError::task_failed(&format!("{e:?}")))?;
+    let built =
+        tauri::async_runtime::spawn_blocking(move || preview::build_preview(&file_name, bytes))
+            .await
+            .map_err(|e| MobileError::task_failed(&format!("{e:?}")))?;
     Ok(crate::preview_dto::to_dto(built))
 }
 
@@ -263,12 +301,19 @@ pub async fn mobile_download(
     name: String,
     path: String,
     sha: String,
+    git_ref: Option<String>,
 ) -> Result<MobileDownload, MobileError> {
     let token = require_token().await?;
-    let bytes = state
-        .remote
-        .fetch_blob(&token, &owner, &name, &sha, None)
-        .await?;
+    let bytes = read_file_bytes(
+        &state,
+        &token,
+        &owner,
+        &name,
+        &path,
+        &sha,
+        git_ref.as_deref(),
+    )
+    .await?;
     let file_name = file_name_of(&path).to_string();
     Ok(MobileDownload {
         mime: preview::mime_for(&file_name).to_string(),
@@ -309,11 +354,7 @@ pub async fn mobile_plan_upload(
         .map(|i| PlanItem {
             target_dir: i.target_dir,
             name: i.name,
-            size: if i.size.is_finite() && i.size > 0.0 {
-                i.size as u64
-            } else {
-                0
-            },
+            size: u64::from(i.size),
         })
         .collect();
     let plan = state

@@ -14,7 +14,11 @@
 	];
 </script>
 
-<nav aria-label={t('mobile.tab.label')} class="flex flex-shrink:0 bt:1px|solid|border bg:bg">
+<nav
+	aria-label={t('mobile.tab.label')}
+	class="flex flex-shrink:0 bt:1px|solid|border bg:bg"
+	style="padding-bottom: env(safe-area-inset-bottom)"
+>
 	{#each TABS as tab (tab.id)}
 		{@const active = nav.tab === tab.id}
 		<button

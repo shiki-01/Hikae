@@ -334,6 +334,45 @@ impl RemoteClient {
             .collect())
     }
 
+    /// 指定した基準（コミットの ID）の時点のファイルの blob の ID とバイト数。
+    /// 過去の版を開くために使う。ファイルでなければ `NotFound`。
+    pub async fn file_at(
+        &self,
+        token: &AccessToken,
+        owner: &str,
+        name: &str,
+        path: &str,
+        git_ref: &str,
+    ) -> Result<(String, u64), RemoteError> {
+        check_repo(owner, name)?;
+        let path = check_list_path(path)?;
+        if path.is_empty() || !is_object_id(git_ref) {
+            return Err(RemoteError::InvalidPath(
+                "基準の指定が正しくありません".to_string(),
+            ));
+        }
+        let value = self
+            .send(
+                token,
+                Call::Contents {
+                    owner,
+                    name,
+                    path: &path,
+                },
+                &[("ref", git_ref)],
+                None,
+            )
+            .await?;
+        let Value::Object(_) = value else {
+            return Err(RemoteError::NotFound);
+        };
+        let entry: ContentResponse = parse(value)?;
+        if entry.kind != "file" || !is_object_id(&entry.sha) {
+            return Err(RemoteError::NotFound);
+        }
+        Ok((entry.sha, entry.size))
+    }
+
     /// 指定したブランチの先頭コミットの ID。空のリポジトリ（ref が無い）では `NotFound`。
     pub(crate) async fn branch_head(
         &self,

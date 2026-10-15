@@ -5,20 +5,24 @@ import { t } from '#lib/i18n/index.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import { saveFile } from './download';
 
-/** ファイルを端末へ保存する（共有、または <a download>）。キャンセルは何もしない */
+/**
+ * ファイルを端末へ保存する（共有、または <a download>）。キャンセルは何もしない。
+ * `sha` は一覧の blob の sha。`ref` は過去の版のコミットの sha（指定時はその版を保存する）
+ */
 export async function downloadEntry(
 	owner: string,
 	name: string,
 	path: string,
-	sha: string
+	sha: string,
+	ref?: string
 ): Promise<void> {
 	try {
-		const file = await mobileApi.download(owner, name, path, sha);
+		const file = await mobileApi.download(owner, name, path, sha, ref);
 		const result = await saveFile(file);
 		if (result !== 'cancelled') {
 			pushToast({ type: 'success', message: t('mobile.download.done', { name: file.fileName }) });
 		}
 	} catch (error) {
-		reportError(error, { retry: () => void downloadEntry(owner, name, path, sha) });
+		reportError(error, { retry: () => void downloadEntry(owner, name, path, sha, ref) });
 	}
 }
