@@ -76,8 +76,6 @@ pub fn run() {
                     let _ = std::fs::write(std::env::temp_dir().join("hikae-selftest.txt"), line);
                 });
             }
-                });
-            }
             // 画面は、このフラグを見て `/m`（モバイルの画面）へ移る（設計書 14.3）
             let window =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
