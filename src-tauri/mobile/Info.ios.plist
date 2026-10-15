@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 通信は HTTPS（OS 標準の TLS）だけで、独自の暗号化は持たない。App Store Connect の輸出コンプライアンスの質問を省く -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- ファイル選択（写真を選ぶ・撮影する）で OS が表示する説明 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>選んだ写真を GitHub のフォルダに追加するために使います。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>撮影した写真を GitHub のフォルダに追加するために使います。</string>
+</dict>
+</plist>
