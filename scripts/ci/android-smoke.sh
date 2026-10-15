@@ -23,7 +23,9 @@ diagnose() {
 	adb shell pidof "$PKG" || echo "（プロセスなし）"
 	echo "::endgroup::"
 	echo "::group::logcat（アプリ・WebView・Rust の抜粋）"
-	grep -iE "chromium|tauri|RustStdoutStderr|hikae|AndroidRuntime|WebView|console|panicked|FATAL" "$OUT/logcat.txt" | tail -n 150 || true
+	# uiautomator 自身のログ（AndroidRuntime）は除く
+	grep -iE "chromium|tauri|RustStdoutStderr|hikae|WebView|console|panicked|FATAL EXCEPTION|reqwest|rustls" "$OUT/logcat.txt" \
+		| grep -v "AndroidRuntime: \(>>>>>>\|Using default\|Leaving\|Calling main\|Shutting\)" | cut -c1-300 | tail -n 150 || true
 	echo "::endgroup::"
 }
 
@@ -63,6 +65,7 @@ code=""
 for _ in $(seq 1 30); do
 	sleep 2
 	dump_ui 02-code
+	echo "画面: $(grep -ohE 'text="[^"]+"' "$OUT/02-code.xml" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
 	if code=$(node scripts/ci/uiautomator.mjs match "$OUT/02-code.xml" '[A-Z0-9]{4}-[A-Z0-9]{4}' 2>/dev/null); then
 		break
 	fi
