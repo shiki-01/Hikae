@@ -251,6 +251,19 @@ export const commands = {
 	 *  取り出したら空にするため、トーストは一度しか出ない。
 	 */
 	takeClosedInterruptedNotices: () => __TAURI_INVOKE<string[]>("take_closed_interrupted_notices"),
+	/**  作業コピーの一覧（読み取りのみ。記録と git の内容を合成する）。 */
+	listWorkCopies: (id: string, includeArchived: boolean) => typedError<WorkCopyItem[], AppError>(__TAURI_INVOKE("list_work_copies", { id, includeArchived })),
+	/**  「別の案を試す」。表示名を検査し、いまの版から作業コピーを作って切り替える。 */
+	createWorkCopy: (id: string, displayName: string) => typedError<null, AppError>(__TAURI_INVOKE("create_work_copy", { id, displayName })),
+	/**  作業コピーへ切り替える。 */
+	switchWorkCopy: (id: string, branch: string) => typedError<null, AppError>(__TAURI_INVOKE("switch_work_copy", { id, branch })),
+	/**  作業コピーを元の作業コピーに取り込む（採用）。ぶつかりは取り込みと同じ型で返し、解消の画面へ進む。 */
+	adoptWorkCopy: (id: string, branch: string) => typedError<PullResult, AppError>(__TAURI_INVOKE("adopt_work_copy", { id, branch })),
+	/**
+	 *  「しまう」（`archived = true`）と、しまうのをやめる（`false`）。表示名の記録だけを変える（git は呼ばない）。
+	 *  いまの作業コピーの「しまう」は画面が出さない（`archivable`）。一覧は、いまの作業コピーを `archived` でも必ず残す。
+	 */
+	archiveWorkCopy: (id: string, branch: string, archived: boolean) => typedError<null, AppError>(__TAURI_INVOKE("archive_work_copy", { id, branch, archived })),
 	/**
 	 *  確認付きの復旧（設計書 5.2 E10）。画面の「取得し直す」から呼ぶ。
 	 * 
@@ -469,6 +482,9 @@ export type AiScope = "file-names" | "text-diff" | "with-images";
  *  - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
  *    `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
  *    `restore_point_not_found`、`unexpected`
+ *  - 作業コピー（4.9）: `unsaved_changes`（未保存の変更がある）、`skip_worktree_present`（無視中の
+ *    ファイルがある）、`work_copy_disabled`（設定がオフ）、`work_copy_name_invalid`（表示名が 1〜40 文字
+ *    でない、または制御文字を含む）、`work_copy_not_found`
  *  - 新規ファイルの「元に戻す（作成しない）」: `discard_not_untracked`（保存の対象になっている）、
  *    `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
  *    入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
@@ -1749,6 +1765,22 @@ export type UnavailableReason =
 { kind: "not-enough-memory"; needed: number | null; have: number | null } | 
 /**  空き容量が足りない（必要量と空き容量） */
 { kind: "not-enough-disk"; needed: number | null; have: number | null };
+
+/**  一覧の 1 件。`branch` は内部名で、画面の操作の識別子としてだけ使い、表示しない（設計書 2.1） */
+export type WorkCopyItem = {
+	/**  内部名（Git のブランチ名。`wc-YYYYMMDD-HHMMSS`）。画面には出さない */
+	branch: string,
+	/**  利用者が付けた表示名。元のものと、表示名の記録が無いものは null（画面が文言を補う） */
+	display_name: string | null,
+	/**  いまの作業コピーか（作業フォルダがこのブランチを指している） */
+	is_current: boolean,
+	/**  元の作業コピーか（画面は「元のまま」と出す） */
+	is_original: boolean,
+	/**  「しまう」で一覧の既定から隠しているか */
+	archived: boolean,
+	/**  作成時刻（UTC の RFC 3339）。元のものは null。画面が地域の時刻に直して出す */
+	created_at: string | null,
+};
 
 /**  xlsx の値のあるセル 1 件（行・列は 0 始まり） */
 export type XlsxCell = {

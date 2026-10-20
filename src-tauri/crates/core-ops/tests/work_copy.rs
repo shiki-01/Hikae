@@ -358,9 +358,9 @@ fn adopt_rejects_names_in_the_wrong_direction() -> TestResult {
 }
 
 #[test]
-fn adopting_keeps_a_local_ignored_copy_while_bringing_in_the_work_copy() -> TestResult {
-    // 無視中（skip-worktree）のファイルを、作業コピーが変更しているケース（設計書 4.8 を採用にも適用する）。
-    // 手元の内容（元の版と同じ）は退避を経て残り、作業コピーの版が取り込まれる。
+fn adopting_is_refused_while_a_file_is_ignored_even_if_the_work_copy_changes_it() -> TestResult {
+    // 無視中（skip-worktree）のファイルがあるプロジェクトでは、採用を断る（設計書 4.9 の案 A。2026-10-20）。
+    // 手元の内容を退避して取り込む方法は採らない。何も変えず、無視の印も残す。
     let tmp = tempfile::tempdir()?;
     let repo = repo_with_one_save(tmp.path())?;
     write_test_file(&repo, "報告書2.txt", "元の版")?;
@@ -371,18 +371,24 @@ fn adopting_keeps_a_local_ignored_copy_while_bringing_in_the_work_copy() -> Test
     ops().switch_work_copy(&repo, "main")?;
     // 元の作業コピーで、報告書2.txt を無視中にする（手元の内容は元の版と同じ）
     ops().set_skip_worktree(&repo, &["報告書2.txt".to_string()])?;
-    // 採用は upstream の無いリポジトリでも、採用するブランチの変更を基準に退避を判断する
-    let outcome = ops().adopt_work_copy(&repo, &name, "main")?;
+    let head_before = get_head_commit(&repo).ok_or("no head")?;
 
-    assert!(matches!(outcome, PullOutcome::FastForwarded), "{outcome:?}");
+    let err = ops()
+        .adopt_work_copy(&repo, &name, "main")
+        .expect_err("must refuse");
+
+    assert!(matches!(err, OpsError::SkipWorktreePresent), "{err:?}");
+    assert_eq!(current(&repo), "main");
+    assert_eq!(
+        get_head_commit(&repo).as_deref(),
+        Some(head_before.as_str())
+    );
     assert_eq!(read(&repo, "報告書2.txt"), "元の版", "手元の内容は残る");
     assert_eq!(
         ops().list_skip_worktree(&repo)?,
         vec!["報告書2.txt".to_string()],
-        "無視の印は付け直される"
+        "無視の印は残る"
     );
-    // 履歴の側には、作業コピーの版が入っている
-    assert_eq!(git_out(&repo, &["show", "main:報告書2.txt"]), "案の版");
     Ok(())
 }
 
@@ -460,5 +466,99 @@ fn create_without_any_saved_version_is_rejected() -> TestResult {
 
     assert!(matches!(err, OpsError::InvalidInput(_)), "{err:?}");
     assert_eq!(current(&repo), "main");
+    Ok(())
+}
+
+/// 無視中（skip-worktree）のファイルに手元の編集を残して、main にいる状態を作る。
+/// 作業コピーは一つ作って保存済み（案の版は作業コピー側だけにある）。
+fn repo_with_skipped_local_edit(
+    tmp: &Path,
+) -> Result<(PathBuf, String), Box<dyn std::error::Error>> {
+    let repo = repo_with_one_save(tmp)?;
+    let name = ops().create_work_copy(&repo)?;
+    write_test_file(&repo, "報告書.txt", "案の編集")?;
+    ops().save(&repo, "案")?;
+    ops().switch_work_copy(&repo, "main")?;
+    // 無視中にしてから、手元だけで編集する（作業フォルダの内容は main の版と違う）
+    ops().set_skip_worktree(&repo, &["報告書.txt".to_string()])?;
+    write_test_file(&repo, "報告書.txt", "手元の編集")?;
+    Ok((repo, name))
+}
+
+/// 無視中のファイルの印が付いているか（`ls-files -v` の先頭が `S`）
+fn is_skipped(repo: &Path, rel: &str) -> bool {
+    git_out(repo, &["ls-files", "-v", "--", rel]).starts_with("S ")
+}
+
+#[test]
+fn switch_is_refused_while_a_file_is_ignored_and_changes_nothing() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let (repo, name) = repo_with_skipped_local_edit(tmp.path())?;
+    let head_before = get_head_commit(&repo).ok_or("no head")?;
+
+    let err = ops()
+        .switch_work_copy(&repo, &name)
+        .expect_err("must refuse");
+
+    assert!(matches!(err, OpsError::SkipWorktreePresent), "{err:?}");
+    assert_eq!(err.kind(), "skip-worktree-present");
+    assert_eq!(current(&repo), "main");
+    assert_eq!(
+        get_head_commit(&repo).as_deref(),
+        Some(head_before.as_str())
+    );
+    // 手元の内容と無視の印は、そのまま残る
+    assert_eq!(read(&repo, "報告書.txt"), "手元の編集");
+    assert!(is_skipped(&repo, "報告書.txt"));
+    Ok(())
+}
+
+#[test]
+fn adopt_is_refused_while_a_file_is_ignored_and_changes_nothing() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let (repo, name) = repo_with_skipped_local_edit(tmp.path())?;
+    let head_before = get_head_commit(&repo).ok_or("no head")?;
+
+    let err = ops()
+        .adopt_work_copy(&repo, &name, "main")
+        .expect_err("must refuse");
+
+    assert!(matches!(err, OpsError::SkipWorktreePresent), "{err:?}");
+    assert_eq!(current(&repo), "main");
+    assert_eq!(
+        get_head_commit(&repo).as_deref(),
+        Some(head_before.as_str())
+    );
+    assert_eq!(read(&repo, "報告書.txt"), "手元の編集");
+    assert!(is_skipped(&repo, "報告書.txt"));
+    Ok(())
+}
+
+#[test]
+fn create_is_allowed_while_a_file_is_ignored_and_keeps_the_local_copy() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let (repo, _) = repo_with_skipped_local_edit(tmp.path())?;
+
+    // 作業フォルダは変わらない（同じ版から枝を作って切り替えるだけ）
+    let created = ops().create_work_copy(&repo)?;
+
+    assert_eq!(current(&repo), created);
+    assert_eq!(read(&repo, "報告書.txt"), "手元の編集");
+    assert!(is_skipped(&repo, "報告書.txt"));
+    Ok(())
+}
+
+#[test]
+fn switch_works_again_once_the_ignore_is_cleared() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let (repo, name) = repo_with_skipped_local_edit(tmp.path())?;
+    // 無視を外すと、手元の編集は未保存の変更として見える。先に保存してから切り替える
+    ops().clear_skip_worktree(&repo, &["報告書.txt".to_string()])?;
+    ops().save(&repo, "手元の編集")?;
+
+    ops().switch_work_copy(&repo, &name)?;
+
+    assert_eq!(current(&repo), name);
+    assert_eq!(read(&repo, "報告書.txt"), "案の編集");
     Ok(())
 }

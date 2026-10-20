@@ -96,6 +96,7 @@
 	import { useProject } from './queries';
 	import AutoSaveStatus from './AutoSaveStatus.svelte';
 	import RepoLargeNotice from './RepoLargeNotice.svelte';
+	import WorkCopyBar from './WorkCopyBar.svelte';
 
 	interface Props {
 		projectId: string;
@@ -579,6 +580,14 @@
 		onconnect={() => (connectOpen = true)}
 		onrelogin={() => goto(`${resolve('/welcome')}${reloginSearch(page.url)}`)}
 	/>
+
+	{#if settingsQuery.data?.settings.workCopyEnabled}
+		<WorkCopyBar
+			{projectId}
+			onconflict={() => (conflictOpen = true)}
+			onshowchanges={() => (tab = 'changes')}
+		/>
+	{/if}
 
 	{#if project.data?.repoLarge}
 		<RepoLargeNotice

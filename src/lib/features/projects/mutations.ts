@@ -295,3 +295,74 @@ export function useRepairBroken() {
 		onError: (error) => reportError(error)
 	}));
 }
+
+/** 作業コピーの操作の結果を、画面の状態へつなぐ先（設計書 4.9） */
+export interface WorkCopyCallbacks {
+	/** 作業コピーを作れた（表示名を渡す） */
+	onCreated: (displayName: string) => void;
+	/** 未保存の変更があるため、何も変えずに断られた（保存してから、と案内する） */
+	onUnsaved: () => void;
+	/** 取り込みでぶつかりが残った（解消の画面へ進む） */
+	onConflict: () => void;
+	/** 取り込みが済んだ（ぶつかりは無い） */
+	onAdopted: () => void;
+}
+
+/**
+ * 作業コピーの作る・切り替える・採用する・しまう（設計書 4.9）。
+ * 未保存の変更で断られたときは `onUnsaved` に渡し、それ以外の失敗は通常のエラー表示にする。
+ */
+export function useWorkCopyActions(getProjectId: () => string, callbacks: WorkCopyCallbacks) {
+	const client = useQueryClient();
+	const refresh = () => invalidateProject(client, getProjectId());
+	const failed = (error: unknown) => {
+		if (error instanceof AppError && error.backend?.code === 'unsaved_changes') {
+			callbacks.onUnsaved();
+		} else {
+			reportError(error);
+		}
+	};
+	const create = createMutation(() => ({
+		mutationFn: (displayName: string) => api.createWorkCopy(getProjectId(), displayName),
+		onSuccess: async (_, displayName) => {
+			await refresh();
+			pushToast({ type: 'success', message: t('wc.toast_created', { name: displayName }) });
+			callbacks.onCreated(displayName);
+		},
+		onError: failed
+	}));
+	const switchTo = createMutation(() => ({
+		mutationFn: (branch: string) => api.switchWorkCopy(getProjectId(), branch),
+		onSuccess: async () => {
+			await refresh();
+			pushToast({ type: 'info', message: t('wc.toast_switched') });
+		},
+		onError: failed
+	}));
+	const adopt = createMutation(() => ({
+		mutationFn: (branch: string) => api.adoptWorkCopy(getProjectId(), branch),
+		onSuccess: async (result) => {
+			await refresh();
+			if (result.conflictCount > 0) {
+				callbacks.onConflict();
+			} else if (result.mergedCount > 0) {
+				callbacks.onAdopted();
+				pushToast({ type: 'success', message: t('wc.toast_adopted') });
+			} else {
+				callbacks.onAdopted();
+				pushToast({ type: 'info', message: t('wc.toast_adopt_none') });
+			}
+		},
+		onError: failed
+	}));
+	const archive = createMutation(() => ({
+		mutationFn: (variables: { branch: string; archived: boolean }) =>
+			api.archiveWorkCopy(getProjectId(), variables.branch, variables.archived),
+		onSuccess: async () => {
+			await refresh();
+			pushToast({ type: 'info', message: t('wc.toast_archived') });
+		},
+		onError: (error) => reportError(error)
+	}));
+	return { create, switchTo, adopt, archive };
+}

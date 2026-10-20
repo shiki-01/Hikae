@@ -746,6 +746,8 @@ export interface AppSettings {
 	aiOllamaUrl: string;
 	/** 拡張機能の開発者モード（署名のない拡張の追加を許す。設計書 11.9） */
 	extensionDevMode: boolean;
+	/** 作業コピー（別の案を試す場所）を使う。オフのときはプロジェクト画面に出さず、作成・切り替え・採用も拒否する（設計書 4.9） */
+	workCopyEnabled: boolean;
 }
 
 export type SettingKey = keyof AppSettings;
@@ -754,6 +756,22 @@ export type SettingKey = keyof AppSettings;
 export interface SettingsView {
 	settings: AppSettings;
 	overridden: SettingKey[];
+}
+
+/** 作業コピーの一覧の 1 件（設計書 4.9）。`branch` は内部名で、画面には出さない */
+export interface WorkCopy {
+	/** 内部名（操作の識別子としてだけ使う） */
+	branch: string;
+	/** 利用者が付けた表示名。元のものと、表示名の記録が無いものは null */
+	displayName: string | null;
+	/** いまの作業コピーか */
+	isCurrent: boolean;
+	/** 元の作業コピーか（「元のまま」と出す） */
+	isOriginal: boolean;
+	/** 「しまう」で一覧の既定から隠しているか */
+	archived: boolean;
+	/** 作成時刻。元のものは null */
+	createdAt: Date | null;
 }
 
 export interface DeviceFlow {
@@ -936,6 +954,25 @@ export interface ProjectApi {
 	repairBrokenProject(projectId: string): Promise<RepairOutcome>;
 	/** 起動時に自動で閉じた中断の操作名を一度だけ取り出す（取り出すと空になる） */
 	takeClosedInterruptedNotices(): Promise<string[]>;
+
+	/**
+	 * 作業コピーの一覧（設計書 4.9）。`includeArchived` が偽なら「しまった」ものを除く。
+	 * 作業コピーの機能がオフでも読める
+	 */
+	listWorkCopies(projectId: string, includeArchived: boolean): Promise<WorkCopy[]>;
+	/**
+	 * 「別の案を試す」。いまの版から表示名つきの作業コピーを作って切り替える。
+	 * 未保存の変更があれば何も変えず `unsaved_changes`
+	 */
+	createWorkCopy(projectId: string, displayName: string): Promise<void>;
+	/** 作業コピーへ切り替える。未保存の変更があれば何も変えず `unsaved_changes` */
+	switchWorkCopy(projectId: string, branch: string): Promise<void>;
+	/**
+	 * 作業コピーを元のまま側に取り込む（採用）。取り込みと同じ結果を返し、ぶつかりは解消の画面へ進む
+	 */
+	adoptWorkCopy(projectId: string, branch: string): Promise<FetchResult>;
+	/** 作業コピーを「しまう」（`archived` が真）か、しまうのをやめる。git には触れない */
+	archiveWorkCopy(projectId: string, branch: string, archived: boolean): Promise<void>;
 
 	/** `projectId` を指定すると、そのプロジェクトの上書きを反映した設定を返す */
 	getSettings(projectId: string | null): Promise<SettingsView>;

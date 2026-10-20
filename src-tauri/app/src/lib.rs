@@ -37,6 +37,7 @@ mod scheduler;
 mod skip_worktree;
 mod version;
 mod watch;
+mod work_copy;
 
 use events::{OpTrigger, StatusChanged};
 use ops_runner::{
@@ -60,6 +61,9 @@ use scheduler::{pull_task_result, push_task_result, SchedulerHandle};
 /// - 操作: `conflict`（params: `count`）、`git_failed`、`git_timeout`、`safety_check_failed`、
 ///   `io_error`、`file_in_use`（params: `file`。特定できたときのみ）、`invalid_input`、
 ///   `restore_point_not_found`、`unexpected`
+/// - 作業コピー（4.9）: `unsaved_changes`（未保存の変更がある）、`skip_worktree_present`（無視中の
+///   ファイルがある）、`work_copy_disabled`（設定がオフ）、`work_copy_name_invalid`（表示名が 1〜40 文字
+///   でない、または制御文字を含む）、`work_copy_not_found`
 /// - 新規ファイルの「元に戻す（作成しない）」: `discard_not_untracked`（保存の対象になっている）、
 ///   `discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に
 ///   入らない大きさ）、`discard_not_backed_up`（復元点に内容を確認できない）、`trash_failed`
@@ -265,6 +269,15 @@ impl AppError {
                 "未保存の変更があるため、作業コピーを切り替えられませんでした".to_string(),
                 "ファイルは変更されていません。".to_string(),
                 "保存してから、もう一度お試しください".to_string(),
+                None,
+            ),
+            // 無視中のファイルがあるため、作業コピーの切り替え・採用を断った（設計書 4.9 の案 A）。何も変えていない
+            OpsError::SkipWorktreePresent => (
+                "skip_worktree_present",
+                "無視中のファイルがあるため、作業コピーを切り替えられませんでした".to_string(),
+                "ファイルは変更されていません。".to_string(),
+                "保存しないファイルの設定で、無視中のファイルを外してから、もう一度お試しください"
+                    .to_string(),
                 None,
             ),
             OpsError::InvalidInput(msg) => (
@@ -3538,6 +3551,11 @@ fn specta_builder() -> Builder<tauri::Wry> {
             recover_interrupted,
             interrupted::dismiss_interrupted,
             interrupted::take_closed_interrupted_notices,
+            work_copy::list_work_copies,
+            work_copy::create_work_copy,
+            work_copy::switch_work_copy,
+            work_copy::adopt_work_copy,
+            work_copy::archive_work_copy,
             repair::repair_broken_project,
             github::get_session,
             github::start_login,

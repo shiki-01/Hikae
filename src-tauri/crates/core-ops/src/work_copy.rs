@@ -5,6 +5,7 @@
 //   復元点を先に作り（不変条件 3）、そのあとに branch / checkout / merge を行う
 // - 切り替えは `checkout <ブランチ>`（`--detach` を渡さない）。`reset --hard`・`checkout -f`・
 //   `branch -d/-D`・`stash` は使わない（不変条件 1）
+// - 切り替え・採用は、無視中（skip-worktree）のファイルが 1 つでもあれば断る（設計書 4.9 の案 A）
 // - 同一プロジェクトの直列実行（不変条件 7）は app 層の直列キューで保つ
 
 use crate::models::{OpsError, PullOutcome, SkipWorktreeReport, WorkCopyInfo};
@@ -82,6 +83,34 @@ fn refuse_if_conflicted(runner: &GitRunner, repo: &Path) -> Result<(), OpsError>
         return Err(OpsError::Conflict(current));
     }
     Ok(())
+}
+
+/// 無視中（skip-worktree）のファイルが 1 つでもあれば、何も変えずに断る（設計書 4.9 の案 A。2026-10-20 に決定）。
+/// 切り替え・採用は別の版へ作業フォルダを動かすため、無視中のファイルの手元の内容を上書きしうる
+/// （無視中の変更は「未保存の変更」に数えられない）。作業コピーを作るだけの操作は作業フォルダを変えないため断らない。
+fn refuse_if_skip_worktree(runner: &GitRunner, repo: &Path) -> Result<(), OpsError> {
+    if !crate::skip_worktree::list_skip_worktree(runner, repo)?.is_empty() {
+        return Err(OpsError::SkipWorktreePresent);
+    }
+    Ok(())
+}
+
+/// 内部名（`wc-YYYYMMDD-HHMMSS`、同秒の連番 `-N` を含む）から、作成時刻（UTC の RFC 3339）を読む（純関数）。
+/// 作業コピーでない名前は None。表示名の記録が無いときの「無題の案（日時）」に使う。
+pub fn created_at_of_work_copy(branch: &str) -> Option<String> {
+    if !core_git::is_work_copy_name(branch) {
+        return None;
+    }
+    let stamp = branch.strip_prefix(PREFIX)?.get(..15)?;
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[9..11],
+        &stamp[11..13],
+        &stamp[13..15]
+    ))
 }
 
 /// 作業コピーの一覧（読み取りのみ）。並びは Git の既定（ブランチ名の順）
@@ -171,6 +200,7 @@ pub(crate) fn switch(
     meta: Meta,
 ) -> Result<(), OpsError> {
     refuse_if_conflicted(runner, repo)?;
+    refuse_if_skip_worktree(runner, repo)?;
     // 一覧に無い名前（`-` で始まる名前を含む）は、checkout に渡さず拒否する
     if !local_branches(runner, repo)?.iter().any(|b| b == branch) {
         return Err(OpsError::InvalidInput(
@@ -209,7 +239,7 @@ fn switch_to(
 ///
 /// 手順: 元の作業コピーへ切り替える（切り替えと同じ規則。復元点 `work-copy-switch`）→ 復元点
 /// （`work-copy-adopt`）→ `merge`。取り込む内容が無ければ何もせず `UpToDate`。ぶつかりは `Conflicted`
-/// として返し、解消（4.4）の流れに乗せる。無視中のファイルの扱いは取り込み（4.3・4.8）と同じ。
+/// として返し、解消（4.4）の流れに乗せる。無視中（skip-worktree）のファイルがあれば断る（4.9 の案 A）。
 pub(crate) fn adopt(
     runner: &GitRunner,
     repo: &Path,
@@ -220,6 +250,7 @@ pub(crate) fn adopt(
     skip: &mut SkipWorktreeReport,
 ) -> Result<PullOutcome, OpsError> {
     refuse_if_conflicted(runner, repo)?;
+    refuse_if_skip_worktree(runner, repo)?;
     // 採用は「作業コピーを元へ取り込む」ため、名前の向きを検査する（逆向きや同じ名前は拒否）
     if !is_work_copy(branch) || is_work_copy(original) || branch == original {
         return Err(OpsError::InvalidInput(
@@ -281,6 +312,22 @@ mod tests {
         let dt = utc(2026, Month::October, 20, 3, 34, 56)
             .to_offset(UtcOffset::from_hms(9, 0, 0).expect("offset"));
         assert_eq!(stamp(dt), "20261020-033456");
+    }
+
+    #[test]
+    fn created_at_is_read_from_the_internal_name() {
+        assert_eq!(
+            created_at_of_work_copy("wc-20261020-033456").as_deref(),
+            Some("2026-10-20T03:34:56Z")
+        );
+        // 同秒の連番は時刻に影響しない
+        assert_eq!(
+            created_at_of_work_copy("wc-20261020-033456-2").as_deref(),
+            Some("2026-10-20T03:34:56Z")
+        );
+        // 作業コピーの形でない名前は読まない（元のものを含む）
+        assert_eq!(created_at_of_work_copy("main"), None);
+        assert_eq!(created_at_of_work_copy("wc-2026102-033456"), None);
     }
 
     #[test]

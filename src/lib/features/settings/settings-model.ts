@@ -12,6 +12,8 @@ export interface ToggleRow {
 	key: SettingKey;
 	label: MessageKey;
 	text: MessageKey;
+	/** アプリ全体の設定のみ（プロジェクト別に上書きしない）。「このプロジェクトだけ変更」を出さない */
+	globalOnly?: boolean;
 }
 
 export interface SelectOptionRow {
@@ -25,6 +27,7 @@ export interface SelectRow {
 	label: MessageKey;
 	text: MessageKey;
 	options: SelectOptionRow[];
+	globalOnly?: boolean;
 }
 
 /** 数値の項目。よく使う値の選択肢に加えて、「カスタム」で範囲内の好きな数値を入力できる */
@@ -37,6 +40,7 @@ export interface NumberRow {
 	presets: { value: number; label: MessageKey }[];
 	/** カスタム入力欄の横に出す単位 */
 	unit: MessageKey;
+	globalOnly?: boolean;
 }
 
 export type SettingRow = ToggleRow | SelectRow | NumberRow;
@@ -154,6 +158,20 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 		}
 	]
 };
+
+/**
+ * 詳細設定（設定画面の最下部の折りたたみ。設計書 7.1）。アプリ全体の設定だけを変える
+ * （プロジェクトの画面から開いても、プロジェクト別の上書きにはしない）
+ */
+export const ADVANCED_ROWS: ToggleRow[] = [
+	{
+		type: 'toggle',
+		key: 'workCopyEnabled',
+		label: 'settings.work_copy',
+		text: 'settings.work_copy_text',
+		globalOnly: true
+	}
+];
 
 export const SETTINGS_TABS = Object.keys(SETTING_ROWS) as SettingsTab[];
 

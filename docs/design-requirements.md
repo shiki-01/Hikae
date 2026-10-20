@@ -122,6 +122,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 | ImpactList | 影響ファイル一覧（いまの内容 → 戻した後） | 変更 / 取り除かれる / 復活する | MVP |
 | OwnerPicker | 保存先（個人 / Org）のアバター付き選択 | 選択可、作成権限なし（灰色＋理由） | MVP |
 | ModelCard | AI モデルの段階、容量、必要メモリ、DL ボタン | 未導入、DL 中（進捗）、導入済み、PC 条件を満たさない（灰色＋理由）、途中まで取得（再開）。推奨バッジ、使用中。実装済み（`lib/components/ModelCard.svelte`、Phase 2）。ライセンスは名前と URL の文字だけを表示し、リンクにはしない（画面側に外部を開く権限を与えないため） | Phase 2 |
+| WorkCopyBar | 作業コピーの現在の名前とメニュー（一覧・別の案を試す・元のまま側に取り込む・しまう）。機能がオフのときは出さない | 作業コピーなし（元のまま）、作業コピー、無題（日時）、表示名、ダイアログ（名前入力・取り込みの確認・未保存で断られた案内） | Phase 3（実装済み。2026-10-20） |
 | IgnoreRuleRow | パターン、対象件数、削除 | 通常、追跡中ファイルあり（2択の導線） | Phase 2（実装済み。`features/settings/IgnoreSection.svelte` の行として） |
 
 ## 4. 画面ごとのレイアウト
@@ -179,6 +180,10 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 - 新規ファイルの「元に戻す（作成しない）」は、確認ダイアログ（D2 と同じ 480px の確認系。主ボタン「元に戻す」は primary、副ボタン「キャンセル」。文言は「このファイルを作る前の状態に戻します。」「ファイルはごみ箱に移され、履歴の控えからも取り戻せます。」）を経て実行し、トーストに「取り消す」を付ける。復元点に入らない大きいファイルなどは、実行せず 3 要素のエラーダイアログで理由を知らせる
 - 変更なし時: 左ペインに「すべて保存済みです」と最終保存日時、SaveBar は無効状態
 - 左右ペインの境界はドラッグで幅調整可能
+- **作業コピーの切り替え（Phase 3。`WorkCopyBar`。設定「作業コピーを使う」がオンのときだけ出す。2026-10-20）**: StatusHeader の直下、本体の上に置く細い行（高さ 40。背景 bg-subtle、下に境界線）。左に「作業コピー」（fg-muted の小さい文字）、続けて現在の作業コピーの名前（secondary・sm の Button ＋下向きの chevron）。名前は、元のものは「元のまま」、表示名が無いものは「無題の案（日時）」、現在のものは「（いま）」を付ける。内部名（`wc-…`）は出さない
+  - メニュー（Menu。項目の並び）: 作業コピーの一覧（いまのものは「（いま）」。選ぶと切り替える）→ 区切り → 「別の案を試す」（フォーム系 560px。名前の入力は 1〜40 文字。空・長すぎ・改行は入力欄の下に 1 行の注記）→ 「この案を元のまま側に取り込む」（いまの作業コピーが元のまま以外のときだけ。確認系 480px。主ボタン「取り込む」）→ 「「案」をしまう」（いま以外の作業コピーごと。一覧から隠すだけで、削除はしない）
+  - 未保存の変更があって断られたら、警告系 480px で「保存してから切り替えます」を出す。主ボタン「変更を見る」は変更タブを開く（保存欄へ。保存は通常の保存で行う）
+  - ぶつかりが残ったときは、既存の変更のぶつかり解消（D3）を開く。無視中のファイルがあって断られたときは、3 要素のエラー表示（D4）
 
 ### S3 プロジェクト画面（履歴タブ）
 
@@ -310,7 +315,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 ### 7.1 部品（全 30 種との対応）
 
 - **3.1 基本部品 16 種はすべて実装済み**: Button、IconButton、SplitButton、TextField、Select、Checkbox / Radio（`Checkbox.svelte` と `Radio.svelte`）、Toggle、SegmentedControl、Badge、Tooltip、Menu、ProgressBar、Spinner、Toast、Dialog、Tabs
-- **3.2 Hikae 固有の部品 14 種はすべて実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、ConflictItem、ImpactList、OwnerPicker、ModelCard。DiffView は表示拡張の `src/lib/ext-ui/DiffView.svelte` に移動した（design.md 11.5）。ImageCompare は `src/lib/ext-ui/CompareImage.svelte`、IgnoreRuleRow は `features/settings/IgnoreSection.svelte` の行として実装した。MVP の 27 種はすべて実装済み
+- **3.2 Hikae 固有の部品 14 種はすべて実装済み**: StatusHeader、ProjectCard、ChangeListItem、DropZone、SaveBar、TimelineItem、FileActionRow、ConflictItem、ImpactList、OwnerPicker、ModelCard。DiffView は表示拡張の `src/lib/ext-ui/DiffView.svelte` に移動した（design.md 11.5）。ImageCompare は `src/lib/ext-ui/CompareImage.svelte`、IgnoreRuleRow は `features/settings/IgnoreSection.svelte` の行として実装した。MVP の 27 種はすべて実装済み。作業コピーの WorkCopyBar（3.2 の表）は Phase 3 で、2026-10-20 に実装した
 - **Phase 2 の AI（ModelCard、S7、保存欄の提案）は実装済み**（2026-10-10。ビルド・型・単体テストまで確認。Tauri の実機での見た目、実ネットワークでのダウンロード、llama-server の実起動、Ollama の実機は未確認）。ImageCompare は実装済み（第 3 段階で `src/lib/ext-ui/CompareImage.svelte` に移し、表示拡張の中で描く）。IgnoreRuleRow 相当は `features/settings/IgnoreSection.svelte`
 - 一覧にない部品として、一覧系のローディング用に Skeleton（5章）と、変更の種類を示す小さな ChangeBadge（「すべてのファイル」のツリー用）を追加した。Toast の表示は `features/notifications`（`ToastHost`）が受け持つ
 - StatusHeader は、5章の 7 状態に加えて「中断された操作」「大きいファイルで見送り」「そのほかの要対応（再認証など）」「GitHub に接続していない」を持つ。優先順位は、ぶつかり、中断、大きいファイル、処理中、オフライン、そのほかの要対応、未保存、取り込み待ち、アップロード待ち、未接続、保存済みの順（`components/status-header.ts`）。5章の「要対応が最優先、次が処理中」と同じ並びを保っている
@@ -330,6 +335,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | D2 元に戻す確認 | `features/history/RestoreDialog.svelte` | 実装済み |
 | D3 変更のぶつかり解消 | `features/conflict/ConflictModal.svelte` | 実装済み（2 択、「別名で残す」、行ごとに選ぶ `LineEditor`）。S6（保存しないファイル）はパターン管理と追跡解除まで実装済み |
 | D4 エラー表示 | `features/notifications`（`ErrorDialog`、`ToastHost`） | 実装済み |
+| 作業コピー（4.9） | `features/projects/WorkCopyBar.svelte`（プロジェクト画面の直下）、設定の「詳細設定」の `ADVANCED_ROWS`（`features/settings/settings-model.ts`） | 実装済み（2026-10-20）。「保存ダイアログ」は無く、未保存で断られたときは変更タブ（保存欄）へ案内する。しまった作業コピーを元に戻す画面は未実装（一覧には出ない） |
 
 設計に無かった画面として、次のダイアログを追加した: 大きいファイルの確認（`SizeCheckDialog`。保存時の E07 / E08）、取り込み・アップロードを見送ったときの案内（`SyncSizeDialog`）、途中で止まった操作の案内（`InterruptedDialog`。E15）、ファイル追加の結果（`AddFilesResultDialog`。置き換えた／置き換えられず別名にした／別名にした／飛ばしたリンク／追加できなかった理由／大きいものを分けて出す）、同名のファイルの確認（`AddConflictDialog`。480px の警告系。ファイルごとに「両方残す（既定）／置き換える／追加しない」を Radio で選び、複数あるときは「すべてに同じ選択を使う」。置き換えられないファイルは「置き換える」を無効にして理由を出す。「置き換える場合も、置き換える前の内容は自動保存として残り、あとから取り消せます。」の安心文つき）、「一覧から外す」の確認（`RemoveProjectDialog`）。
 

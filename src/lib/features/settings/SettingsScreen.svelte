@@ -20,6 +20,7 @@
 	import { goBackFromSettings } from '#lib/features/projects/relogin.js';
 	import { useSettings, useUpdateSettings } from './queries';
 	import {
+		ADVANCED_ROWS,
 		SETTING_ROWS,
 		confirmationFor,
 		isOverridden,
@@ -39,6 +40,9 @@
 
 	const settings = useSettings(() => activeProjectId);
 	const update = useUpdateSettings(() => activeProjectId);
+	// 詳細設定は全体の設定だけを読み書きする（プロジェクトの上書きを作らない）
+	const globalSettings = useSettings(() => null);
+	const globalUpdate = useUpdateSettings(() => null);
 
 	// 他の画面から開くときは、?tab= で最初に開くタブを指定できる
 	const requestedTab = page.url.searchParams.get('tab');
@@ -149,7 +153,28 @@
 				{:else if id === 'advanced'}
 					<details class="b:1px|solid|border r:md p:3">
 						<summary class="type-body cursor:pointer">{t('settings.advanced_toggle')}</summary>
-						<p class="m:0 mt:3 type-body fg:fg-muted">{t('settings.advanced_empty')}</p>
+						{#if globalSettings.data}
+							{@const globalValues = globalSettings.data.settings}
+							<ul class="m:0 mt:3 p:0 list-style:none flex flex-direction:column">
+								{#each ADVANCED_ROWS as row (row.key)}
+									<li
+										class="flex align-items:center justify-content:space-between gap:6 py:3 bb:1px|solid|border"
+									>
+										<div class="flex flex-direction:column gap:1 min-w:0">
+											<span class="type-body font-weight:500">{t(row.label)}</span>
+											<span class="type-small fg:fg-muted">{t(row.text)}</span>
+										</div>
+										<Toggle
+											label={t(row.label)}
+											checked={globalValues[row.key] as boolean}
+											onchange={(checked) => globalUpdate.mutate({ [row.key]: checked })}
+										/>
+									</li>
+								{/each}
+							</ul>
+						{:else}
+							<Skeleton class="h:48px mt:3" />
+						{/if}
 					</details>
 				{:else if id === 'ai'}
 					<AiSection />
@@ -172,7 +197,7 @@
 			<span class="type-small fg:fg-muted">{t(row.text)}</span>
 			{#if scope === 'project' && isOverridden(overridden, row.key)}
 				<Badge variant="sync" label={t('settings.overridden')} class="align-self:flex-start" />
-			{:else if scope === 'all' && contextProjectId}
+			{:else if scope === 'all' && contextProjectId && !row.globalOnly}
 				<button
 					type="button"
 					class="align-self:flex-start p:0 b:0 bg:transparent fg:accent type-small cursor:pointer text-decoration:underline"

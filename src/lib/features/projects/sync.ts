@@ -17,7 +17,8 @@ export function invalidateProject(client: QueryClient, projectId: string): Promi
 		client.invalidateQueries({ queryKey: ['compare', projectId] }),
 		client.invalidateQueries({ queryKey: ['impact', projectId] }),
 		client.invalidateQueries({ queryKey: ['point-files', projectId] }),
-		client.invalidateQueries({ queryKey: keys.memoSuggestion(projectId) })
+		client.invalidateQueries({ queryKey: keys.memoSuggestion(projectId) }),
+		client.invalidateQueries({ queryKey: keys.workCopies(projectId) })
 	]);
 }
 

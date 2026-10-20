@@ -8,6 +8,20 @@
 use crate::{Store, StoreError};
 use rusqlite::params;
 
+/// 表示名の最大の文字数（設計書 4.9 の画面の入力制限）
+pub const DISPLAY_NAME_MAX_CHARS: usize = 40;
+
+/// 表示名を検査し、前後の空白を除いた値を返す（純関数）。1〜40 文字、制御文字を含まないこと。
+/// 外れたときは None（呼び出し側が入力の誤りとして扱う）。
+pub fn normalize_display_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let count = trimmed.chars().count();
+    if count == 0 || count > DISPLAY_NAME_MAX_CHARS || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 /// 作業コピーの記録 1 件
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkCopyRecord {
@@ -77,6 +91,23 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_names_are_trimmed_and_limited_to_forty_characters() {
+        assert_eq!(normalize_display_name("  案A  ").as_deref(), Some("案A"));
+        assert_eq!(normalize_display_name("   "), None);
+        assert_eq!(normalize_display_name(""), None);
+        // 40 文字までは通り、41 文字は通らない（文字数で数える）
+        let forty: String = "あ".repeat(40);
+        assert_eq!(
+            normalize_display_name(&forty).as_deref(),
+            Some(forty.as_str())
+        );
+        assert_eq!(normalize_display_name(&"あ".repeat(41)), None);
+        // 制御文字（改行・タブを含む）は通らない
+        assert_eq!(normalize_display_name("案\nB"), None);
+        assert_eq!(normalize_display_name("案\tB"), None);
+    }
 
     #[test]
     fn archive_flag_round_trips_and_missing_rows_are_reported() {

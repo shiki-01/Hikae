@@ -40,6 +40,7 @@ import {
 	mapSkipStashList,
 	mapSession,
 	mapSettingsView,
+	mapWorkCopy,
 	restoreFileFailure,
 	toBackendConflictDecisions,
 	toBackendConflictPolicy,
@@ -53,6 +54,7 @@ import type {
 	AddFilesOutcome,
 	AddProjectInput,
 	AddProjectResult,
+	FetchResult,
 	AppSettings,
 	AppHealth,
 	FolderCheck,
@@ -89,7 +91,8 @@ import type {
 	InterruptedRecovery,
 	SaveOutcome,
 	SavePoint,
-	SizeChoice
+	SizeChoice,
+	WorkCopy
 } from './types';
 
 type Result<T> =
@@ -582,5 +585,26 @@ export const tauriApi: ProjectApi = {
 
 	async takeClosedInterruptedNotices(): Promise<string[]> {
 		return commands.takeClosedInterruptedNotices();
+	},
+
+	async listWorkCopies(projectId: string, includeArchived: boolean): Promise<WorkCopy[]> {
+		const items = await unwrap(commands.listWorkCopies(projectId, includeArchived));
+		return items.map(mapWorkCopy);
+	},
+
+	async createWorkCopy(projectId: string, displayName: string): Promise<void> {
+		await unwrap(commands.createWorkCopy(projectId, displayName));
+	},
+
+	async switchWorkCopy(projectId: string, branch: string): Promise<void> {
+		await unwrap(commands.switchWorkCopy(projectId, branch));
+	},
+
+	async adoptWorkCopy(projectId: string, branch: string): Promise<FetchResult> {
+		return mapPull(await unwrap(commands.adoptWorkCopy(projectId, branch)));
+	},
+
+	async archiveWorkCopy(projectId: string, branch: string, archived: boolean): Promise<void> {
+		await unwrap(commands.archiveWorkCopy(projectId, branch, archived));
 	}
 };

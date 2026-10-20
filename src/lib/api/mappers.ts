@@ -50,6 +50,7 @@ import type {
 	SaveSizeChoice,
 	SessionInfo,
 	SettingsPatch_Deserialize,
+	WorkCopyItem as BackendWorkCopyItem,
 	SizeCheckResult,
 	SettingsView as BackendSettingsView,
 	SyncStatus,
@@ -121,7 +122,8 @@ import type {
 	AiUnavailableReason,
 	SizeCheck,
 	SizeChoice,
-	SkipReason
+	SkipReason,
+	WorkCopy
 } from './types';
 
 /** バックエンドのエラー（3 要素）を画面側の AppError に変換する */
@@ -738,7 +740,8 @@ export const SETTING_BACKEND_KEYS = {
 	aiScope: 'ai_scope',
 	aiSuggestBody: 'ai_suggest_body',
 	aiOllamaUrl: 'ai_ollama_url',
-	extensionDevMode: 'extension_dev_mode'
+	extensionDevMode: 'extension_dev_mode',
+	workCopyEnabled: 'work_copy_enabled'
 } as const satisfies Record<SettingKey, keyof BackendSettings>;
 
 export function mapSettings(settings: BackendSettings): AppSettings {
@@ -764,7 +767,20 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		aiScope: settings.ai_scope,
 		aiSuggestBody: settings.ai_suggest_body,
 		aiOllamaUrl: settings.ai_ollama_url,
-		extensionDevMode: settings.extension_dev_mode
+		extensionDevMode: settings.extension_dev_mode,
+		workCopyEnabled: settings.work_copy_enabled
+	};
+}
+
+/** 作業コピーの一覧の 1 件（作成時刻は RFC 3339 の文字列で届く） */
+export function mapWorkCopy(item: BackendWorkCopyItem): WorkCopy {
+	return {
+		branch: item.branch,
+		displayName: item.display_name,
+		isCurrent: item.is_current,
+		isOriginal: item.is_original,
+		archived: item.archived,
+		createdAt: item.created_at ? new Date(item.created_at) : null
 	};
 }
 

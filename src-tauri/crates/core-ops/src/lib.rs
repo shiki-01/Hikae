@@ -38,6 +38,7 @@ mod size_check;
 mod skip_worktree;
 mod windows_names;
 mod work_copy;
+pub use work_copy::created_at_of_work_copy;
 
 pub use add_files::{
     AddFilesRequest, FOLDER_MAX_DEPTH, FOLDER_MAX_FILES, LARGE_FILE_LIMIT_BYTES,

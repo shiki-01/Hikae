@@ -36,7 +36,8 @@ const current: AppSettings = {
 	aiScope: 'text-diff',
 	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434',
-	extensionDevMode: false
+	extensionDevMode: false,
+	workCopyEnabled: false
 };
 
 describe('設定項目の定義', () => {

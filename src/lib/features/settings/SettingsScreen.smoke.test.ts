@@ -47,6 +47,23 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(screen.getByRole('tab', { name: t('settings.auto_save'), selected: true })).toBeTruthy();
 	});
 
+	it('詳細設定の「作業コピーを使う」は、全体の設定を切り替える（プロジェクトの上書きは作らない）', async () => {
+		setPageUrl('/settings?project=proj1');
+		renderWithClient(SettingsScreen);
+		await fireEvent.click(await screen.findByRole('tab', { name: t('settings.advanced') }));
+		await fireEvent.click(await screen.findByText(t('settings.advanced_toggle')));
+		const toggle = await screen.findByRole('switch', { name: t('settings.work_copy') });
+		expect(toggle.getAttribute('aria-checked')).toBe('false');
+		await fireEvent.click(toggle);
+		await vi.waitFor(() =>
+			expect(
+				screen.getByRole('switch', { name: t('settings.work_copy') }).getAttribute('aria-checked')
+			).toBe('true')
+		);
+		// 作業コピーはプロジェクト別に上書きできないため、「このプロジェクトだけ変更」は出さない
+		expect(screen.queryByText(t('settings.project_only'))).toBeNull();
+	});
+
 	it('一般のタブに GitHub アカウントが出て、ログアウトの確認から、ログインの手順へ移る', async () => {
 		renderWithClient(SettingsScreen);
 		expect(await screen.findByTestId('account-name')).toBeTruthy();

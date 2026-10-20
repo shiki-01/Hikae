@@ -304,6 +304,11 @@ pub enum OpsError {
     #[error("there are unsaved changes")]
     UnsavedChanges,
 
+    /// 無視中（skip-worktree）のファイルがあるため、作業コピーを切り替える・採用するのを断った（設計書 4.9。案 A）。
+    /// 切り替え先の版と無視中の手元の内容が食い違うと、git が手元の内容を上書きしうるため、何も変更していない
+    #[error("there are ignored files that would be overwritten by switching")]
+    SkipWorktreePresent,
+
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
     Unexpected(String),
@@ -720,6 +725,7 @@ impl OpsError {
             OpsError::DiscardRefused { .. } => "discard-refused",
             OpsError::AddRefused(_) => "add-refused",
             OpsError::UnsavedChanges => "unsaved-changes",
+            OpsError::SkipWorktreePresent => "skip-worktree-present",
             OpsError::SkipStashPending => "skip-stash-pending",
             OpsError::Unexpected(_) => "unexpected",
         }

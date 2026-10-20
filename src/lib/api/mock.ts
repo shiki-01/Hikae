@@ -1,4 +1,4 @@
-import { t } from '#lib/i18n/index.js';
+import { t, type MessageKey } from '#lib/i18n/index.js';
 import { AppError } from './errors';
 import { suggestMemo } from '#lib/features/changes/memo.js';
 import { diffLines } from './diff-lines';
@@ -69,7 +69,8 @@ import type {
 	SettingKey,
 	SettingsView,
 	SizeCheck,
-	SizeChoice
+	SizeChoice,
+	WorkCopy
 } from './types';
 
 const MINUTE = 60_000;
@@ -225,6 +226,49 @@ const MOCK_BINARY = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'pdf', 'psd'];
 const MOCK_UNSUPPORTED = ['zip'];
 const MOCK_CORRUPT = ['rar'];
 const MOCK_TOO_LARGE = ['tar'];
+
+/** モックの作業コピー（設計書 4.9）。元のブランチは `main` とみなす */
+const MOCK_ORIGINAL_BRANCH = 'main';
+
+interface MockWorkCopy {
+	branch: string;
+	displayName: string;
+	createdAt: Date;
+	archived: boolean;
+}
+
+const workCopyStore = new Map<string, { copies: MockWorkCopy[]; current: string }>();
+
+function workCopiesOf(projectId: string): { copies: MockWorkCopy[]; current: string } {
+	let work = workCopyStore.get(projectId);
+	if (!work) {
+		work = { copies: [], current: MOCK_ORIGINAL_BRANCH };
+		workCopyStore.set(projectId, work);
+	}
+	return work;
+}
+
+/** 表示名の検査（バックエンドと同じ。1〜40 文字、制御文字なし） */
+function isValidMockDisplayName(name: string): boolean {
+	const chars = [...name];
+	return chars.length >= 1 && chars.length <= 40 && !chars.some((c) => /\p{Cc}/u.test(c));
+}
+
+/** 作業コピーのモックのエラー（バックエンドの 3 要素と同じ文言の鍵を使う） */
+function mockBackendError(code: string): AppError {
+	return new AppError(
+		'backend',
+		`mock ${code}`,
+		{},
+		{
+			code,
+			params: {},
+			whatHappened: t(`errcode.${code}.what` as MessageKey),
+			dataIsSafe: t(`errcode.${code}.safe` as MessageKey),
+			nextAction: t(`errcode.${code}.next` as MessageKey)
+		}
+	);
+}
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -527,7 +571,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 	aiScope: 'text-diff',
 	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434',
-	extensionDevMode: false
+	extensionDevMode: false,
+	workCopyEnabled: false
 };
 
 // 画面確認用: localStorage の 'hikae.mock.login' に denied / expired / setup を入れると、ログインの結末を再現できる
@@ -1717,6 +1762,81 @@ export const mockApi: ProjectApi = {
 
 	async takeClosedInterruptedNotices(): Promise<string[]> {
 		return [];
+	},
+
+	async listWorkCopies(projectId: string, includeArchived: boolean): Promise<WorkCopy[]> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const work = workCopiesOf(projectId);
+		const original: WorkCopy = {
+			branch: MOCK_ORIGINAL_BRANCH,
+			displayName: null,
+			isCurrent: work.current === MOCK_ORIGINAL_BRANCH,
+			isOriginal: true,
+			archived: false,
+			createdAt: null
+		};
+		const copies = work.copies
+			.filter((c) => includeArchived || !c.archived || c.branch === work.current)
+			.map((c) => ({
+				branch: c.branch,
+				displayName: c.displayName,
+				isCurrent: c.branch === work.current,
+				isOriginal: false,
+				archived: c.archived,
+				createdAt: c.createdAt
+			}));
+		return [original, ...copies];
+	},
+
+	async createWorkCopy(projectId: string, displayName: string): Promise<void> {
+		await sleep(WAIT_LONG);
+		const state = stateOf(projectId);
+		const name = displayName.trim();
+		if (!isValidMockDisplayName(name)) throw mockBackendError('work_copy_name_invalid');
+		if (state.changes.length > 0) throw mockBackendError('unsaved_changes');
+		const work = workCopiesOf(projectId);
+		const createdAt = new Date();
+		const stamp = createdAt
+			.toISOString()
+			.replace(/\.\d+Z$/, '')
+			.replace(/[-:]/g, '')
+			.replace('T', '-');
+		const branch = `wc-${stamp}`;
+		work.copies.push({ branch, displayName: name, createdAt, archived: false });
+		work.current = branch;
+	},
+
+	async switchWorkCopy(projectId: string, branch: string): Promise<void> {
+		await sleep(WAIT_LONG);
+		const state = stateOf(projectId);
+		const work = workCopiesOf(projectId);
+		if (branch !== MOCK_ORIGINAL_BRANCH && !work.copies.some((c) => c.branch === branch)) {
+			throw mockBackendError('invalid_input');
+		}
+		if (state.changes.length > 0) throw mockBackendError('unsaved_changes');
+		work.current = branch;
+	},
+
+	async adoptWorkCopy(projectId: string, branch: string): Promise<FetchResult> {
+		await sleep(WAIT_LONG);
+		const state = stateOf(projectId);
+		const work = workCopiesOf(projectId);
+		if (!work.copies.some((c) => c.branch === branch)) throw mockBackendError('invalid_input');
+		if (state.changes.length > 0) throw mockBackendError('unsaved_changes');
+		// 模擬: 元のまま側へ切り替えて取り込む（ぶつかりは作らない）
+		work.current = MOCK_ORIGINAL_BRANCH;
+		return { mergedCount: 1, conflictCount: 0, sizeCheck: null, unsavedCount: null };
+	},
+
+	async archiveWorkCopy(projectId: string, branch: string, archived: boolean): Promise<void> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const work = workCopiesOf(projectId);
+		const copy = work.copies.find((c) => c.branch === branch);
+		if (!copy) throw mockBackendError('work_copy_not_found');
+		if (archived && work.current === branch) throw mockBackendError('work_copy_in_use');
+		copy.archived = archived;
 	},
 
 	async getSettings(projectId: string | null): Promise<SettingsView> {

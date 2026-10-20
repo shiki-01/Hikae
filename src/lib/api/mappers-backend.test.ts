@@ -26,7 +26,8 @@ import {
 	mapSettingsView,
 	restoreFileFailure,
 	toBackendPatch,
-	toBackendSizeChoice
+	toBackendSizeChoice,
+	mapWorkCopy
 } from './mappers';
 
 describe('ログインの変換', () => {
@@ -290,7 +291,8 @@ describe('設定の変換', () => {
 			aiScope: 'text-diff',
 			aiSuggestBody: true,
 			aiOllamaUrl: 'http://localhost:11434',
-			extensionDevMode: false
+			extensionDevMode: false,
+			workCopyEnabled: false
 		});
 	});
 
@@ -688,5 +690,39 @@ describe('フォルダの確認と健全性の変換', () => {
 			repoBroken: false,
 			repoLarge: false
 		});
+	});
+});
+
+describe('作業コピーの一覧の変換（設計書 4.9）', () => {
+	it('作成時刻の文字列を Date にし、表示名が無いものは null のままにする', () => {
+		const mapped = mapWorkCopy({
+			branch: 'wc-20261020-033456',
+			display_name: null,
+			is_current: true,
+			is_original: false,
+			archived: false,
+			created_at: '2026-10-20T03:34:56Z'
+		});
+		expect(mapped).toEqual({
+			branch: 'wc-20261020-033456',
+			displayName: null,
+			isCurrent: true,
+			isOriginal: false,
+			archived: false,
+			createdAt: new Date('2026-10-20T03:34:56Z')
+		});
+	});
+
+	it('元のものは作成時刻を持たない', () => {
+		expect(
+			mapWorkCopy({
+				branch: 'main',
+				display_name: null,
+				is_current: false,
+				is_original: true,
+				archived: false,
+				created_at: null
+			}).createdAt
+		).toBeNull();
 	});
 });

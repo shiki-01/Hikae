@@ -714,7 +714,6 @@ const messages = {
 	'skip_stash.copy_label': 'この PC の退避',
 	'toast.open_location': '場所を開く',
 	'settings.advanced_toggle': '詳細設定を表示',
-	'settings.advanced_empty': '現在、変更できる詳細設定はありません。',
 	'extensions.description':
 		'拡張機能は、ファイルの表示や内容の読み取りを担います。同梱の拡張は無効にできません。',
 	'extensions.list_label': '拡張機能の一覧',
@@ -1501,7 +1500,64 @@ const messages = {
 		'フォルダが見つからないため、取得し直せません。先に場所を指定してください',
 	'repair.done': '取得し直しが終わりました。以前のフォルダは「{path}」に残しています',
 	'repair.copy_failed': '{count} 件のファイルは戻せませんでした。「{path}」に残っています: {files}',
-	'repair.more': 'ほか {count} 件'
+	'repair.more': 'ほか {count} 件',
+
+	// 作業コピー（別の案を試す場所。設計書 4.9）
+	'wc.label': '作業コピー',
+	'wc.menu': '作業コピーの一覧',
+	'wc.original': '元のまま',
+	'wc.untitled': '無題の案',
+	'wc.untitled_at': '無題の案（{time}）',
+	'wc.current_label': '{name}（いま）',
+	'wc.new': '別の案を試す',
+	'wc.adopt': 'この案を元のまま側に取り込む',
+	'wc.archive': '「{name}」をしまう',
+	'wc.new_title': '別の案を試す',
+	'wc.new_description':
+		'いまの内容を控えてから、同じ内容の案を作って切り替えます。元のまま側の内容は変わりません。',
+	'wc.name_label': '案の名前',
+	'wc.name_placeholder': '例: 見積もりを変えた版',
+	'wc.name_hint': '1〜40 文字。あとから見分けるための名前です。',
+	'wc.name_invalid': '名前は 1〜40 文字で、改行などは使えません',
+	'wc.name_submit': '作って切り替える',
+	'wc.cancel': 'やめる',
+	'wc.close': '閉じる',
+	'wc.adopt_title': 'この案を元のまま側に取り込みますか？',
+	'wc.adopt_description':
+		'この案の内容を、元のまま側に取り込みます。取り込む前に控えを残すため、あとから戻せます。',
+	'wc.adopt_submit': '取り込む',
+	'wc.unsaved_title': '保存してから切り替えます',
+	'wc.unsaved_description':
+		'未保存の変更があるため、作業コピーを切り替えられませんでした。ファイルは変更されていません。',
+	'wc.unsaved_next': '変更タブで保存してから、もう一度選んでください。',
+	'wc.show_changes': '変更を見る',
+	'wc.toast_created': '「{name}」を作って切り替えました',
+	'wc.toast_switched': '作業コピーを切り替えました',
+	'wc.toast_adopted': 'この案を元のまま側に取り込みました',
+	'wc.toast_adopt_none': '取り込む内容はありませんでした',
+	'wc.toast_archived': '作業コピーをしまいました',
+	'settings.work_copy': '作業コピーを使う（別の案を試す）',
+	'settings.work_copy_text':
+		'オンにすると、プロジェクトの画面に作業コピーの切り替えを出します。オフにしても、作った作業コピーは残ります。',
+	'errcode.unsaved_changes.what': '未保存の変更があるため、作業コピーを切り替えられませんでした',
+	'errcode.unsaved_changes.safe': 'ファイルは変更されていません。',
+	'errcode.unsaved_changes.next': '保存してから、もう一度お試しください',
+	'errcode.skip_worktree_present.what':
+		'無視中のファイルがあるため、作業コピーを切り替えられませんでした',
+	'errcode.skip_worktree_present.safe': 'ファイルは変更されていません。',
+	'errcode.skip_worktree_present.next':
+		'保存しないファイルの設定で、無視中のファイルを外してから、もう一度お試しください',
+	'errcode.work_copy_disabled.what': '作業コピーの機能がオフになっています',
+	'errcode.work_copy_disabled.safe': 'ファイルは変更されていません。',
+	'errcode.work_copy_disabled.next':
+		'設定の「詳細設定」で「作業コピーを使う」をオンにしてから、もう一度お試しください',
+	'errcode.work_copy_name_invalid.what': '案の名前が使えない形式です',
+	'errcode.work_copy_name_invalid.safe': 'ファイルは変更されていません。',
+	'errcode.work_copy_name_invalid.next':
+		'1〜40 文字で、改行などを含まない名前にしてから、もう一度お試しください',
+	'errcode.work_copy_not_found.what': '指定された作業コピーが見つかりませんでした',
+	'errcode.work_copy_not_found.safe': 'ファイルは変更されていません。',
+	'errcode.work_copy_not_found.next': '一覧を開き直してから、もう一度お試しください'
 } as const;
 
 export default messages;
