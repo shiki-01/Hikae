@@ -253,6 +253,8 @@ export const commands = {
 	takeClosedInterruptedNotices: () => __TAURI_INVOKE<string[]>("take_closed_interrupted_notices"),
 	/**  作業コピーの一覧（読み取りのみ。記録と git の内容を合成する）。 */
 	listWorkCopies: (id: string, includeArchived: boolean) => typedError<WorkCopyItem[], AppError>(__TAURI_INVOKE("list_work_copies", { id, includeArchived })),
+	/**  クラウド控えの状態を返す（読み取りのみ。キューは通さない） */
+	cloudBackupStatus: (id: string) => typedError<CloudBackupStatus, AppError>(__TAURI_INVOKE("cloud_backup_status", { id })),
 	/**  「別の案を試す」。表示名を検査し、いまの版から作業コピーを作って切り替える。 */
 	createWorkCopy: (id: string, displayName: string) => typedError<null, AppError>(__TAURI_INVOKE("create_work_copy", { id, displayName })),
 	/**  作業コピーへ切り替える。 */
@@ -565,6 +567,11 @@ export type AppSettings = {
 	auto_snapshot_delay_secs: number,
 	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days: number,
+	/**
+	 *  自動保存（`refs/hikae/snapshots/`）をクラウド（origin）にも控える。全体のみ（プロジェクト別には上書きできない）。
+	 *  初期値オフ。オンにする前に容量を使うことを画面で確認する（設計書 6.4、7.1）
+	 */
+	snapshot_cloud_backup: boolean,
 	/**  メモの自動提案の方式 */
 	memo_suggestion: MemoSuggestion,
 	/**  元に戻した後に自動で保存する */
@@ -682,6 +689,16 @@ export type ClonePhase =
 export type CloneProgress = {
 	project_id: string,
 	phase: ClonePhase,
+};
+
+/**  画面の「自動保存」タブに出す、クラウド控えの状態 */
+export type CloudBackupStatus = {
+	/**  設定「自動保存をクラウドにも控える」がオンか */
+	enabled: boolean,
+	/**  ローカルにある自動保存の数 */
+	local_count: number,
+	/**  この起動で最後に控えた総数。まだ控えていない・再起動後は null（画面は「未確認」と出す） */
+	cloud_count: number | null,
 };
 
 export type ConflictChoice = "mine" | "theirs";
@@ -1435,6 +1452,11 @@ export type SettingsPatch_Deserialize = {
 	auto_snapshot_delay_secs?: number | null,
 	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days?: number | null,
+	/**
+	 *  自動保存（`refs/hikae/snapshots/`）をクラウド（origin）にも控える。全体のみ（プロジェクト別には上書きできない）。
+	 *  初期値オフ。オンにする前に容量を使うことを画面で確認する（設計書 6.4、7.1）
+	 */
+	snapshot_cloud_backup?: boolean | null,
 	/**  メモの自動提案の方式 */
 	memo_suggestion?: MemoSuggestion | null,
 	/**  元に戻した後に自動で保存する */
@@ -1503,6 +1525,11 @@ export type SettingsPatch_Serialize = {
 	auto_snapshot_delay_secs?: number | null,
 	/**  自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム） */
 	snapshot_retention_days?: number | null,
+	/**
+	 *  自動保存（`refs/hikae/snapshots/`）をクラウド（origin）にも控える。全体のみ（プロジェクト別には上書きできない）。
+	 *  初期値オフ。オンにする前に容量を使うことを画面で確認する（設計書 6.4、7.1）
+	 */
+	snapshot_cloud_backup?: boolean | null,
 	/**  メモの自動提案の方式 */
 	memo_suggestion?: MemoSuggestion | null,
 	/**  元に戻した後に自動で保存する */

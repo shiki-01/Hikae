@@ -32,6 +32,14 @@ export function useUpdateSettings(getProjectId: () => string | null) {
 	}));
 }
 
+/** 自動保存のクラウド控えの状態（この PC の件数と、クラウドの件数。設計書 6.4）。読み取りのみ */
+export function useCloudBackupStatus(getProjectId: () => string) {
+	return createQuery(() => ({
+		queryKey: keys.cloudBackup(getProjectId()),
+		queryFn: () => api.cloudBackupStatus(getProjectId())
+	}));
+}
+
 /** 拡張機能の一覧（標準と追加分。無効のものを含む。設計書 11.9） */
 export function useExtensions() {
 	return createQuery(() => ({

@@ -53,6 +53,7 @@ import type {
 	WorkCopyItem as BackendWorkCopyItem,
 	SizeCheckResult,
 	SettingsView as BackendSettingsView,
+	CloudBackupStatus as BackendCloudBackupStatus,
 	SyncStatus,
 	AiCatalog as BackendAiCatalog,
 	ModelView as BackendModelView,
@@ -123,7 +124,8 @@ import type {
 	SizeCheck,
 	SizeChoice,
 	SkipReason,
-	WorkCopy
+	WorkCopy,
+	CloudBackupStatus
 } from './types';
 
 /** バックエンドのエラー（3 要素）を画面側の AppError に変換する */
@@ -729,6 +731,7 @@ export const SETTING_BACKEND_KEYS = {
 	autoSnapshotDelaySecs: 'auto_snapshot_delay_secs',
 	snapshotRetentionDays: 'snapshot_retention_days',
 	snapshotSizeCapX: 'snapshot_size_cap_x',
+	snapshotCloudBackup: 'snapshot_cloud_backup',
 	autoSaveAfterRestore: 'auto_save_after_restore',
 	largeFileWarnMb: 'large_file_warn_mb',
 	showSnapshotsInTimeline: 'show_snapshots_in_timeline',
@@ -757,6 +760,7 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		autoSnapshotDelaySecs: settings.auto_snapshot_delay_secs,
 		snapshotRetentionDays: settings.snapshot_retention_days,
 		snapshotSizeCapX: settings.snapshot_size_cap_x,
+		snapshotCloudBackup: settings.snapshot_cloud_backup,
 		autoSaveAfterRestore: settings.auto_save_after_restore,
 		largeFileWarnMb: settings.large_file_warn_mb,
 		showSnapshotsInTimeline: settings.show_snapshots_in_timeline,
@@ -771,6 +775,15 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		extensionDevMode: settings.extension_dev_mode,
 		workCopyEnabled: settings.work_copy_enabled,
 		language: settings.language
+	};
+}
+
+/** 自動保存のクラウド控えの状態（件数は数値。未確認は null のまま） */
+export function mapCloudBackupStatus(status: BackendCloudBackupStatus): CloudBackupStatus {
+	return {
+		enabled: status.enabled,
+		localCount: status.local_count,
+		cloudCount: status.cloud_count
 	};
 }
 

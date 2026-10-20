@@ -25,6 +25,8 @@ export const keys = {
 	skipStash: (id: string) => ['skip-stash', id] as const,
 	/** 作業コピーの一覧（設計書 4.9）。切り替え・作成・採用・しまうの後に取り直す */
 	workCopies: (id: string) => ['work-copies', id] as const,
+	/** 自動保存のクラウド控えの状態（件数）。アップロード・保存の後に取り直す */
+	cloudBackup: (id: string) => ['cloud-backup', id] as const,
 	compare: (id: string, path: string, from: string, to: string) =>
 		['compare', id, path, from, to] as const,
 	/** Office 文書の比較。`['compare', id]` の接頭辞で、変更後に一緒に無効化される */

@@ -10,6 +10,7 @@
 	import Select from '#lib/components/Select.svelte';
 	import AiSection from '#lib/features/ai/AiSection.svelte';
 	import AccountSection from './AccountSection.svelte';
+	import CloudBackupNote from './CloudBackupNote.svelte';
 	import ExtensionsSection from './ExtensionsSection.svelte';
 	import IgnoreSection from './IgnoreSection.svelte';
 	import NumberSetting from './NumberSetting.svelte';
@@ -152,6 +153,9 @@
 								{@render settingRow(row, values, overridden)}
 							{/each}
 						</ul>
+					{/if}
+					{#if id === 'auto_save' && contextProjectId}
+						<CloudBackupNote projectId={contextProjectId} />
 					{/if}
 				{:else if id === 'advanced'}
 					<details class="b:1px|solid|border r:md p:3">

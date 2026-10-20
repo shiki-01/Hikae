@@ -70,7 +70,10 @@ describe('i18n', () => {
 			'chars',
 			'lines',
 			'max_chars',
-			'max_lines'
+			'max_lines',
+			// 自動保存のクラウド控え（この PC の件数と、クラウドの件数）
+			'local',
+			'cloud'
 		]);
 		for (const [key, value] of Object.entries(ja)) {
 			for (const match of value.matchAll(placeholders)) {

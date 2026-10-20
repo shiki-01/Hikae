@@ -41,6 +41,7 @@ import {
 	mapSession,
 	mapSettingsView,
 	mapWorkCopy,
+	mapCloudBackupStatus,
 	restoreFileFailure,
 	toBackendConflictDecisions,
 	toBackendConflictPolicy,
@@ -92,7 +93,8 @@ import type {
 	SaveOutcome,
 	SavePoint,
 	SizeChoice,
-	WorkCopy
+	WorkCopy,
+	CloudBackupStatus
 } from './types';
 
 type Result<T> =
@@ -585,6 +587,10 @@ export const tauriApi: ProjectApi = {
 
 	async takeClosedInterruptedNotices(): Promise<string[]> {
 		return commands.takeClosedInterruptedNotices();
+	},
+
+	async cloudBackupStatus(projectId: string): Promise<CloudBackupStatus> {
+		return mapCloudBackupStatus(await unwrap(commands.cloudBackupStatus(projectId)));
 	},
 
 	async listWorkCopies(projectId: string, includeArchived: boolean): Promise<WorkCopy[]> {

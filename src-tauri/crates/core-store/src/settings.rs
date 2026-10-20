@@ -176,6 +176,9 @@ define_settings! {
     auto_snapshot_delay_secs: u32 = 120,
     /// 自動保存の保持期間（日）。7〜730 の任意の値（画面の選択肢は 30 / 90 / 365 とカスタム）
     snapshot_retention_days: u32 = 90,
+    /// 自動保存（`refs/hikae/snapshots/`）をクラウド（origin）にも控える。全体のみ（プロジェクト別には上書きできない）。
+    /// 初期値オフ。オンにする前に容量を使うことを画面で確認する（設計書 6.4、7.1）
+    snapshot_cloud_backup: bool = false,
 
     // ----- 保存・表示・外部アプリ（プロジェクト別に上書きできる） -----
     /// メモの自動提案の方式
@@ -447,6 +450,7 @@ mod tests {
         assert!(d.auto_snapshot_enabled);
         assert_eq!(d.auto_snapshot_delay_secs, 120);
         assert_eq!(d.snapshot_retention_days, 90);
+        assert!(!d.snapshot_cloud_backup);
         assert_eq!(d.memo_suggestion, MemoSuggestion::Rules);
         assert!(!d.auto_save_after_restore);
         assert_eq!(d.large_file_warn_mb, 50);
@@ -531,6 +535,28 @@ mod tests {
             Some(PROJECT_OVERRIDABLE_KEYS),
         );
         assert_eq!(patch_from_entries(entries).language, None);
+    }
+
+    #[test]
+    fn snapshot_cloud_backup_is_global_only_and_boolean() {
+        // 全体のみ（プロジェクト別の上書きは拒否する）
+        assert!(!PROJECT_OVERRIDABLE_KEYS.contains(&"snapshot_cloud_backup"));
+        let entries = valid_stored_entries(
+            [("snapshot_cloud_backup", "true")].map(|(k, v)| (k.to_string(), v.to_string())),
+            None,
+        );
+        assert!(settings_from_entries(entries).snapshot_cloud_backup);
+        // 壊れた値は既定（オフ）に戻す
+        for raw in ["\"yes\"", "1", "null"] {
+            let entries = valid_stored_entries(
+                [("snapshot_cloud_backup", raw)].map(|(k, v)| (k.to_string(), v.to_string())),
+                None,
+            );
+            assert!(
+                !settings_from_entries(entries).snapshot_cloud_backup,
+                "{raw}"
+            );
+        }
     }
 
     #[test]

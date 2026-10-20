@@ -10,7 +10,7 @@ pub use parser::{
     parse_status_v2, BranchInfo, ParseError, StatusCode, StatusEntry, StatusKind, StatusV2,
 };
 pub use runner::{GitOutput, GitRunner};
-pub use validation::{is_work_copy_name, validate, Rejection};
+pub use validation::{is_snapshot_cloud_refspec, is_work_copy_name, validate, Rejection};
 
 use thiserror::Error;
 

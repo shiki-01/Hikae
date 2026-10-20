@@ -68,6 +68,7 @@ import type {
 	Session,
 	SettingKey,
 	SettingsView,
+	CloudBackupStatus,
 	SizeCheck,
 	SizeChoice,
 	WorkCopy
@@ -560,6 +561,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 	autoSnapshotDelaySecs: 120,
 	snapshotRetentionDays: 90,
 	snapshotSizeCapX: 2,
+	snapshotCloudBackup: false,
 	autoSaveAfterRestore: false,
 	largeFileWarnMb: 50,
 	showSnapshotsInTimeline: 'collapsed',
@@ -1838,6 +1840,17 @@ export const mockApi: ProjectApi = {
 		if (!copy) throw mockBackendError('work_copy_not_found');
 		if (archived && work.current === branch) throw mockBackendError('work_copy_in_use');
 		copy.archived = archived;
+	},
+
+	async cloudBackupStatus(projectId: string): Promise<CloudBackupStatus> {
+		await sleep(WAIT_SHORT);
+		stateOf(projectId);
+		const enabled = readStorage<AppSettings>(
+			'hikae.settings',
+			DEFAULT_SETTINGS
+		).snapshotCloudBackup;
+		// モックには実際の控えが無いため、件数は固定の値を返す（控えを試したあとの表示を確かめる用）
+		return { enabled, localCount: 3, cloudCount: enabled ? 2 : null };
 	},
 
 	async getSettings(projectId: string | null): Promise<SettingsView> {

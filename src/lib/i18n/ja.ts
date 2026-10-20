@@ -603,6 +603,17 @@ const messages = {
 	'settings.snapshot_size_cap': '自動保存の容量上限',
 	'settings.snapshot_size_cap_text':
 		'保存したデータの大きさに対する、自動保存が使える容量の目安です。超えると古い自動保存から整理します。',
+	'settings.cloud_backup': '自動保存をクラウドにも控える',
+	'settings.cloud_backup_text':
+		'自動保存を、保存の控えと同じクラウドの場所にも控えます。自動保存の数だけクラウドの容量を使います。',
+	'settings.confirm_cloud_backup_title': '自動保存をクラウドにも控えますか',
+	'settings.confirm_cloud_backup_text':
+		'自動保存の数だけクラウドの容量を使います。クラウド側の古い控えは自動では消えません。',
+	'settings.cloud_status': 'この PC に {local} 件、クラウドに {cloud} 件控えています',
+	'settings.cloud_status_unknown':
+		'この PC に {local} 件あります。クラウドの件数は、次にアップロードしたあとに分かります',
+	'settings.cloud_status_local_only': 'この PC に {local} 件あり、クラウドにはまだ控えていません',
+	'settings.cloud_status_note': '古い控えは、GitHub 側で消せます。',
 
 	'settings.opt_off': 'オフ',
 	'settings.opt_interval_5': '5 分ごと',

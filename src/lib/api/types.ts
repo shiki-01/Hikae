@@ -726,6 +726,8 @@ export interface AppSettings {
 	snapshotRetentionDays: number;
 	/** 自動保存の容量上限（保存済みの木の大きさの倍数）。0 は上限なし */
 	snapshotSizeCapX: number;
+	/** 自動保存をクラウド（保存先）にも控える。全体の設定だけ（設計書 6.4。初期値オフ） */
+	snapshotCloudBackup: boolean;
 	autoSaveAfterRestore: boolean;
 	/** 大きいファイルの警告閾値（MB） */
 	largeFileWarnMb: number;
@@ -760,6 +762,16 @@ export type SettingKey = keyof AppSettings;
 export interface SettingsView {
 	settings: AppSettings;
 	overridden: SettingKey[];
+}
+
+/** 自動保存のクラウド控えの状態（設計書 6.4。画面の「自動保存」タブに出す） */
+export interface CloudBackupStatus {
+	/** 設定「自動保存をクラウドにも控える」がオンか */
+	enabled: boolean;
+	/** この PC にある自動保存の数 */
+	localCount: number;
+	/** この起動で最後に控えた総数。まだ控えていない・再起動後は null */
+	cloudCount: number | null;
 }
 
 /** 作業コピーの一覧の 1 件（設計書 4.9）。`branch` は内部名で、画面には出さない */
@@ -982,6 +994,9 @@ export interface ProjectApi {
 	getSettings(projectId: string | null): Promise<SettingsView>;
 	/** `projectId` を指定すると、そのプロジェクトだけの上書きとして保存する */
 	updateSettings(projectId: string | null, patch: Partial<AppSettings>): Promise<SettingsView>;
+
+	/** 自動保存のクラウド控えの状態（読み取りのみ。キューは通さない。設計書 6.4） */
+	cloudBackupStatus(projectId: string): Promise<CloudBackupStatus>;
 
 	/** AI のモデル一覧と、この PC での導入状態・可否 */
 	aiCatalog(): Promise<AiCatalog>;

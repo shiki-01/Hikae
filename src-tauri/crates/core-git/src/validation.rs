@@ -1504,6 +1504,67 @@ fn validate_fetch_args(args: &[&str]) -> Result<(), Rejection> {
     Ok(())
 }
 
+/// 自動保存のクラウド控えの送り先の名前空間（設計書 6.4）。`refs/hikae/snapshots/` だけを送る
+const SNAPSHOT_CLOUD_PREFIX: &str = "refs/hikae/snapshots/";
+
+/// git の ref 名として妥当か（`git check-ref-format` の規則を手で確かめる。regex は使わない）。
+/// 空白・制御文字・`~ ^ : ? * [ \` ・`..`・`@{`・`//`・末尾の `/` と `.`・`.` で始まる成分・`.lock` で終わる成分を拒否する。
+fn is_valid_ref_name(name: &str) -> bool {
+    if name.is_empty()
+        || name == "@"
+        || name.ends_with('/')
+        || name.ends_with('.')
+        || name.contains("..")
+        || name.contains("//")
+        || name.contains("@{")
+    {
+        return false;
+    }
+    if name.chars().any(|c| {
+        c.is_control() || c.is_whitespace() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+    }) {
+        return false;
+    }
+    name.split('/')
+        .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+}
+
+/// クラウド控えの refspec 1 個が、固定の形 `<ref>:<同じ ref>` か（設計書 6.4）。
+/// ref は `refs/hikae/snapshots/` の下の妥当な ref 名に限る。`+`・`*`・空白・`..`・先頭の `:`（削除）は拒否する。
+pub fn is_snapshot_cloud_refspec(spec: &str) -> bool {
+    let mut parts = spec.split(':');
+    let (Some(src), Some(dst), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    src == dst
+        && dst
+            .strip_prefix(SNAPSHOT_CLOUD_PREFIX)
+            .is_some_and(|rest| !rest.is_empty())
+        && is_valid_ref_name(dst)
+}
+
+/// `push origin <ref>:<ref> [<ref>:<ref> ...]` の固定の形か（設計書 6.4。自動保存のクラウド控えだけに使う）。
+/// フラグは `-q`・`--quiet`・`--porcelain`・`--progress`・`--no-progress` のみ。
+/// 位置引数は、先頭が `origin`、その後ろは 1 個以上のすべてが固定の refspec。他の形（HEAD やブランチ名）との混在は通さない。
+pub fn is_snapshot_cloud_push_form(args: &[&str]) -> bool {
+    const FLAGS: &[&str] = &[
+        "-q",
+        "--quiet",
+        "--porcelain",
+        "--progress",
+        "--no-progress",
+    ];
+    let positional: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|arg| !FLAGS.contains(arg))
+        .collect();
+    let Some((first, specs)) = positional.split_first() else {
+        return false;
+    };
+    *first == "origin" && !specs.is_empty() && specs.iter().all(|s| is_snapshot_cloud_refspec(s))
+}
+
 fn validate_push_args(args: &[&str]) -> Result<(), Rejection> {
     let not_allowed = [
         "--force",
@@ -1532,6 +1593,12 @@ fn validate_push_args(args: &[&str]) -> Result<(), Rejection> {
                 reason: format!("combined flag '{}' not allowed", arg),
             });
         }
+    }
+
+    // 自動保存のクラウド控え（設計書 6.4）。固定の形に一致するものだけ通す。
+    // 形が合わなければ下の従来の判定へ進み、`refs/hikae/` を含む refspec は拒否される
+    if is_snapshot_cloud_push_form(args) {
+        return Ok(());
     }
 
     let allowed = [
@@ -1568,6 +1635,16 @@ fn validate_push_args(args: &[&str]) -> Result<(), Rejection> {
         if !after_dd && arg.starts_with('-') {
             return Err(Rejection {
                 reason: format!("flag '{}' not allowed", arg),
+            });
+        }
+
+        // 自動保存の名前空間（refs/hikae/）を送り元・送り先に含むものは、固定の形以外では拒否する（設計書 6.4）
+        if arg.contains("refs/hikae") {
+            return Err(Rejection {
+                reason: format!(
+                    "push of '{}' not allowed outside the snapshot cloud form",
+                    arg
+                ),
             });
         }
 
@@ -1795,6 +1872,153 @@ mod tests {
     fn test_reject_push_force() {
         assert!(validate(&["push", "--force"]).is_err());
         assert!(validate(&["push", "-f"]).is_err());
+    }
+
+    #[test]
+    fn test_allow_push_snapshot_cloud_fixed_form() {
+        // 固定の形（同じ ref を両側に書く）。許可フラグは位置を問わない
+        assert!(validate(&[
+            "push",
+            "origin",
+            "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z"
+        ])
+        .is_ok());
+        assert!(validate(&[
+            "push",
+            "-q",
+            "origin",
+            "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            "refs/hikae/snapshots/feature/x/20260101T000000Z-1:refs/hikae/snapshots/feature/x/20260101T000000Z-1",
+            "--porcelain"
+        ])
+        .is_ok());
+        // 設定の -c を前に付けた形（認証の helper）も、サブコマンドの後ろを同じ規則で見る
+        assert!(validate(&[
+            "-c",
+            "credential.helper=!/app hikae credential",
+            "push",
+            "origin",
+            "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn test_reject_push_snapshot_outside_fixed_form() {
+        let rejected: &[&[&str]] = &[
+            // 送り先が refs/hikae/ の別の ref（HEAD やブランチからの送信）
+            &["push", "origin", "HEAD:refs/hikae/snapshots/x"],
+            &["push", "origin", "refs/heads/main:refs/hikae/snapshots/x"],
+            &["push", "origin", "refs/hikae/snapshots/a:refs/hikae/snapshots/b"],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/backup/save/20260101T000000Z:refs/hikae/backup/save/20260101T000000Z",
+            ],
+            // 同じ ref を送るが、他の形（ブランチ・HEAD）と並べる
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "HEAD",
+            ],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "main",
+            ],
+            &["push", "origin", "refs/hikae/snapshots/main/20260101T000000Z", "refs/heads/main"],
+            // 削除（先頭の `:`）、`+`（強制）、ワイルドカード
+            &["push", "origin", ":refs/hikae/snapshots/x"],
+            &["push", "origin", ":refs/hikae/snapshots/main/20260101T000000Z"],
+            &[
+                "push",
+                "origin",
+                "+refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:+refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            &["push", "origin", "+refs/hikae/snapshots/x"],
+            &["push", "origin", "refs/hikae/snapshots/*:refs/hikae/snapshots/*"],
+            // 送り元と送り先が違う、空の送り先、三つ以上のコロン
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/other",
+            ],
+            &["push", "origin", "refs/hikae/snapshots/:refs/hikae/snapshots/"],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            // 空白・制御文字・`..`・`.lock`
+            &["push", "origin", "refs/hikae/snapshots/a b:refs/hikae/snapshots/a b"],
+            &["push", "origin", "refs/hikae/snapshots/a\nb:refs/hikae/snapshots/a\nb"],
+            &["push", "origin", "refs/hikae/snapshots/a..b:refs/hikae/snapshots/a..b"],
+            &["push", "origin", "refs/hikae/snapshots/x.lock:refs/hikae/snapshots/x.lock"],
+            // 固定の形に、許可されないフラグを足す（-u、--tags、--atomic、--delete、--force、--）
+            &[
+                "push",
+                "-u",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "--tags",
+            ],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "--atomic",
+            ],
+            &["push", "--delete", "origin", "refs/hikae/snapshots/main/20260101T000000Z"],
+            &[
+                "push",
+                "origin",
+                "--delete",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            &[
+                "push",
+                "--force",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "--",
+            ],
+            // 固定の形の一部だけ正しい（残りが不正）
+            &[
+                "push",
+                "origin",
+                "refs/hikae/snapshots/main/20260101T000000Z:refs/hikae/snapshots/main/20260101T000000Z",
+                "refs/hikae/snapshots/main/20260101T000001Z:refs/hikae/snapshots/main/20260101T000000Z",
+            ],
+        ];
+        for args in rejected {
+            assert!(validate(args).is_err(), "should be rejected: {args:?}");
+        }
+    }
+
+    #[test]
+    fn test_allow_push_non_snapshot_forms_unchanged() {
+        // 既存の push の許可は変えない
+        assert!(validate(&["push", "-u", "origin", "HEAD"]).is_ok());
+        assert!(validate(&["push", "origin", "HEAD"]).is_ok());
+        assert!(validate(&["push", "--porcelain", "origin", "HEAD"]).is_ok());
+        assert!(validate(&["push", "origin", "HEAD:refs/heads/main"]).is_ok());
     }
 
     #[test]

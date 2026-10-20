@@ -33,6 +33,8 @@ pub(crate) struct OpContext {
     pub session_user: Arc<Mutex<Option<core_github::User>>>,
     /// プロジェクトごとの健全性の記憶（保守・保存の後の検査で更新する）
     pub health: Arc<crate::health::ProjectHealth>,
+    /// 自動保存のクラウド控えの、この起動での最後の総数（設計書 6.4）
+    pub cloud_counts: crate::cloud_backup::CloudCounts,
 }
 
 impl OpContext {
@@ -43,6 +45,7 @@ impl OpContext {
             locks: state.locks_clone(),
             session_user: state.session_user.clone(),
             health: state.health.clone(),
+            cloud_counts: state.cloud_counts.clone(),
         }
     }
 

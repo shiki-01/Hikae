@@ -6,6 +6,7 @@ mod blob;
 mod broad_folder;
 mod changes;
 mod clone_dest;
+mod cloud_backup;
 mod cloud_sync;
 mod default_excludes;
 mod discard_new_file;
@@ -49,6 +50,7 @@ pub use blob::{Blob, OfficeFile, TextFile, WORK_REV};
 pub use broad_folder::{check_project_folder, BroadFolderReason, BroadFolders};
 pub use changes::{ChangedFile, ChangedKind};
 pub use clone_dest::{check_clone_destination, CloneDestinationError};
+pub use cloud_backup::{CloudBackupOutcome, CLOUD_BACKUP_BATCH};
 pub use cloud_sync::{
     detect_cloud_sync, detect_cloud_sync_with_real, CloudRoots, CloudSyncService,
 };
@@ -392,6 +394,19 @@ impl Ops {
         );
         self.record_skip(skip);
         outcome
+    }
+
+    /// 自動保存（`refs/hikae/snapshots/`）を保存先（origin）へ控える（設計書 6.4）。
+    /// 固定の形の refspec（`<ref>:<同じ ref>`）を 100 件ずつ push する。`--force`・削除はしない。
+    /// 送り済みの ref は git が何もしない。ref が 1 件も無ければ何もしない。
+    /// 失敗（オフライン・認証など）は push と同じ `OpsError` で返す。設定・ログインの判断は呼び出し側。
+    pub fn backup_snapshots_to_cloud(&self, repo: &Path) -> Result<CloudBackupOutcome, OpsError> {
+        cloud_backup::backup_snapshots(self.runner(), repo)
+    }
+
+    /// ローカルにある自動保存の ref の数（読み取りのみ。設計書 6.4 の画面の表示）。
+    pub fn local_snapshot_count(&self, repo: &Path) -> Result<u32, OpsError> {
+        cloud_backup::local_snapshot_count(self.runner(), repo)
     }
 
     /// 作業コピーの一覧（設計書 4.9。読み取りのみ）。`wc-` で始まるものが作業コピー、それ以外が元のもの。

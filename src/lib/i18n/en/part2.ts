@@ -208,6 +208,17 @@ export default {
 	'settings.snapshot_size_cap': 'Auto-save size limit',
 	'settings.snapshot_size_cap_text':
 		'A guide for how much space auto-saves can use, relative to the size of the saved data. When exceeded, older auto-saves are cleaned up.',
+	'settings.cloud_backup': 'Also keep auto-saves in the cloud',
+	'settings.cloud_backup_text':
+		'Auto-saves are also copied to the same cloud place as your saves. Each auto-save uses cloud space.',
+	'settings.confirm_cloud_backup_title': 'Also keep auto-saves in the cloud?',
+	'settings.confirm_cloud_backup_text':
+		'Each auto-save uses cloud space. Old copies in the cloud are not deleted automatically.',
+	'settings.cloud_status': '{local} auto-saves on this PC, {cloud} copied to the cloud',
+	'settings.cloud_status_unknown':
+		'{local} auto-saves on this PC. The cloud count is known after the next upload.',
+	'settings.cloud_status_local_only': '{local} auto-saves on this PC, not yet copied to the cloud',
+	'settings.cloud_status_note': 'Old copies can be deleted on GitHub.',
 	'settings.opt_off': 'Off',
 	'settings.opt_interval_5': 'Every 5 minutes',
 	'settings.opt_interval_15': 'Every 15 minutes',

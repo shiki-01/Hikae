@@ -638,6 +638,8 @@ async fn execute(
         }
         SyncTask::Push => {
             let limits = size_limits_for(&ctx.store, &project.id);
+            // 自動保存のクラウド控え（設計書 6.4）。設定がオンでログイン済みのときだけ、アップロードのあとに続ける
+            let plan = crate::cloud_backup::plan_for(ctx, &project.id);
             let r = run_op(
                 ctx,
                 &project.id,
@@ -647,7 +649,7 @@ async fn execute(
                     target: None,
                     data_is_safe: "ファイルは安全です",
                 },
-                move |ops, path| ops.upload_with(path, limits),
+                move |ops, path| crate::cloud_backup::upload_and_back_up(ops, path, limits, plan),
                 summarize_push,
             )
             .await;

@@ -25,6 +25,7 @@ const current: AppSettings = {
 	autoSnapshotDelaySecs: 120,
 	snapshotRetentionDays: 90,
 	snapshotSizeCapX: 2,
+	snapshotCloudBackup: false,
 	autoSaveAfterRestore: true,
 	largeFileWarnMb: 50,
 	showSnapshotsInTimeline: 'collapsed',
@@ -65,6 +66,7 @@ describe('設定項目の定義', () => {
 				'pullOnStartup',
 				'saveBeforePull',
 				'showSnapshotsInTimeline',
+				'snapshotCloudBackup',
 				'snapshotRetentionDays',
 				'snapshotSizeCapX'
 			].sort()
@@ -164,6 +166,13 @@ describe('確認ダイアログが必要な変更', () => {
 		expect(confirmationFor('snapshotRetentionDays', current, 30)).not.toBeNull();
 		expect(confirmationFor('snapshotRetentionDays', current, 365)).toBeNull();
 		expect(confirmationFor('snapshotRetentionDays', current, 90)).toBeNull();
+	});
+
+	it('自動保存をクラウドに控えるのをオンにするときだけ確認する', () => {
+		expect(confirmationFor('snapshotCloudBackup', current, true)).not.toBeNull();
+		expect(confirmationFor('snapshotCloudBackup', current, false)).toBeNull();
+		const on = { ...current, snapshotCloudBackup: true };
+		expect(confirmationFor('snapshotCloudBackup', on, true)).toBeNull();
 	});
 
 	it('そのほかの変更は確認しない', () => {

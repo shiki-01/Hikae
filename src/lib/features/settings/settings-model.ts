@@ -167,6 +167,14 @@ export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 				{ value: 2, label: 'settings.opt_cap_2' },
 				{ value: 5, label: 'settings.opt_cap_5' }
 			]
+		},
+		{
+			type: 'toggle',
+			key: 'snapshotCloudBackup',
+			label: 'settings.cloud_backup',
+			text: 'settings.cloud_backup_text',
+			// 全体の設定だけ（プロジェクト別に上書きしない。設計書 6.4、7.1）
+			globalOnly: true
 		}
 	]
 };
@@ -198,7 +206,7 @@ export interface SettingConfirmation {
 
 /**
  * 変更の影響が大きいときだけ、確認ダイアログの文言を返す。
- * 自動保存・自動アップロードをオフにする、自動保存を残す期間を短くする場合が対象。
+ * 自動保存・自動アップロードをオフにする、自動保存を残す期間を短くする、クラウドへ控えるをオンにする場合が対象。
  */
 export function confirmationFor(
 	key: SettingKey,
@@ -225,6 +233,13 @@ export function confirmationFor(
 		return {
 			title: 'settings.confirm_retention_title',
 			text: 'settings.confirm_retention_text'
+		};
+	}
+	// クラウドへの控えは容量を使うため、オンにする前に確認する（設計書 6.4）
+	if (key === 'snapshotCloudBackup' && !current.snapshotCloudBackup && next === true) {
+		return {
+			title: 'settings.confirm_cloud_backup_title',
+			text: 'settings.confirm_cloud_backup_text'
 		};
 	}
 	return null;

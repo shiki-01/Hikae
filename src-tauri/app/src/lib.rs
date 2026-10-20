@@ -20,6 +20,7 @@ mod ai;
 mod app_settings;
 mod auto_snapshot;
 mod blob_protocol;
+mod cloud_backup;
 mod events;
 mod ext_protocol;
 mod extension_admin;
@@ -429,6 +430,8 @@ pub struct AppState {
     pub extension_lock: Arc<extension_admin::ExtensionLock>,
     /// 起動時に自動で閉じた、途中で止まった操作の名前。画面へ一度だけ知らせる（設計書 6.3）
     pub closed_interrupted: Mutex<Vec<String>>,
+    /// 自動保存のクラウド控えの、この起動での最後の総数（プロジェクト ID ごと。設計書 6.4）
+    pub cloud_counts: cloud_backup::CloudCounts,
 }
 
 impl AppState {
@@ -455,6 +458,7 @@ impl AppState {
             extension_dirs,
             extension_lock: Arc::new(std::sync::Mutex::new(())),
             closed_interrupted: Mutex::new(Vec::new()),
+            cloud_counts: cloud_backup::new_counts(),
         }
     }
 
@@ -1566,6 +1570,8 @@ async fn push(
 ) -> Result<PushResult, AppError> {
     let ctx = OpContext::new(app, &state);
     let limits = size_limits_for(&ctx.store, &id);
+    // 自動保存のクラウド控え（設計書 6.4）。設定がオンでログイン済みのときだけ、アップロードのあとに続ける
+    let plan = cloud_backup::plan_for(&ctx, &id);
     let result = run_op(
         &ctx,
         &id,
@@ -1575,7 +1581,7 @@ async fn push(
             target: None,
             data_is_safe: "ファイルは安全です",
         },
-        move |ops, path| ops.upload_with(path, limits),
+        move |ops, path| cloud_backup::upload_and_back_up(ops, path, limits, plan),
         summarize_push,
     )
     .await;
@@ -3552,6 +3558,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             interrupted::dismiss_interrupted,
             interrupted::take_closed_interrupted_notices,
             work_copy::list_work_copies,
+            cloud_backup::cloud_backup_status,
             work_copy::create_work_copy,
             work_copy::switch_work_copy,
             work_copy::adopt_work_copy,

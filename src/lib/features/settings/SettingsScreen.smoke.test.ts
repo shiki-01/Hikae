@@ -152,6 +152,33 @@ describe('SettingsScreen のスモークテスト', () => {
 		expect(goto).toHaveBeenCalledWith('/project?id=proj1', { replace: true });
 	});
 
+	it('自動保存のクラウド控えは、オンにする前に確認ダイアログを出し、取りやめると変えない', async () => {
+		setPageUrl('/settings?tab=auto_save');
+		renderWithClient(SettingsScreen);
+		const toggle = await screen.findByRole('switch', { name: t('settings.cloud_backup') });
+		expect(toggle.getAttribute('aria-checked')).toBe('false');
+		await fireEvent.click(toggle);
+		expect(await screen.findByText(t('settings.confirm_cloud_backup_title'))).toBeTruthy();
+		expect(screen.getByText(t('settings.confirm_cloud_backup_text'))).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: t('settings.confirm_cancel') }));
+		await vi.waitFor(() =>
+			expect(
+				screen
+					.getByRole('switch', { name: t('settings.cloud_backup') })
+					.getAttribute('aria-checked')
+			).toBe('false')
+		);
+	});
+
+	it('プロジェクトから開くと、自動保存の件数（この PC のみ）を出す', async () => {
+		setPageUrl('/settings?project=proj1&tab=auto_save');
+		renderWithClient(SettingsScreen);
+		// モックは控えをオフにしているため、この PC にだけある件数を出す
+		expect(
+			await screen.findByText(t('settings.cloud_status_local_only', { local: 3 }))
+		).toBeTruthy();
+	});
+
 	it('プロジェクトごとの設定に切り替えると、アカウントは出さない', async () => {
 		setPageUrl('/settings?project=proj1');
 		renderWithClient(SettingsScreen);
