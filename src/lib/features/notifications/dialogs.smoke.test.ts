@@ -55,6 +55,7 @@ describe('ダイアログのスモークテスト', () => {
 			open: true,
 			operation: 'pull',
 			onrecover,
+			onresume: noop,
 			ondismiss,
 			onclose: noop
 		});
@@ -63,6 +64,31 @@ describe('ダイアログのスモークテスト', () => {
 		await fireEvent.click(screen.getByRole('button', { name: t('interrupted.dismiss') }));
 		expect(ondismiss).toHaveBeenCalledTimes(1);
 		expect(onrecover).not.toHaveBeenCalled();
+	});
+
+	it('InterruptedDialog: 取り込み・アップロードの中断には「続きを行う」を出し、保存の中断には出さない', async () => {
+		const onresume = vi.fn();
+		const { unmount } = renderWithClient(InterruptedDialog, {
+			open: true,
+			operation: 'push',
+			onrecover: noop,
+			onresume,
+			ondismiss: noop,
+			onclose: noop
+		});
+		await fireEvent.click(await screen.findByRole('button', { name: t('interrupted.resume') }));
+		expect(onresume).toHaveBeenCalledTimes(1);
+		unmount();
+		renderWithClient(InterruptedDialog, {
+			open: true,
+			operation: 'save',
+			onrecover: noop,
+			onresume: noop,
+			ondismiss: noop,
+			onclose: noop
+		});
+		expect(await screen.findByText(t('interrupted.title'))).toBeTruthy();
+		expect(screen.queryByRole('button', { name: t('interrupted.resume') })).toBeNull();
 	});
 
 	it('PullSaveDialog: 未保存の件数つきの確認が出る', async () => {

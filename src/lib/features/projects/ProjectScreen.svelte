@@ -86,6 +86,7 @@
 	import { hasInterruptedOperation, hasLargeFilesAttention, syncingKind } from './live-state';
 	import {
 		interruptedDialogStep,
+		isResumableOperation,
 		type InterruptedAction,
 		type InterruptedPhase
 	} from './interrupted';
@@ -266,21 +267,33 @@
 		() => projectId,
 		(request) => (syncSize = request)
 	);
+	/** 「続きを行う」の復旧が済んだあと、同じ操作を通常の経路でやり直す（設計書 6.3）。画面の取り込み・アップロードと同じ呼び出し */
+	function continueInterrupted(operation: 'pull' | 'push') {
+		if (operation === 'pull') fetchMutation.mutate();
+		else push.mutate();
+	}
 	const interruptedActions = useInterruptedActions(
 		() => projectId,
-		() => (interruptedOpen = false)
+		() => (interruptedOpen = false),
+		continueInterrupted
 	);
+	const interruptedOperation = $derived(project.data?.interruptedOperation ?? null);
 	const interruptedPhase = $derived<InterruptedPhase>(
 		interruptedActions.recover.isPending
 			? 'recovering'
-			: interruptedActions.dismiss.isPending
-				? 'dismissing'
-				: 'idle'
+			: interruptedActions.resume.isPending
+				? 'resuming'
+				: interruptedActions.dismiss.isPending
+					? 'dismissing'
+					: 'idle'
 	);
 	/** 中断ダイアログの操作。処理の開始・閉じるは状態遷移の純関数に従う */
 	function interruptedAct(action: InterruptedAction) {
 		const step = interruptedDialogStep(interruptedPhase, action);
 		if (step.run === 'recover') interruptedActions.recover.mutate();
+		// 続きを行えるのは取り込み・アップロードだけ（保存は出さない）。それ以外は何もしない
+		if (step.run === 'resume' && isResumableOperation(interruptedOperation))
+			interruptedActions.resume.mutate(interruptedOperation);
 		if (step.run === 'dismiss') interruptedActions.dismiss.mutate();
 		if (step.close) interruptedOpen = false;
 	}
@@ -317,9 +330,7 @@
 	const syncing = $derived(
 		fetchMutation.isPending ? 'fetch' : push.isPending ? 'push' : syncingKind(live.operation)
 	);
-	const interrupted = $derived(
-		hasInterruptedOperation(live, project.data?.interruptedOperation ?? null)
-	);
+	const interrupted = $derived(hasInterruptedOperation(live, interruptedOperation));
 	// 確認のために再実行している間は、処理中の表示を優先する
 	const largeFiles = $derived(hasLargeFilesAttention(live) && syncing === null);
 	const attention = $derived(
@@ -771,10 +782,12 @@
 
 <InterruptedDialog
 	open={interruptedOpen}
-	operation={project.data?.interruptedOperation ?? null}
+	operation={interruptedOperation}
 	recovering={interruptedPhase === 'recovering'}
+	resuming={interruptedPhase === 'resuming'}
 	dismissing={interruptedPhase === 'dismissing'}
 	onrecover={() => interruptedAct('recover')}
+	onresume={() => interruptedAct('resume')}
 	ondismiss={() => interruptedAct('dismiss')}
 	onclose={() => interruptedAct('close')}
 />

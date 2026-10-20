@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { t } from '#lib/i18n/index.js';
-import { interruptedDialogStep, interruptedOperationName } from './interrupted';
+import {
+	interruptedDialogStep,
+	interruptedOperationName,
+	isResumableOperation
+} from './interrupted';
 
 describe('途中で止まった操作の名前', () => {
 	it('操作名を画面用の言葉にする', () => {
@@ -26,6 +30,14 @@ describe('中断ダイアログの状態遷移', () => {
 		});
 	});
 
+	it('待機中の「続きを行う」は復旧と続きの操作を始める（続きの実行は呼び出し側）', () => {
+		expect(interruptedDialogStep('idle', 'resume')).toEqual({
+			phase: 'resuming',
+			run: 'resume',
+			close: false
+		});
+	});
+
 	it('待機中の「このまま続ける」は中断の印を閉じる処理を始める', () => {
 		expect(interruptedDialogStep('idle', 'dismiss')).toEqual({
 			phase: 'dismissing',
@@ -43,8 +55,8 @@ describe('中断ダイアログの状態遷移', () => {
 	});
 
 	it('処理中は、どの操作も受け付けない（閉じるも含む）', () => {
-		for (const phase of ['recovering', 'dismissing'] as const) {
-			for (const action of ['recover', 'dismiss', 'close'] as const) {
+		for (const phase of ['recovering', 'resuming', 'dismissing'] as const) {
+			for (const action of ['recover', 'resume', 'dismiss', 'close'] as const) {
 				expect(interruptedDialogStep(phase, action)).toEqual({
 					phase,
 					run: null,
@@ -52,5 +64,20 @@ describe('中断ダイアログの状態遷移', () => {
 				});
 			}
 		}
+	});
+});
+
+describe('続きを行える操作', () => {
+	it('取り込みとアップロードだけ続きを行える', () => {
+		expect(isResumableOperation('pull')).toBe(true);
+		expect(isResumableOperation('push')).toBe(true);
+	});
+
+	it('保存・元に戻す・ぶつかり解消・知らない操作・空は続きを行えない', () => {
+		expect(isResumableOperation('save')).toBe(false);
+		expect(isResumableOperation('restore')).toBe(false);
+		expect(isResumableOperation('resolve')).toBe(false);
+		expect(isResumableOperation('merge')).toBe(false);
+		expect(isResumableOperation(null)).toBe(false);
 	});
 });

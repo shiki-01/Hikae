@@ -3,7 +3,7 @@
 	import { t } from '#lib/i18n/index.js';
 	import Button from '#lib/components/Button.svelte';
 	import Dialog from '#lib/components/Dialog.svelte';
-	import { interruptedOperationName } from './interrupted';
+	import { interruptedOperationName, isResumableOperation } from './interrupted';
 
 	interface Props {
 		open: boolean;
@@ -11,9 +11,12 @@
 		operation: string | null;
 		/** 操作の前の状態へ戻している間は true */
 		recovering?: boolean;
+		/** 「続きを行う」を実行している間は true（復旧と、その後のやり直しの間） */
+		resuming?: boolean;
 		/** 「このまま続ける」を実行している間は true */
 		dismissing?: boolean;
 		onrecover: () => void;
+		onresume: () => void;
 		ondismiss: () => void;
 		onclose: () => void;
 	}
@@ -22,12 +25,16 @@
 		open,
 		operation,
 		recovering = false,
+		resuming = false,
 		dismissing = false,
 		onrecover,
+		onresume,
 		ondismiss,
 		onclose
 	}: Props = $props();
-	const busy = $derived(recovering || dismissing);
+	const busy = $derived(recovering || resuming || dismissing);
+	// 「続きを行う」は取り込み・アップロードだけ出す（保存は保存メモが失われているため出さない。設計書 6.3）
+	const resumable = $derived(isResumableOperation(operation));
 </script>
 
 <Dialog
@@ -40,6 +47,9 @@
 >
 	<div class="flex flex-direction:column gap:2">
 		<p class="m:0 type-body">{t('interrupted.next')}</p>
+		{#if resumable}
+			<p class="m:0 type-small fg:fg-muted">{t('interrupted.resume_hint')}</p>
+		{/if}
 		<p class="m:0 type-small fg:fg-muted">{t('interrupted.recover_hint')}</p>
 		<p class="m:0 type-small fg:fg-muted">{t('interrupted.dismiss_hint')}</p>
 	</div>
@@ -58,8 +68,17 @@
 		<Button variant="secondary" loading={dismissing} disabled={busy} onclick={ondismiss}>
 			{t('interrupted.dismiss')}
 		</Button>
-		<Button loading={recovering} disabled={busy} onclick={onrecover}>
-			{t('interrupted.recover')}
-		</Button>
+		{#if resumable}
+			<Button variant="secondary" loading={recovering} disabled={busy} onclick={onrecover}>
+				{t('interrupted.recover')}
+			</Button>
+			<Button loading={resuming} disabled={busy} onclick={onresume}>
+				{t('interrupted.resume')}
+			</Button>
+		{:else}
+			<Button loading={recovering} disabled={busy} onclick={onrecover}>
+				{t('interrupted.recover')}
+			</Button>
+		{/if}
 	{/snippet}
 </Dialog>

@@ -181,13 +181,22 @@ export function useCompleteOnboarding() {
 }
 
 /**
- * 途中で止まった操作（中断）への対応の 2 つ。「操作前の状態に戻す」と「このまま続ける」。
+ * 途中で止まった操作（中断）への対応。「操作前の状態に戻す」「続きを行う」「このまま続ける」。
  * 成功で関連するクエリを更新する。失敗は 3 要素のエラーで表示し、復元点が無いときは
  * 「このまま続ける」を主ボタンとして出す（設計書 6.3）
+ *
+ * 「続きを行う」は、`recoverInterrupted` で操作前の状態に戻し（成功、または何も変わらなかった `nothing-changed` のとき）、
+ * その後で `onContinue` に操作名を渡して、同じ操作を通常の経路でやり直させる（設計書 6.3）。
+ * 復旧が失敗したときは `onContinue` を呼ばず、復旧のエラーを出す。
  */
-export function useInterruptedActions(getProjectId: () => string, onDone?: () => void) {
+export function useInterruptedActions(
+	getProjectId: () => string,
+	onDone?: () => void,
+	onContinue?: (operation: 'pull' | 'push') => void
+) {
 	const client = useQueryClient();
 	const retry = { run: () => {} };
+	const retryResume: { run: (operation: 'pull' | 'push') => void } = { run: () => {} };
 	const dismiss = createMutation(() => ({
 		mutationFn: () => api.dismissInterrupted(getProjectId()),
 		onSuccess: async () => {
@@ -213,8 +222,28 @@ export function useInterruptedActions(getProjectId: () => string, onDone?: () =>
 				onprimary: () => dismiss.mutate()
 			})
 	}));
+	const resume = createMutation(() => ({
+		// 復旧のあとに同じ操作へ戻すため、操作名を結果として返す
+		mutationFn: async (operation: 'pull' | 'push') => {
+			await api.recoverInterrupted(getProjectId());
+			return operation;
+		},
+		onSuccess: async (operation) => {
+			// 復旧の結果（変更ありか、変更なしか）によらず、同じ操作をやり直す。
+			// 復旧の完了の通知は出さない（やり直す操作が自分の結果を通知する）
+			await invalidateProject(client, getProjectId());
+			onDone?.();
+			onContinue?.(operation);
+		},
+		onError: (error, operation) =>
+			reportError(error, {
+				retry: () => retryResume.run(operation),
+				onprimary: () => dismiss.mutate()
+			})
+	}));
+	retryResume.run = (operation) => resume.mutate(operation);
 	retry.run = () => recover.mutate();
-	return { recover, dismiss };
+	return { recover, resume, dismiss };
 }
 
 /** 戻せなかったファイルの名前を、知らせる件数までに絞る */

@@ -53,6 +53,7 @@ describe('i18n', () => {
 			'ref',
 			'before',
 			'after',
+			'files',
 			'value',
 			// AI（ローカル LLM）の表示
 			'memory',

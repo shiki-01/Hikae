@@ -18,24 +18,32 @@ export function interruptedOperationName(operation: string | null): string {
 	}
 }
 
+/**
+ * 「続きを行う」を出せる操作（設計書 6.3）。取り込みとアップロードだけ。
+ * 保存は保存メモが失われているため、続きは行わない
+ */
+export function isResumableOperation(operation: string | null): operation is 'pull' | 'push' {
+	return operation === 'pull' || operation === 'push';
+}
+
 /** 中断ダイアログの処理の状態。いずれかの処理の実行中は、ほかの処理を受け付けない */
-export type InterruptedPhase = 'idle' | 'recovering' | 'dismissing';
+export type InterruptedPhase = 'idle' | 'recovering' | 'resuming' | 'dismissing';
 
 /** 中断ダイアログで利用者が選んだこと */
-export type InterruptedAction = 'recover' | 'dismiss' | 'close';
+export type InterruptedAction = 'recover' | 'resume' | 'dismiss' | 'close';
 
 export interface InterruptedStep {
 	/** 次の処理の状態 */
 	phase: InterruptedPhase;
 	/** 今から実行する処理（無ければ null） */
-	run: 'recover' | 'dismiss' | null;
+	run: 'recover' | 'resume' | 'dismiss' | null;
 	/** ダイアログを閉じるか */
 	close: boolean;
 }
 
 /**
  * 中断ダイアログの状態遷移（純関数）。
- * - 待機中: 「操作前の状態に戻す」「このまま続ける」は、それぞれの処理を始める。「閉じる」はダイアログを閉じる
+ * - 待機中: 「操作前の状態に戻す」「続きを行う」「このまま続ける」は、それぞれの処理を始める。「閉じる」はダイアログを閉じる
  * - 処理中: どの操作も受け付けない（ダイアログの閉じるも無効）。処理の終わりは呼び出し側が結果に合わせて閉じる
  */
 export function interruptedDialogStep(
@@ -46,6 +54,8 @@ export function interruptedDialogStep(
 	switch (action) {
 		case 'recover':
 			return { phase: 'recovering', run: 'recover', close: false };
+		case 'resume':
+			return { phase: 'resuming', run: 'resume', close: false };
 		case 'dismiss':
 			return { phase: 'dismissing', run: 'dismiss', close: false };
 		case 'close':

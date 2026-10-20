@@ -203,6 +203,8 @@ const messages = {
 		'もう一度同じ操作を行ってください。元の状態に戻したいときは、履歴から戻せます。',
 	'interrupted.recover': '操作前の状態に戻す',
 	'interrupted.recover_hint': '戻す前の状態も控えとして残るため、後から取り出せます。',
+	'interrupted.resume': '続きを行う',
+	'interrupted.resume_hint': '操作前の状態に戻してから、もう一度やり直します。',
 	'interrupted.dismiss': 'このまま続ける',
 	'interrupted.dismiss_hint': 'ファイルは今のままです。必要なときは履歴から以前の状態に戻せます。',
 	'interrupted.nothing_changed': '変更はありませんでした。中断の記録を閉じました。',
