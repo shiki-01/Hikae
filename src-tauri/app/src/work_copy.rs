@@ -213,7 +213,10 @@ pub(crate) async fn switch_work_copy(
     branch: String,
 ) -> Result<(), AppError> {
     let ctx = OpContext::new(app, &state);
-    ensure_enabled(&ctx.store, &id)?;
+    // 元の作業コピーへ戻る切り替えは、機能がオフでも許す（作業コピーに居るまま取り残されないため）
+    if core_git::is_work_copy_name(&branch) {
+        ensure_enabled(&ctx.store, &id)?;
+    }
     run_op_unit(&ctx, &id, "work_copy_switch", move |ops, path| {
         ops.switch_work_copy(path, &branch)
     })

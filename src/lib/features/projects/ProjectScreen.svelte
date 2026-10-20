@@ -93,7 +93,7 @@
 	import { useInterruptedActions, useRepairBroken } from './mutations';
 	import type { SyncSizeRequest } from './sync-size';
 	import { useFetch, usePush } from './sync';
-	import { useProject } from './queries';
+	import { useProject, useWorkCopies } from './queries';
 	import AutoSaveStatus from './AutoSaveStatus.svelte';
 	import RepoLargeNotice from './RepoLargeNotice.svelte';
 	import WorkCopyBar from './WorkCopyBar.svelte';
@@ -122,6 +122,11 @@
 	);
 	const historyQuery = useHistory(() => projectId);
 	const settingsQuery = useSettings(() => projectId);
+	// 機能をオフにしても、作業コピーに居るあいだは切り替えの欄を残す（元のまま側へ戻れるように）
+	const workCopiesQuery = useWorkCopies(() => projectId);
+	const onWorkCopy = $derived(
+		(workCopiesQuery.data ?? []).some((w) => w.isCurrent && !w.isOriginal)
+	);
 	const memoQuery = useMemoSuggestion(
 		() => projectId,
 		() => (changesQuery.data?.length ?? 0) > 0
@@ -581,7 +586,7 @@
 		onrelogin={() => goto(`${resolve('/welcome')}${reloginSearch(page.url)}`)}
 	/>
 
-	{#if settingsQuery.data?.settings.workCopyEnabled}
+	{#if settingsQuery.data?.settings.workCopyEnabled || onWorkCopy}
 		<WorkCopyBar
 			{projectId}
 			onconflict={() => (conflictOpen = true)}

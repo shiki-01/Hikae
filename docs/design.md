@@ -525,6 +525,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - 「元の作業コピー」は `wc-` で始まらないブランチ（登録時の現在ブランチ。通常は `main`）。画面では表示名「元のまま」とする
 - **未保存の変更があるときは切り替えない**（`unsaved_changes` を返し、画面は「保存してから切り替える」を案内する。内部では通常の保存 4.1 を経る）。自動の退避（隠し ref への snapshot）は自動保存が別途作る。作業フォルダを `reset` や `stash` で退避する操作は行わない
 - 切り替えで detached HEAD を作らない（`--detach` を渡さない）。`checkout` が未追跡ファイルの上書きで拒否したときは、何も変えずに「切り替えられません。ファイルは変更されていません」と案内する
+- **機能をオフにしたとき**: 作業コピーに居るあいだは切り替えの欄を残し、元の作業コピーへ戻る切り替えだけは `work_copy_enabled` がオフでも許す（取り残されないため。2026-10-20）。作る・採用するは拒否する
 - 削除機能は設けない（`branch -d`/`-D` を許可しない。不変条件 1）。使わない作業コピーは一覧で「しまう」（表示名のレコードに `archived` を立てて一覧の既定から隠す）だけにする
 - アップロードと取り込みは、いまの作業コピーに対して現在どおり動く（`HEAD` / `@{u}` 基準。4.3・4.5）。作業コピーを初めてアップロードすると、同名で保存先に作られる
 - 状態を変える 3 操作（作る・切り替える・採用する）はすべて復元点（6.2）を先に作り、直列キュー（不変条件 7）とジャーナル（操作名 `work_copy_create` / `work_copy_switch` / `work_copy_adopt`）を通す
@@ -677,6 +678,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 実装の補足（`core-git`）:
 
 - 実装では `<app>` は `hikae`（`refs/hikae/`）。名前空間の定数は `refs/hikae/snapshots/` と `refs/hikae/backup/`
+- 固定の形で追加した許可（2026-10-20）: `branch wc-YYYYMMDD-HHMMSS[-N] <完全な OID>`（作業コピーの作成。4.9）、`push origin <refs/hikae/snapshots/..>:<同じ ref> ...`（自動保存のクラウド控え。6.4。送り元と送り先が同一で、`+`・先頭の `:`・`--delete` を含まない。`refs/hikae` を含むそれ以外の push は拒否する）
 - 許可リストに無いサブコマンドは「unknown subcommand」として実行前に拒否する。`reset`、`clean`、`rebase`、`filter-branch`、`gc`、`reflog`、`stash`、`tag`、`pull`、`cherry-pick`、`revert`、`worktree`、`submodule` は明示的に拒否する。`diff-tree` のように git の標準のコマンドでも、許可リストに無ければ実行時に失敗する（13.3）
 - `-c` で渡せる設定キーは、`core.hooksPath`、`core.autocrlf`、`core.precomposeUnicode`、`core.quotepath`、`core.longpaths`、`credential.helper`、`user.name`、`user.email`、`commit.gpgsign`、`init.defaultBranch`、`protocol.version` のみ。子プロセスの環境変数は引き継がず（`PATH`、`SystemRoot`、`SYSTEMDRIVE`、`TEMP`、`TMP`、`TMPDIR` だけを渡す）、`GIT_CONFIG_GLOBAL` を null デバイス、`GIT_CONFIG_NOSYSTEM=1`、`GIT_TERMINAL_PROMPT=0`、`LC_ALL=C` に固定する。読み取り専用のコマンドには `GIT_OPTIONAL_LOCKS=0` を付ける。追加で渡せる環境変数は `GIT_INDEX_FILE` と作者・コミッターの 6 個だけ
 - 待ち時間の上限は 60 秒（取得は 30 分）。超えるとプロセスを止めて `git_timeout` にする
