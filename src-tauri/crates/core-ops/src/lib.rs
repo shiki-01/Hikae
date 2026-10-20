@@ -30,6 +30,7 @@ mod project_tree;
 mod recover;
 mod relocate;
 mod remote;
+mod repair;
 mod repo_health;
 mod restore_file;
 mod restore_save;
@@ -86,6 +87,7 @@ pub use remote::{
     project_folder_state, ConnectOutcome, ConnectPreflight, FirstSave, FolderState,
     RemoteConnection,
 };
+pub use repair::{copy_back_unsaved, move_aside, restore_aside, CopyBackReport};
 pub use repo_health::{
     check_repo_health, parse_count_objects, repo_size, BrokenReason, RepoHealth, RepoSize,
     REPO_SIZE_WARN_BYTES,
