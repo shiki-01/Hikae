@@ -34,6 +34,7 @@
 | 拡張機能ホスト     | `wasmtime` 49.0.2（`=` で固定。WASI preview1 のみ。ファイル・環境変数・ネットワークを与えない）。抽出器は 1 件ごとに実行の時間とメモリを制限する                                                                                                                                                                                                                                                   |
 | 表示・比較         | 表示拡張（`sandbox="allow-scripts"` の iframe。`ext://` から配信）。PDF は `pdfjs-dist` 6.3.289（表示拡張の中で使う）。差分は `similar` 3.2 でホスト（Rust）側が計算する                                                                                                                                                                                                                           |
 | 総メモリ・空き容量 | `sysinfo` 0.39.6（`=` で固定。LLM の導入可否の判定に使う）                                                                                                                                                                                                                                                                                                                                         |
+| 索引の署名検証     | `ed25519-dalek` 3.0.0（検証のみ。`=` で固定。設計書 11.10）、`sha2` 0.11.1、`base64` 0.23.1（`=` で固定。`core-preview` の `extension/index.rs`。ネットワークなし）                                                                                                                                                                                                                                |
 | ごみ箱への移動     | `trash` crate（`=5.2.9` に固定。`app` のみ。`core-ops` は `Trasher` trait だけを持つ）                                                                                                                                                                                                                                                                                                             |
 
 ## リポジトリ構成
@@ -50,7 +51,7 @@
 │   ├── lib/styles/       # tokens.css（デザイン要件 2章のトークン）
 │   └── lib/bindings.ts   # tauri-specta の生成物（手で編集しない）
 ├── extensions-ui/        # 組み込みの表示拡張の UI（hikae.builtin.preview）。vite.ext.config.ts でビルドする
-├── scripts/              # fetch-git-windows.mjs、fetch-llama-windows.mjs、build-extensions.mjs、build-git-macos.sh
+├── scripts/              # fetch-git-windows.mjs、fetch-llama-windows.mjs、build-extensions.mjs、create-extension.mjs（拡張の雛形）、build-git-macos.sh
 └── src-tauri/            # Cargo workspace
     ├── crates/core-git
     ├── crates/core-safety

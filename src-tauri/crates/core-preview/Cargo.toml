@@ -38,8 +38,17 @@ tokio = { version = "1", optional = true, default-features = false }
 bytes = { version = "1", optional = true, default-features = false }
 # 拡張のマニフェストの version（semver）の検証
 semver = { version = "1", optional = true }
+# 拡張の索引（設計書 11.10）の署名検証（ed25519。検証のみ）。host の feature に依存させない。
+# default-features を切り、既定の fast（事前計算表）と zeroize（秘密の消去）は使わない（検証は公開情報だけを扱う）
+ed25519-dalek = { version = "=3.0.0", default-features = false }
+# 索引の分離署名の対象（JSON）の sha256 と、拡張本体の sha256 の検証（11.10）。ed25519-dalek 3.x が使う版に揃える
+sha2 = { version = "=0.11.1", default-features = false }
+# 署名（64 バイト）の base64 の復号。標準の表記（パディングあり）だけを受け付ける
+base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+# 索引の署名テスト用に、固定の seed から鍵を作って署名する（秘密鍵はリポジトリに置かない）
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["rand_core"] }
 # テスト専用の WASM（無限ループ・メモリの食い尽くし・WASI の呼び出しなど）を WAT から作る
 wat = "1"
 # 拡張のフォルダを一時ディレクトリに作って、マニフェストの読み込みを試す

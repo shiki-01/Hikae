@@ -31,6 +31,11 @@ pub use extension::host::{
     ExtensionSummary, ExtractError, ExtractorRef, InstallError, InstalledExtension, ManifestError,
     RenderMode, RendererInfo, RuntimeLimits, INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
 };
+pub use extension::index::{
+    parse_index, verify_download, verify_index_signature, Download, ExtensionIndex, IndexEntry,
+    IndexError, INDEX_MAX_BYTES, INDEX_MAX_DOWNLOAD_BYTES, INDEX_MAX_EXTENSIONS, INDEX_SCHEMA,
+    SIGNATURE_BYTES,
+};
 pub use extension::{ExtractOutput, OutputKind};
 pub use kind::{office_kind, OfficeKind};
 pub use limits::Limits;

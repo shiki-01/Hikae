@@ -7,6 +7,8 @@
 // 入力は stdin のバイト列、出力は stdout の JSON。
 
 pub mod asset;
+pub(crate) mod id;
+pub mod index;
 pub mod output;
 
 #[cfg(feature = "host")]

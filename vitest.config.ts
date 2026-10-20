@@ -19,7 +19,8 @@ export default defineConfig({
 	},
 	test: {
 		environment: 'node',
-		include: ['src/**/*.test.ts'],
+		// scripts/create-extension.mjs（拡張の雛形の CLI）は node 環境のまま確かめる（設計書 11.3）
+		include: ['src/**/*.test.ts', 'scripts/create-extension.test.mjs'],
 		setupFiles: [testDir('setup.ts')]
 	}
 });

@@ -1,0 +1,21 @@
+{
+  "id": "example.sample-preview",
+  "name": "サンプル プレビュー",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "contributes": {
+    "renderers": [
+      {
+        "fileTypes": [
+          ".sample"
+        ],
+        "modes": [
+          "view"
+        ],
+        "entry": "ui/index.html"
+      }
+    ],
+    "extractors": []
+  },
+  "permissions": []
+}
