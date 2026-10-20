@@ -88,7 +88,7 @@
 
 これらに関わる変更では、変更内容と不変条件を守っている根拠を報告に含めること。
 
-- `GitRunner` の許可リストは、設計書に根拠があるものだけを追加する。現状の追加: `update-index --skip-worktree` / `--no-skip-worktree -- <パス>`（design.md 4.8）、`ls-files -ci --exclude-standard -z`（4.8）、`rev-list --objects --disk-usage` の固定の形（6.2）
+- `GitRunner` の許可リストは、設計書に根拠があるものだけを追加する。現状の追加: `update-index --skip-worktree` / `--no-skip-worktree -- <パス>`（design.md 4.8）、`ls-files -ci --exclude-standard -z`（4.8）、`rev-list --objects --disk-usage` の固定の形（6.2）、`branch wc-YYYYMMDD-HHMMSS <完全な OID>` の固定の形（作業コピーの作成。4.9）
 - skip-worktree の印を外す前に、利用者の手元の内容を `.git/hikae-skip-stash/` へ退避する（不変条件 6 に沿って、内容を残してから作業フォルダを変える）
 
 ## Git 呼び出しの既定値
