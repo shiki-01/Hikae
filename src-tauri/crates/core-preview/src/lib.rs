@@ -27,8 +27,9 @@ pub use extension::asset::{
 };
 #[cfg(feature = "host")]
 pub use extension::host::{
-    ExtensionHost, ExtensionId, ExtensionInfo, ExtractError, ExtractorRef, ManifestError,
-    RenderMode, RendererInfo, RuntimeLimits,
+    install_from_folder, move_to_removed, read_summary, ExtensionHost, ExtensionId, ExtensionInfo,
+    ExtensionSummary, ExtractError, ExtractorRef, InstallError, InstalledExtension, ManifestError,
+    RenderMode, RendererInfo, RuntimeLimits, INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
 };
 pub use extension::{ExtractOutput, OutputKind};
 pub use kind::{office_kind, OfficeKind};

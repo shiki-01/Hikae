@@ -180,3 +180,57 @@ export function useDismissSkipDrift(getProjectId: () => string, onDone?: () => v
 	}));
 	return mutation;
 }
+
+/** 拡張機能の一覧を取り直す（有効・無効、追加、除外の後。反映は次回の起動から） */
+function invalidateExtensions(client: QueryClient): Promise<unknown> {
+	return client.invalidateQueries({ queryKey: keys.extensions });
+}
+
+/** 追加分の有効・無効を変える（設計書 11.9）。反映は次回の起動から */
+export function useSetExtensionEnabled() {
+	const client = useQueryClient();
+	const retry: { run?: (input: { id: string; enabled: boolean }) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+			api.setExtensionEnabled(id, enabled),
+		onSuccess: async () => {
+			await invalidateExtensions(client);
+			pushToast({ type: 'success', message: t('toast.extension_changed') });
+		},
+		onError: (error, input) => reportError(error, { retry: () => retry.run?.(input) })
+	}));
+	retry.run = (input) => mutation.mutate(input);
+	return mutation;
+}
+
+/** フォルダから拡張を追加する（開発者モードのときだけ。設計書 11.9）。元のフォルダは変更しない */
+export function useInstallExtension() {
+	const client = useQueryClient();
+	const retry: { run?: (path: string) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (path: string) => api.installExtensionFromFolder(path),
+		onSuccess: async (installed) => {
+			await invalidateExtensions(client);
+			pushToast({ type: 'success', message: t('toast.extension_added', { name: installed.name }) });
+		},
+		onError: (error, path) => reportError(error, { retry: () => retry.run?.(path) })
+	}));
+	retry.run = (path) => mutation.mutate(path);
+	return mutation;
+}
+
+/** 追加分を一覧から外す（フォルダは削除せず退避へ移す。設計書 11.9） */
+export function useRemoveExtension() {
+	const client = useQueryClient();
+	const retry: { run?: (input: { id: string; name: string }) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: ({ id }: { id: string; name: string }) => api.removeExtension(id),
+		onSuccess: async (_result, { name }) => {
+			await invalidateExtensions(client);
+			pushToast({ type: 'success', message: t('toast.extension_removed', { name }) });
+		},
+		onError: (error, input) => reportError(error, { retry: () => retry.run?.(input) })
+	}));
+	retry.run = (input) => mutation.mutate(input);
+	return mutation;
+}

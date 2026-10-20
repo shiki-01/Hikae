@@ -219,7 +219,7 @@ Hikae の画面は「いま安全かどうか」が一目で分かることを�
 - プロジェクト別に上書きできる項目は「このプロジェクトだけ変更」リンクを行内に置く
 - S6: IgnoreRuleRow の一覧、「追加」から拡張子 / フォルダ / ファイル選択、追跡中ファイルがあれば2択の Dialog
 - S7: 段階0〜4の ModelCard を縦に並べ、PC のメモリ・空き容量を上部に表示。Ollama の接続先（実装では詳細設定ではなく AI タブに置いた。実装: 現状のカタログは段階 2 の 2 モデルだけで、段階 0・1・3・4 は未実装。「AI に渡す範囲」は「ファイル名まで」と「テキスト差分まで」の 2 択。有効・無効は「保存メモを AI で提案する」。カスタム GGUF は出さない）
-- S8: 拡張機能の一覧（名前、対応形式、有効化 Toggle）。開発者モードは詳細設定内
+- S8: 拡張機能の一覧（名前、版、対応形式、「標準」「追加」のバッジ、有効化 Toggle。標準は無効にできない）。開発者モードのスイッチと、フォルダからの追加・一覧から外すも同じタブに置く（11.9。詳細設定には置かない）
 
 ### D1 プロジェクト追加（560px）
 
@@ -301,7 +301,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 - [ ] D4 エラー表示（Dialog / Toast）と空状態
 - [ ] S5 設定の枠組み
 - [ ] アプリアイコン（Windows / macOS の各サイズ）
-- [x] Phase 2: ImageCompare、ModelCard、IgnoreRuleRow、S6、S7 は実装済み（7 章）。S8（拡張機能管理）は Phase 3
+- [x] Phase 2: ImageCompare、ModelCard、IgnoreRuleRow、S6、S7 は実装済み（7 章）。S8（拡張機能管理）は Phase 3 の一部として 2026-10-20 に実装済み（design.md 11.9）
 
 ## 7. 実装状況（2026-10-08。Phase 2 の項目は 2026-10-11 に更新）
 
@@ -324,7 +324,7 @@ Claude Code は Phase 0（技術検証）から始めるため、画面が必要
 | S2 変更タブ | `features/changes`（`ChangesPane`、`ChangeDetail`）と `features/projects/ProjectScreen.svelte`（`/project`） | 実装済み |
 | S3 履歴タブ | `features/history`（`HistoryPane`、`HistoryDetail`、`FileTree`） | 実装済み。「ここまでクラウド」の線は、履歴の各項目の `cloudSynced`（バックエンドの `cloud_synced`）から出す。保存先に接続していない、まだ何も上げていないときは出ない（design.md 4.6、12章） |
 | S4 比較ビュー | `features/compare/CompareView.svelte` | テキストの行差分（左右／統合）、画像比較、docx・xlsx の差分（第 3 段階で表示拡張の `compare` に移行。本体は `features/extensions/CompareFrame.svelte`） |
-| S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブ（「保存しないファイル」はプロジェクトの画面から開いたときに項目を出す）。「拡張機能」は案内のみ、「詳細設定」は空。S6（`features/settings/IgnoreSection.svelte`）と S7（`features/ai/AiSection.svelte`）は実装済み。S8 は未実装（`features/extensions` は表示・比較の描画の受け渡しだけで、拡張の一覧の画面は無い） |
+| S5 設定 | `features/settings/SettingsScreen.svelte`（`/settings`） | 「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブ（「保存しないファイル」はプロジェクトの画面から開いたときに項目を出す）。「拡張機能」は S8（`features/settings/ExtensionsSection.svelte`）、「詳細設定」は空。S6（`features/settings/IgnoreSection.svelte`）、S7（`features/ai/AiSection.svelte`）、S8（2026-10-20 実装。一覧・有効化・開発者モード・フォルダからの追加・一覧から外す）は実装済み |
 | D1 プロジェクト追加 | `features/projects/AddProjectDialog.svelte`、`RemoteTargetFields.svelte` | 実装済み（既存フォルダ・GitHub から取得・新規作成）。既存フォルダと新規作成は、ログイン済みなら GitHub 上に保存先を作って接続する（保存先の選択と公開範囲は `RemoteTargetFields`。公開は警告と確認のチェックが必要）。未ログインならローカルだけで登録する（design.md 4.6） |
 | 保存先への接続 | `features/projects/ConnectRemoteDialog.svelte` | 実装済み。保存先に接続していないプロジェクトの一覧のカード（`ProjectCard`）とヘッダー（`StatusHeader` の「GitHub に接続していません」）から開く。D1 と同じ `RemoteTargetFields` を再利用し、任意の GitHub 上の名前を指定できる |
 | D2 元に戻す確認 | `features/history/RestoreDialog.svelte` | 実装済み |

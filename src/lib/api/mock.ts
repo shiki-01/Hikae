@@ -20,6 +20,7 @@ import type {
 	PreviewSheet,
 	PreviewSlide,
 	RendererInfo,
+	ExtensionInfo,
 	AddFilesOptions,
 	AddFilesOutcome,
 	AddProjectInput,
@@ -480,6 +481,30 @@ for (const state of [createThesis(), createMaterials(), createAlbum(), createLoc
 const undoSnapshots = new Map<string, Snapshot>();
 let sequence = 100;
 
+/** 標準の拡張（モック。実際の同梱物の ID と対応する形式） */
+const MOCK_BUILTIN_EXTENSIONS: ExtensionInfo[] = [
+	{
+		id: 'hikae.builtin.office',
+		name: t('mock.extension.office'),
+		version: '0.1.0',
+		fileTypes: ['docx', 'xlsx', 'pptx'],
+		builtin: true,
+		enabled: true
+	},
+	{
+		id: 'hikae.builtin.preview',
+		name: t('mock.extension.preview'),
+		version: '0.1.0',
+		fileTypes: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'pdf', '*'],
+		builtin: true,
+		enabled: true
+	}
+];
+/** 利用者が追加した拡張と、その有効の記録（モックはメモリだけに保つ） */
+let mockUserExtensions: ExtensionInfo[] = [];
+const mockExtensionEnabled = new Map<string, boolean>();
+let mockExtensionSequence = 1;
+
 const DEFAULT_SETTINGS: AppSettings = {
 	pullOnStartup: true,
 	pullIntervalMinutes: 15,
@@ -501,7 +526,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
 	aiSuggestBody: true,
-	aiOllamaUrl: 'http://localhost:11434'
+	aiOllamaUrl: 'http://localhost:11434',
+	extensionDevMode: false
 };
 
 // 画面確認用: localStorage の 'hikae.mock.login' に denied / expired / setup を入れると、ログインの結末を再現できる
@@ -1102,6 +1128,39 @@ export const mockApi: ProjectApi = {
 	async listRenderers(): Promise<RendererInfo[]> {
 		await sleep(WAIT_SHORT);
 		return [];
+	},
+
+	async listExtensions(): Promise<ExtensionInfo[]> {
+		await sleep(WAIT_SHORT);
+		return [...MOCK_BUILTIN_EXTENSIONS, ...mockUserExtensions].map((ext) => ({
+			...ext,
+			enabled: ext.builtin ? true : (mockExtensionEnabled.get(ext.id) ?? true)
+		}));
+	},
+	async setExtensionEnabled(id: string, enabled: boolean): Promise<void> {
+		await sleep(WAIT_SHORT);
+		if (!mockUserExtensions.some((ext) => ext.id === id)) return;
+		mockExtensionEnabled.set(id, enabled);
+	},
+	async installExtensionFromFolder(path: string): Promise<ExtensionInfo> {
+		await sleep(WAIT_SHORT);
+		// ブラウザ（モック）では実際のフォルダを読まない。選んだフォルダの名前だけで一覧に加える
+		const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+		const info: ExtensionInfo = {
+			id: `mock.added-${mockExtensionSequence++}`,
+			name,
+			version: '0.1.0',
+			fileTypes: ['txt'],
+			builtin: false,
+			enabled: true
+		};
+		mockUserExtensions = [...mockUserExtensions, info];
+		return info;
+	},
+	async removeExtension(id: string): Promise<void> {
+		await sleep(WAIT_SHORT);
+		mockUserExtensions = mockUserExtensions.filter((ext) => ext.id !== id);
+		mockExtensionEnabled.delete(id);
 	},
 
 	async previewFile(projectId: string, rev: string, path: string): Promise<FilePreview> {

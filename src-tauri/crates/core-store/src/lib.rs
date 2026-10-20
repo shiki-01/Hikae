@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+pub mod extensions;
 pub mod journal;
 pub mod llm;
 pub mod migrations;
@@ -16,6 +17,7 @@ pub mod models;
 pub mod settings;
 pub mod skip_worktree;
 
+pub use extensions::ExtensionState;
 pub use journal::{
     journal_cutoff, journal_cutoff_from_now, now_rfc3339, redact, JournalEntry, JournalFinish,
     JournalOutcome, JournalTrigger, NewJournalEntry, RunningJournal,

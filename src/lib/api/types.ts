@@ -275,6 +275,21 @@ export interface RendererInfo {
 	modes: string[];
 }
 
+/**
+ * 拡張機能の一覧の 1 件（設定の「拡張機能」タブ、設計書 11.9）。パスは含まない。
+ * `fileTypes` は拡張子（`.` を除いた英小文字）。全部の拡張子は `*`
+ */
+export interface ExtensionInfo {
+	id: string;
+	name: string;
+	version: string;
+	fileTypes: string[];
+	/** 標準（同梱）の拡張なら true。false は利用者が追加した拡張 */
+	builtin: boolean;
+	/** 有効なら true。標準は常に true。反映は次回の起動から */
+	enabled: boolean;
+}
+
 export type ConflictKind = 'both' | 'deleted_in_cloud' | 'deleted_on_this_pc';
 
 export interface ConflictFile {
@@ -729,6 +744,8 @@ export interface AppSettings {
 	aiSuggestBody: boolean;
 	/** Ollama の接続先 URL */
 	aiOllamaUrl: string;
+	/** 拡張機能の開発者モード（署名のない拡張の追加を許す。設計書 11.9） */
+	extensionDevMode: boolean;
 }
 
 export type SettingKey = keyof AppSettings;
@@ -816,6 +833,14 @@ export interface ProjectApi {
 	previewFile(projectId: string, rev: string, path: string): Promise<FilePreview>;
 	/** 登録済みの表示拡張（iframe の入口）の一覧。読み取りのみ（設計書 11 章） */
 	listRenderers(): Promise<RendererInfo[]>;
+	/** 拡張機能の一覧（標準と追加分。無効のものを含む）。読み取りのみ（設計書 11.9） */
+	listExtensions(): Promise<ExtensionInfo[]>;
+	/** 追加分の有効・無効を変える。反映は次回の起動から。標準の拡張は変えられない */
+	setExtensionEnabled(id: string, enabled: boolean): Promise<void>;
+	/** フォルダから拡張を追加する（開発者モードのときだけ）。元のフォルダは変更しない */
+	installExtensionFromFolder(path: string): Promise<ExtensionInfo>;
+	/** 追加分を一覧から外す。フォルダは削除せず退避へ移す（開発者モードのときだけ） */
+	removeExtension(id: string): Promise<void>;
 	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */
 	listProjectTree(projectId: string): Promise<ProjectTree>;
 

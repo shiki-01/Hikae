@@ -289,7 +289,8 @@ describe('設定の変換', () => {
 			aiCustomGgufPath: '',
 			aiScope: 'text-diff',
 			aiSuggestBody: true,
-			aiOllamaUrl: 'http://localhost:11434'
+			aiOllamaUrl: 'http://localhost:11434',
+			extensionDevMode: false
 		});
 	});
 

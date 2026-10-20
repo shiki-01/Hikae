@@ -32,6 +32,14 @@ export function useUpdateSettings(getProjectId: () => string | null) {
 	}));
 }
 
+/** 拡張機能の一覧（標準と追加分。無効のものを含む。設計書 11.9） */
+export function useExtensions() {
+	return createQuery(() => ({
+		queryKey: keys.extensions,
+		queryFn: () => api.listExtensions()
+	}));
+}
+
 /** 保存しないファイルのパターン一覧（件数つき）。プロジェクトを開いているときだけ使う */
 export function useIgnoreRules(getProjectId: () => string) {
 	return createQuery(() => ({

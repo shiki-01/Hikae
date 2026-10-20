@@ -10,6 +10,7 @@
 	import Select from '#lib/components/Select.svelte';
 	import AiSection from '#lib/features/ai/AiSection.svelte';
 	import AccountSection from './AccountSection.svelte';
+	import ExtensionsSection from './ExtensionsSection.svelte';
 	import IgnoreSection from './IgnoreSection.svelte';
 	import NumberSetting from './NumberSetting.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
@@ -62,8 +63,7 @@
 	];
 
 	const notes: Record<string, MessageKey> = {
-		ignore: 'settings.note_ignore',
-		extensions: 'settings.note_extensions'
+		ignore: 'settings.note_ignore'
 	};
 
 	function change(current: AppSettings, key: SettingKey, value: SettingValue) {
@@ -155,6 +155,8 @@
 					<AiSection />
 				{:else if id === 'ignore' && contextProjectId}
 					<IgnoreSection projectId={contextProjectId} />
+				{:else if id === 'extensions'}
+					<ExtensionsSection />
 				{:else if notes[id]}
 					<p class="m:0 type-body fg:fg-muted">{t(notes[id])}</p>
 				{/if}

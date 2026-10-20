@@ -85,6 +85,7 @@ import type {
 	RestoreResult,
 	RestoreScope,
 	RendererInfo,
+	ExtensionInfo,
 	InterruptedRecovery,
 	SaveOutcome,
 	SavePoint,
@@ -367,6 +368,18 @@ export const tauriApi: ProjectApi = {
 	async listRenderers(): Promise<RendererInfo[]> {
 		// 読み取りのみ。失敗しない（拡張が登録できなかったときは空の一覧）
 		return await commands.listRenderers();
+	},
+	async listExtensions(): Promise<ExtensionInfo[]> {
+		return await unwrap(commands.listExtensions());
+	},
+	async setExtensionEnabled(id: string, enabled: boolean): Promise<void> {
+		await unwrap(commands.setExtensionEnabled(id, enabled));
+	},
+	async installExtensionFromFolder(path: string): Promise<ExtensionInfo> {
+		return await unwrap(commands.installExtensionFromFolder(path));
+	},
+	async removeExtension(id: string): Promise<void> {
+		await unwrap(commands.removeExtension(id));
 	},
 
 	async listProjectTree(projectId: string): Promise<ProjectTree> {

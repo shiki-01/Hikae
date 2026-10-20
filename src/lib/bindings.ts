@@ -219,6 +219,17 @@ export const commands = {
 	previewFile: (id: string, rev: string, path: string) => typedError<FilePreview, AppError>(__TAURI_INVOKE("preview_file", { id, rev, path })),
 	/**  表示拡張の一覧（読み取りのみ。登録の順）。画面は拡張子と方法から、iframe の入口を選ぶ（設計書 11 章） */
 	listRenderers: () => __TAURI_INVOKE<RendererView[]>("list_renderers"),
+	/**  拡張機能の一覧（標準と、利用者の追加分。無効のものを含む）。読み取りのみ */
+	listExtensions: () => typedError<ExtensionView[], AppError>(__TAURI_INVOKE("list_extensions")),
+	/**  利用者の拡張の有効・無効を記録する。反映は次回の起動から。標準の拡張は拒否する */
+	setExtensionEnabled: (id: string, enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_extension_enabled", { id, enabled })),
+	/**
+	 *  フォルダから拡張を追加する（開発者モードのときだけ）。元のフォルダは変更しない。
+	 *  反映は次回の起動から。追加した拡張の概要を返す
+	 */
+	installExtensionFromFolder: (path: string) => typedError<ExtensionView, AppError>(__TAURI_INVOKE("install_extension_from_folder", { path })),
+	/**  利用者の拡張を一覧から外す。フォルダは削除せず `_removed` へ移し、記録を消す。反映は次回の起動から */
+	removeExtension: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_extension", { id })),
 	/**
 	 *  中断された操作（E15）の直前の復元点へ、作業フォルダを戻す。
 	 * 
@@ -754,6 +765,19 @@ export type EndpointCheck = {
 	ok: boolean,
 	/**  ループバック以外のホストか（画面で警告する） */
 	external_host: boolean,
+};
+
+/**  一覧の 1 件（画面に出す情報だけ。パスは含めない） */
+export type ExtensionView = {
+	id: string,
+	name: string,
+	version: string,
+	/**  対応する拡張子（`.` を除いた英小文字）。全部の拡張子は `*` */
+	fileTypes: string[],
+	/**  標準（同梱）の拡張なら true。false は利用者が追加した拡張 */
+	builtin: boolean,
+	/**  有効なら true。標準は常に true（無効にできない） */
+	enabled: boolean,
 };
 
 /**  保存時点のファイル（S3「この時点の全ファイルを見る」用） */

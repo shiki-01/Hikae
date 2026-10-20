@@ -737,7 +737,8 @@ export const SETTING_BACKEND_KEYS = {
 	aiCustomGgufPath: 'ai_custom_gguf_path',
 	aiScope: 'ai_scope',
 	aiSuggestBody: 'ai_suggest_body',
-	aiOllamaUrl: 'ai_ollama_url'
+	aiOllamaUrl: 'ai_ollama_url',
+	extensionDevMode: 'extension_dev_mode'
 } as const satisfies Record<SettingKey, keyof BackendSettings>;
 
 export function mapSettings(settings: BackendSettings): AppSettings {
@@ -762,7 +763,8 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		aiCustomGgufPath: settings.ai_custom_gguf_path,
 		aiScope: settings.ai_scope,
 		aiSuggestBody: settings.ai_suggest_body,
-		aiOllamaUrl: settings.ai_ollama_url
+		aiOllamaUrl: settings.ai_ollama_url,
+		extensionDevMode: settings.extension_dev_mode
 	};
 }
 

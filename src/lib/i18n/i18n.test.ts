@@ -55,6 +55,8 @@ describe('i18n', () => {
 			'after',
 			'files',
 			'value',
+			'version',
+			'formats',
 			// AI（ローカル LLM）の表示
 			'memory',
 			'disk',

@@ -22,6 +22,7 @@ mod auto_snapshot;
 mod blob_protocol;
 mod events;
 mod ext_protocol;
+mod extension_admin;
 mod github;
 mod health;
 mod interrupted;
@@ -401,6 +402,10 @@ pub struct AppState {
     pub suggest: core_llm::SuggestSlot,
     /// 拡張ホスト（組み込みの Office 抽出器を含む。設計書 11 章）。起動時に登録し、以後は読み取りだけ
     pub extensions: Arc<core_preview::ExtensionHost>,
+    /// 拡張のフォルダの場所（標準と利用者の追加分。設計書 11.9）
+    pub extension_dirs: extension_admin::ExtensionDirs,
+    /// 拡張の取り込み・有効の切り替え・一覧からの除外の直列化（プロジェクトの直列キューとは別）
+    pub extension_lock: Arc<extension_admin::ExtensionLock>,
     /// 起動時に自動で閉じた、途中で止まった操作の名前。画面へ一度だけ知らせる（設計書 6.3）
     pub closed_interrupted: Mutex<Vec<String>>,
 }
@@ -412,6 +417,7 @@ impl AppState {
         llm: core_llm::LlmService,
         models_dir: PathBuf,
         extensions: core_preview::ExtensionHost,
+        extension_dirs: extension_admin::ExtensionDirs,
     ) -> Self {
         AppState {
             store: Arc::new(Mutex::new(store)),
@@ -425,6 +431,8 @@ impl AppState {
             model_slots: Arc::new(ai::ModelSlots::default()),
             suggest: core_llm::SuggestSlot::default(),
             extensions: Arc::new(extensions),
+            extension_dirs,
+            extension_lock: Arc::new(std::sync::Mutex::new(())),
             closed_interrupted: Mutex::new(Vec::new()),
         }
     }
@@ -2527,34 +2535,6 @@ async fn add_files(
     })
 }
 
-/// 拡張ホストを作り、同梱の拡張（`resources/extensions/<id>/`）を登録する（設計書 11 章）。
-/// 失敗は件数だけをログに出す（パス・内容は出さない）。登録できなかった拡張子は「対応しない形式」になる
-fn load_extensions(resource_dir: Option<&std::path::Path>) -> core_preview::ExtensionHost {
-    let mut host = core_preview::ExtensionHost::new();
-    let Some(root) = resource_dir.map(|dir| dir.join("extensions")) else {
-        eprintln!("拡張の登録をスキップしました（リソースフォルダが不明）");
-        return host;
-    };
-    let dirs: Vec<PathBuf> = match std::fs::read_dir(&root) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|path| path.is_dir())
-            .collect(),
-        Err(_) => {
-            eprintln!("拡張フォルダを開けませんでした");
-            Vec::new()
-        }
-    };
-    let results = host.register_dirs(&dirs);
-    let failed = results.iter().filter(|result| result.is_err()).count();
-    eprintln!(
-        "拡張を登録しました: {} 件（失敗 {} 件）",
-        results.len() - failed,
-        failed
-    );
-    host
-}
-
 /// 過去の版のファイルを書き出す一時フォルダ（`<temp>/hikae-preview`）。
 /// 配下は `<プロジェクト ID>/<短縮コミット>/<相対パス>`。古いものは起動時に削除する。
 fn preview_root() -> PathBuf {
@@ -3543,6 +3523,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             office::compare_office,
             preview::preview_file,
             preview::list_renderers,
+            extension_admin::list_extensions,
+            extension_admin::set_extension_enabled,
+            extension_admin::install_extension_from_folder,
+            extension_admin::remove_extension,
             recover_interrupted,
             interrupted::dismiss_interrupted,
             interrupted::take_closed_interrupted_notices,
@@ -3691,9 +3675,21 @@ pub fn run() {
                     )))
                 })?;
 
-            // 拡張ホスト。同梱の拡張（resources/extensions/<id>/）を登録する。失敗してもアプリは起動を続ける
-            let extensions = load_extensions(resource_dir.as_deref());
-            let state = AppState::new(store, llm, models_dir, extensions);
+            // 拡張ホスト。同梱の拡張（resources/extensions/<id>/）と、有効な利用者の拡張（データフォルダの extensions/）を
+            // 登録する。失敗してもアプリは起動を続ける（設計書 11.9）
+            let extension_dirs = extension_admin::ExtensionDirs {
+                standard: resource_dir.as_ref().map(|dir| dir.join("extensions")),
+                user: app_data_dir.join("extensions"),
+            };
+            let disabled = match store.list_extension_states() {
+                Ok(states) => extension_admin::disabled_ids(&states),
+                Err(_) => {
+                    eprintln!("拡張の記録を読めませんでした（すべて有効として登録します）");
+                    std::collections::HashSet::new()
+                }
+            };
+            let extensions = extension_admin::load_extensions(&extension_dirs, &disabled);
+            let state = AppState::new(store, llm, models_dir, extensions, extension_dirs);
             // 中断された操作のうち、何も変わっていないと確かめられたものを自動で閉じる（設計書 6.3）。
             // スケジューラの自動実行より前に行い、判定を変える復元点を作らせない
             if health::probe_app_git().0.is_available() {

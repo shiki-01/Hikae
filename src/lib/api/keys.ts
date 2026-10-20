@@ -33,6 +33,8 @@ export const keys = {
 		['compare', id, 'preview', rev, path] as const,
 	/** 表示拡張の一覧（起動中は変わらない） */
 	renderers: ['renderers'] as const,
+	/** 拡張機能の一覧（標準と追加分）。有効・無効、追加、除外の後に取り直す */
+	extensions: ['extensions'] as const,
 	/** 表示に使う画像・pdf の中身（app-blob の URL ごと） */
 	mediaBytes: (url: string) => ['media-bytes', url] as const,
 	/** 比較に使う画像の中身（app-blob の URL ごと。404 とその他の失敗を区別して返す） */

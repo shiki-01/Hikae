@@ -7,6 +7,7 @@
 // - 失敗: 抽出器の異常終了・トラップ・不正な出力は `ExtractError` で返し、アプリは落とさない
 // - 権限: 抽出器に与えるのは stdin・stdout・stderr だけ（runtime.rs）
 
+mod install;
 mod manifest;
 #[cfg(test)]
 mod renderer_tests;
@@ -14,6 +15,10 @@ mod runtime;
 #[cfg(test)]
 mod tests;
 
+pub use install::{
+    install_from_folder, move_to_removed, read_summary, ExtensionSummary, InstallError,
+    InstalledExtension, INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
+};
 pub use manifest::{ManifestError, RenderMode};
 
 use crate::extension::{decode_output, DecodeError, ExtractOutput, OutputKind};

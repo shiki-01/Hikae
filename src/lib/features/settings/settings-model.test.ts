@@ -35,7 +35,8 @@ const current: AppSettings = {
 	aiCustomGgufPath: '',
 	aiScope: 'text-diff',
 	aiSuggestBody: true,
-	aiOllamaUrl: 'http://localhost:11434'
+	aiOllamaUrl: 'http://localhost:11434',
+	extensionDevMode: false
 };
 
 describe('設定項目の定義', () => {

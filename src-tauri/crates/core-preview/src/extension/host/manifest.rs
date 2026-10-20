@@ -239,7 +239,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Manifest, ManifestError> {
 }
 
 /// `id` の形式（設計書 11.2）: `^[a-z0-9]+([.-][a-z0-9]+)*$`
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     let alnum = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
     let (Some(&first), Some(&last)) = (bytes.first(), bytes.last()) else {
