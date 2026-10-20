@@ -15,13 +15,14 @@
 	import AddProjectDialog from './AddProjectDialog.svelte';
 	import ConnectRemoteDialog from './ConnectRemoteDialog.svelte';
 	import RemoveProjectDialog from './RemoveProjectDialog.svelte';
-	import { useRelocateProject, useRemoveProject } from './mutations';
+	import { useRelocateProject, useRemoveProject, useRepairBroken } from './mutations';
 	import { useProjects, useSession } from './queries';
 	import { sortProjects } from './sort';
 
 	const projects = useProjects();
 	const session = useSession();
 	const relocate = useRelocateProject();
+	const repair = useRepairBroken();
 	const remove = useRemoveProject();
 	// カードのメニューから「一覧から外す」を選んだプロジェクト（確認のダイアログを開いている間だけ入る）
 	let removing = $state<Project | null>(null);
@@ -49,9 +50,11 @@
 			});
 			return;
 		}
-		// 保存の記録が読めなくなっている（E10）プロジェクトは、開かずに案内する
+		// 保存の記録が読めなくなっている（E10）プロジェクトは、開かずに案内する。保存先があれば「取得し直す」を出す
 		if (project.repoBroken) {
-			reportError(new AppError('E10', `repo unreadable: ${project.path}`, { name: project.name }));
+			reportError(new AppError('E10', `repo unreadable: ${project.path}`, { name: project.name }), {
+				onprimary: project.remoteConnected ? () => repair.mutate(project.id) : undefined
+			});
 			return;
 		}
 		void goto(`${resolve('/project')}?id=${encodeURIComponent(project.id)}`);

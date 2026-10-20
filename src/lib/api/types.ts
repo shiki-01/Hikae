@@ -46,6 +46,18 @@ export interface SizeCheck {
 /** 中断された操作の復旧の結果。`nothing-changed` は、復元点は無いが何も起きていないと確かめられた場合 */
 export type InterruptedRecovery = 'recovered' | 'nothing-changed';
 
+/**
+ * 破損リポジトリの「取得し直す」の結果（設計書 5.2 E10）。
+ * `reason` は何もしなかった理由（`not_broken` / `no_remote` / `remote_unsupported` / `not_logged_in` / `folder_missing`）。
+ * 復旧できたときは null で、`asidePath` に退避フォルダ、`failed` にコピーできなかったファイルの相対パスが入る
+ */
+export interface RepairOutcome {
+	reason: string | null;
+	asidePath: string | null;
+	copied: number;
+	failed: string[];
+}
+
 export type IgnoreKind = 'extension' | 'folder' | 'file';
 
 /** 「今後の変更だけ無視する」の記録 1 件（設計書 4.8、S6） */
@@ -892,6 +904,11 @@ export interface ProjectApi {
 	recoverInterrupted(projectId: string): Promise<InterruptedRecovery>;
 	/** 中断された操作を、このまま続ける（中断の印を閉じる。ファイル・履歴は変えない） */
 	dismissInterrupted(projectId: string): Promise<void>;
+	/**
+	 * 破損リポジトリを「取得し直す」（設計書 5.2 E10）。作業フォルダは退避フォルダへ移すだけで消さない。
+	 * 前提を満たさないときは何も変えず、`reason` で返す
+	 */
+	repairBrokenProject(projectId: string): Promise<RepairOutcome>;
 	/** 起動時に自動で閉じた中断の操作名を一度だけ取り出す（取り出すと空になる） */
 	takeClosedInterruptedNotices(): Promise<string[]>;
 

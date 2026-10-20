@@ -40,6 +40,8 @@ struct Inner {
     watching: Mutex<HashSet<String>>,
     /// 監視の途中で失敗した（やり直しが必要な）プロジェクト
     watch_failed: Mutex<HashSet<String>>,
+    /// プロジェクトごとの監視の本体。巡回（`run_loop`）と、破損の復旧の停止（`stop_watch`）が共有する
+    watches: Mutex<crate::watch::WatchManager>,
     wake_tx: Sender<()>,
     wake_rx: Mutex<Option<Receiver<()>>>,
 }
@@ -60,6 +62,7 @@ impl SchedulerHandle {
                 snapshot_planners: Mutex::new(HashMap::new()),
                 watching: Mutex::new(HashSet::new()),
                 watch_failed: Mutex::new(HashSet::new()),
+                watches: Mutex::new(crate::watch::WatchManager::default()),
                 wake_tx,
                 wake_rx: Mutex::new(Some(wake_rx)),
             }),
@@ -153,6 +156,28 @@ impl SchedulerHandle {
     /// ファイル監視が動いているか（UI が変更一覧の再取得をやめてよいかの判断に使う）
     pub fn is_watching(&self, id: &str) -> bool {
         self.inner.watching.lock().is_ok_and(|set| set.contains(id))
+    }
+
+    /// 登録の内容に合わせて、監視を開始・停止する（巡回から呼ぶ）。状態が変わったプロジェクトの ID を返す
+    pub(crate) fn sync_watches(
+        &self,
+        app: &tauri::AppHandle,
+        targets: &[(String, std::path::PathBuf)],
+        now: u64,
+    ) -> Vec<String> {
+        match self.inner.watches.lock() {
+            Ok(mut manager) => manager.sync(app, self, targets, now),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// 1 つのプロジェクトの監視を直ちに止める。フォルダを動かす前に、破損の復旧から呼ぶ。
+    /// 止めたあと、巡回で登録に合わせて開き直されるまで（破損の記憶が残る間は）開かない。
+    pub(crate) fn stop_watch(&self, id: &str) {
+        if let Ok(mut manager) = self.inner.watches.lock() {
+            manager.stop(id);
+        }
+        self.set_watching(id, false);
     }
 
     pub(crate) fn set_watching(&self, id: &str, on: bool) {
@@ -383,8 +408,6 @@ async fn run_loop(app: tauri::AppHandle) {
     let mut folder_missing_notified: HashSet<String> = HashSet::new();
     // 保守作業は起動直後に 1 回、その後は 1 日ごと
     let mut maintenance = MaintenanceTimer::daily();
-    // ファイル監視（プロジェクトごと）。監視の開始・停止は巡回のたびに登録内容へ合わせる
-    let mut watch_manager = crate::watch::WatchManager::default();
 
     loop {
         // 1) 登録内容と設定を計画へ反映
@@ -467,17 +490,13 @@ async fn run_loop(app: tauri::AppHandle) {
                 .iter()
                 .map(|(p, _)| (p.id.clone(), p.path.clone()))
                 .collect();
-            let manager = std::mem::take(&mut watch_manager);
             let (app_for_watch, handle_for_watch, now) =
                 (app.clone(), handle.clone(), handle.now());
             let synced = tauri::async_runtime::spawn_blocking(move || {
-                let mut manager = manager;
-                let changed = manager.sync(&app_for_watch, &handle_for_watch, &watch_targets, now);
-                (manager, changed)
+                handle_for_watch.sync_watches(&app_for_watch, &watch_targets, now)
             })
             .await;
-            if let Ok((manager, changed)) = synced {
-                watch_manager = manager;
+            if let Ok(changed) = synced {
                 // 監視中かどうかは UI の再取得の方針に影響するため、状態を取り直させる
                 for id in changed {
                     let _ = StatusChanged { project_id: id }.emit(&app);

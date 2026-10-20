@@ -729,6 +729,7 @@ const messages = {
 	'errbtn.copy_admin': '管理者向けの説明をコピー',
 	'errbtn.guide_remote': '保存先を確認する',
 	'errbtn.dismiss_interrupted': 'このまま続ける',
+	'errbtn.repair': '取得し直す',
 	'error.show_details': '技術情報を表示',
 	'error.hide_details': '技術情報を隠す',
 	'error.copy_details': 'コピー',
@@ -773,6 +774,9 @@ const messages = {
 	'error.E10.message':
 		'ファイルはこの PC に残っています。GitHub に保存済みの内容は、一覧から外したあと「GitHub から取得」で取得し直せます。',
 	'error.E10.button': '閉じる',
+	'error.E10.message_repair':
+		'ファイルはこの PC に残っています。「取得し直す」を押すと、いまのフォルダは「{name}_退避_<日時>」に移すだけで、消しません。GitHub に保存済みの内容を取り直したあと、退避フォルダにある未保存の内容を戻します。',
+	'error.E10.button2': '閉じる',
 	'error.E11.title': '「{name}」のフォルダが見つかりません',
 	'error.E11.message':
 		'移動または名前を変更しましたか。プロジェクトの記録はクラウドに残っています。',
@@ -846,6 +850,12 @@ const messages = {
 	'errcode.no_interrupted_operation.what': '中断された操作は見つかりませんでした',
 	'errcode.no_interrupted_operation.safe': 'ファイルは変更されていません。',
 	'errcode.no_interrupted_operation.next': '画面を更新してください。',
+	'errcode.repair_restore_failed.what': '取得し直しに失敗し、元のフォルダへ戻せませんでした',
+	'errcode.repair_restore_failed.safe': 'ファイルは次のフォルダに残っています: {path}',
+	'errcode.repair_restore_failed.next': 'そのフォルダの場所を確認してください。',
+	'errcode.repair_copy_failed.what': '取得し直しはできましたが、未保存の内容を戻せませんでした',
+	'errcode.repair_copy_failed.safe': '未保存の内容は次のフォルダに残っています: {path}',
+	'errcode.repair_copy_failed.next': 'そのフォルダから必要なファイルを手で戻してください。',
 	'errcode.unexpected.what': '予期しないエラーが発生しました',
 	'errcode.unexpected.safe': 'これまでに保存したデータは安全に残っています。',
 	'errcode.unexpected.next': '技術情報をコピーして、サポートに連絡してください。',
@@ -1448,7 +1458,17 @@ const messages = {
 	'mock.mobile.doc.slide': 'スライド 1',
 	'mock.mobile.doc.paragraph': 'サンプルの本文です。',
 	'mock.mobile.error.what': 'モックの確認用のエラーです',
-	'mock.mobile.error.next': 'もう一度お試しください'
+	'mock.mobile.error.next': 'もう一度お試しください',
+
+	// 破損リポジトリの「取得し直す」（設計書 5.2 E10）
+	'repair.reason.not_broken': '記録は読めるため、取得し直す必要はありません',
+	'repair.reason.no_remote': '保存先が設定されていないため、取得し直せません',
+	'repair.reason.remote_unsupported': '保存先が GitHub の標準の形ではないため、取得し直せません',
+	'repair.reason.folder_missing':
+		'フォルダが見つからないため、取得し直せません。先に場所を指定してください',
+	'repair.done': '取得し直しが終わりました。以前のフォルダは「{path}」に残しています',
+	'repair.copy_failed': '{count} 件のファイルは戻せませんでした。「{path}」に残っています: {files}',
+	'repair.more': 'ほか {count} 件'
 } as const;
 
 export default messages;

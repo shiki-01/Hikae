@@ -28,6 +28,7 @@ import {
 	mapPull,
 	mapPush,
 	mapRemoteOutcome,
+	mapRepairResult,
 	mapRemoteProjects,
 	mapEdits,
 	mapResolutions,
@@ -80,6 +81,7 @@ import type {
 	ProjectTree,
 	PushResult,
 	RemoteOutcome,
+	RepairOutcome,
 	RestoreResult,
 	RestoreScope,
 	RendererInfo,
@@ -559,6 +561,10 @@ export const tauriApi: ProjectApi = {
 
 	async dismissInterrupted(projectId: string): Promise<void> {
 		await unwrap(commands.dismissInterrupted(projectId));
+	},
+
+	async repairBrokenProject(projectId: string): Promise<RepairOutcome> {
+		return mapRepairResult(await unwrap(commands.repairBrokenProject(projectId)));
 	},
 
 	async takeClosedInterruptedNotices(): Promise<string[]> {

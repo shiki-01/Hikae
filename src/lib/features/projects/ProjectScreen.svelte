@@ -89,7 +89,7 @@
 		type InterruptedAction,
 		type InterruptedPhase
 	} from './interrupted';
-	import { useInterruptedActions } from './mutations';
+	import { useInterruptedActions, useRepairBroken } from './mutations';
 	import type { SyncSizeRequest } from './sync-size';
 	import { useFetch, usePush } from './sync';
 	import { useProject } from './queries';
@@ -165,11 +165,14 @@
 		if (page.url.searchParams.get('connect') === '1') connectOpen = true;
 	});
 	// 保存の記録が読めなくなっている（E10）と分かったら、案内を出して一覧へ戻る。
-	// このプロジェクトに対する操作はバックエンドが行わない
+	// このプロジェクトに対する操作はバックエンドが行わない（取得し直すだけは、利用者が押したときに行う）
+	const repair = useRepairBroken();
 	$effect(() => {
 		const current = project.data;
 		if (!current?.repoBroken) return;
-		reportError(new AppError('E10', `repo unreadable: ${current.path}`, { name: current.name }));
+		reportError(new AppError('E10', `repo unreadable: ${current.path}`, { name: current.name }), {
+			onprimary: current.remoteConnected ? () => repair.mutate(current.id) : undefined
+		});
 		void goto(resolve('/'));
 	});
 	// 大きいファイルのため、取り込み・アップロードを見送った内容

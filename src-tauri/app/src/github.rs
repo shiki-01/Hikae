@@ -157,7 +157,7 @@ pub(crate) fn lock_error() -> AppError {
 // ========== トークン・ユーザー ==========
 
 /// キーチェーンからトークンを読む（呼び出し側は使い終わったらすぐ捨てる）。
-async fn load_token() -> Result<Option<AccessToken>, AppError> {
+pub(crate) async fn load_token() -> Result<Option<AccessToken>, AppError> {
     run_blocking(|| TokenStore::load().map_err(|e| auth_error(e, FILES_SAFE))).await
 }
 
@@ -644,6 +644,25 @@ fn clone_failure(e: OpsError) -> AppError {
     AppError::from_ops_error(e)
 }
 
+/// 固定の URL（`clone_url_for` の結果）から、取得先のフォルダへ clone し、一時ファイルの除外設定を入れる。
+///
+/// 取得の本体。`clone_project` と、破損の復旧（`repair`）が共通で使う。
+/// 失敗しても、取得先のフォルダは削除しない（後始末は呼び出し側の判断）。
+pub(crate) fn clone_into(
+    path: &std::path::Path,
+    url: &str,
+    identity: &Identity,
+) -> Result<(), AppError> {
+    let ops = Ops::new(git_runner().with_timeout(CLONE_TIMEOUT));
+    ops.clone_project(url, path, identity)
+        .map_err(clone_failure)?;
+    // OS・Office の一時ファイルを、このリポジトリの除外設定に入れる。失敗しても取得は続ける
+    if let Err(e) = ops.apply_default_excludes(path, false) {
+        eprintln!("一時ファイルの除外設定に失敗しました: {}", e.kind());
+    }
+    Ok(())
+}
+
 /// GitHub のリポジトリをこの PC のフォルダへ取得し、プロジェクトとして登録する。
 ///
 /// - `repo` は `owner/name`。URL は常に `https://github.com/...` に固定し、任意の URL は受け付けない
@@ -758,14 +777,8 @@ pub async fn clone_project(
             }
 
             emit_clone(&task_app, &task_id, ClonePhase::Downloading);
-            let runner = git_runner().with_timeout(CLONE_TIMEOUT);
-            let ops = Ops::new(runner);
-            ops.clone_project(&url, &path, &identity)
-                .map_err(clone_failure)?;
-            // OS・Office の一時ファイルを、このリポジトリの除外設定に入れる。失敗しても取得は続ける
-            if let Err(e) = ops.apply_default_excludes(&path, false) {
-                eprintln!("一時ファイルの除外設定に失敗しました: {}", e.kind());
-            }
+            clone_into(&path, &url, &identity)?;
+            let ops = Ops::new(git_runner().with_timeout(CLONE_TIMEOUT));
 
             emit_clone(&task_app, &task_id, ClonePhase::Finishing);
             let branch = git_runner()

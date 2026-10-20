@@ -10,9 +10,11 @@ import type {
 	ConnectRemoteInput,
 	Project,
 	RemoteOutcome,
+	RepairOutcome,
 	SizeChoice
 } from '#lib/api/types.js';
-import { t } from '#lib/i18n/index.js';
+import { AppError } from '#lib/api/errors.js';
+import { t, type MessageKey } from '#lib/i18n/index.js';
 import { primaryKindOfBackendCode } from '#lib/features/notifications/error-view.js';
 import { pushToast, reportError } from '#lib/features/notifications/store.svelte.js';
 import {
@@ -213,4 +215,54 @@ export function useInterruptedActions(getProjectId: () => string, onDone?: () =>
 	}));
 	retry.run = () => recover.mutate();
 	return { recover, dismiss };
+}
+
+/** 戻せなかったファイルの名前を、知らせる件数までに絞る */
+const REPAIR_LIST_MAX = 5;
+
+/**
+ * 「取得し直す」の結果を利用者に伝える。
+ * 前提を満たさなかったときは理由を案内する（未ログインはログインし直す案内）。
+ * 復旧できたときは、退避フォルダの場所と、コピーし直せなかったファイルを知らせる（退避フォルダに残っている）。
+ */
+function announceRepair(outcome: RepairOutcome): void {
+	if (outcome.reason !== null) {
+		if (outcome.reason === 'not_logged_in') {
+			reportError(new AppError('E01', 'repair: not logged in'));
+			return;
+		}
+		pushToast({
+			type: 'info',
+			message: t(`repair.reason.${outcome.reason}` as MessageKey)
+		});
+		return;
+	}
+	const path = outcome.asidePath ?? '';
+	pushToast({ type: 'success', message: t('repair.done', { path }) });
+	if (outcome.failed.length > 0) {
+		const shown = outcome.failed.slice(0, REPAIR_LIST_MAX).join('、');
+		const rest = outcome.failed.length - REPAIR_LIST_MAX;
+		const files = rest > 0 ? `${shown} ${t('repair.more', { count: rest })}` : shown;
+		pushToast({
+			type: 'warning',
+			message: t('repair.copy_failed', { count: outcome.failed.length, path, files })
+		});
+	}
+}
+
+/**
+ * 破損リポジトリの「取得し直す」（設計書 5.2 E10）。直列キューの中で行われ、
+ * 前提（再検査・保存先・ログイン）を満たさなければ何も変えずに理由を案内する。
+ * 失敗は 3 要素のエラーで表示する（作業フォルダは退避フォルダへ移すだけで消さない）
+ */
+export function useRepairBroken() {
+	const client = useQueryClient();
+	return createMutation(() => ({
+		mutationFn: (projectId: string) => api.repairBrokenProject(projectId),
+		onSuccess: async (outcome, projectId) => {
+			await invalidateProject(client, projectId);
+			announceRepair(outcome);
+		},
+		onError: (error) => reportError(error)
+	}));
 }

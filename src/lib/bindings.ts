@@ -240,6 +240,12 @@ export const commands = {
 	 *  取り出したら空にするため、トーストは一度しか出ない。
 	 */
 	takeClosedInterruptedNotices: () => __TAURI_INVOKE<string[]>("take_closed_interrupted_notices"),
+	/**
+	 *  確認付きの復旧（設計書 5.2 E10）。画面の「取得し直す」から呼ぶ。
+	 * 
+	 *  読み取り（ログインの確認）だけは直列キューの外で行い、状態を変える部分は直列キューの中で行う。
+	 */
+	repairBrokenProject: (projectId: string) => typedError<RepairResult, AppError>(__TAURI_INVOKE("repair_broken_project", { projectId })),
 	/**  ログイン状態を返す。 */
 	getSession: () => typedError<SessionInfo, AppError>(__TAURI_INVOKE("get_session")),
 	/**  ログインを始める（Device Flow）。確認コードと確認ページの URL を返す。 */
@@ -1220,6 +1226,22 @@ export type RendererView = {
 	fileTypes: string[],
 	/**  対応する方法（`view` / `compare`） */
 	modes: string[],
+};
+
+/**
+ *  復旧の結果。前提を満たさず何もしなかったときは `reason` に理由を入れる。
+ *  理由は `not_broken`（再検査で壊れていない）、`no_remote`（保存先が無い）、
+ *  `remote_unsupported`（保存先が GitHub の固定の形ではない）、`not_logged_in`、`folder_missing`（フォルダが無い）
+ */
+export type RepairResult = {
+	/**  何もしなかった理由（復旧できたときは None） */
+	reason: string | null,
+	/**  退避フォルダのパス（復旧したときだけ）。利用者が中身を確かめて、必要なら手で戻せる */
+	aside_path: string | null,
+	/**  新しいフォルダへコピーし直したファイルの数 */
+	copied: number,
+	/**  コピーできなかったファイルの相対パス（退避フォルダに残っている） */
+	failed: string[],
 };
 
 /**  全体を元に戻した結果 */

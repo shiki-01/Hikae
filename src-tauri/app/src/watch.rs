@@ -94,6 +94,12 @@ impl WatchManager {
         }
         changed
     }
+
+    /// 1 つのプロジェクトの監視を、直ちに止める（フォルダを動かす前に、破損の復旧から呼ぶ）。
+    /// 監視の値を捨てるため、監視そのものも止まる。止めた監視があれば true。
+    pub fn stop(&mut self, id: &str) -> bool {
+        self.entries.remove(id).is_some()
+    }
 }
 
 /// 1 つのプロジェクトの監視を開始する。始められなければ None。

@@ -15,9 +15,10 @@ import {
  * - `copy`: 管理者向けの説明をクリップボードへコピーする
  * - `guide`: 対応する画面へ誘導する（呼び出し側が行き先を渡したときだけ）
  * - `dismiss`: 中断された操作を「このまま続ける」で閉じる（呼び出し側が行き先を渡したときだけ）
+ * - `repair`: 破損リポジトリを「取得し直す」で復旧する（E10。呼び出し側が onprimary を渡したときだけ）
  * - `close`: 閉じるだけ
  */
-export type PrimaryKind = 'retry' | 'login' | 'copy' | 'guide' | 'dismiss' | 'close';
+export type PrimaryKind = 'retry' | 'login' | 'copy' | 'guide' | 'dismiss' | 'repair' | 'close';
 
 export interface ErrorView {
 	code: AppErrorCode | 'generic';
@@ -93,7 +94,8 @@ const KIND_LABELS: Record<Exclude<PrimaryKind, 'close'>, MessageKey> = {
 	login: 'errbtn.login',
 	copy: 'errbtn.copy_admin',
 	guide: 'errbtn.guide_remote',
-	dismiss: 'errbtn.dismiss_interrupted'
+	dismiss: 'errbtn.dismiss_interrupted',
+	repair: 'errbtn.repair'
 };
 
 /** 文言の差し込み位置が残っている（値が足りなかった）か */
@@ -121,6 +123,7 @@ function withAvailable(kind: PrimaryKind, available: AvailableActions): PrimaryK
 	if (kind === 'retry' && !available.retry) return 'close';
 	if (kind === 'guide' && !available.guide) return 'close';
 	if (kind === 'dismiss' && !available.guide) return 'close';
+	if (kind === 'repair' && !available.guide) return 'close';
 	return kind;
 }
 
@@ -168,24 +171,39 @@ export function describeError(
 	}
 	if (error instanceof AppError && error.code !== 'backend') {
 		const code = error.code;
-		const kind: PrimaryKind = RETRY_CODES.includes(code)
-			? 'retry'
-			: COPY_CODES.includes(code)
-				? 'copy'
-				: LOGIN_CODES.includes(code)
-					? 'login'
-					: 'close';
+		// 破損リポジトリ（E10）は、取得し直しを主ボタンに出せるとき（onprimary が渡されたとき）だけ確認付きの復旧を出す。
+		// 出せないとき（保存先が無い等）は従来どおり「閉じる」だけ
+		const repairable = code === 'E10' && available.guide;
+		const kind: PrimaryKind = repairable
+			? 'repair'
+			: RETRY_CODES.includes(code)
+				? 'retry'
+				: COPY_CODES.includes(code)
+					? 'copy'
+					: LOGIN_CODES.includes(code)
+						? 'login'
+						: 'close';
 		const primaryKind = withAvailable(kind, available);
 		const params = error.params;
 		const secondaryKey = `error.${code}.button2` as MessageKey;
 		return {
 			code,
 			title: t(`error.${code}.title` as MessageKey, params),
-			message: t(`error.${code}.message` as MessageKey, params),
+			message: repairable
+				? t('error.E10.message_repair', params)
+				: t(`error.${code}.message` as MessageKey, params),
 			primaryLabel:
-				primaryKind === kind ? t(`error.${code}.button` as MessageKey, params) : t('error.close'),
+				primaryKind !== kind
+					? t('error.close')
+					: repairable
+						? t('errbtn.repair')
+						: t(`error.${code}.button` as MessageKey, params),
 			primaryKind,
-			secondaryLabel: SECONDARY_CODES.includes(code) ? t(secondaryKey, params) : undefined,
+			secondaryLabel: repairable
+				? t('error.E10.button2')
+				: SECONDARY_CODES.includes(code)
+					? t(secondaryKey, params)
+					: undefined,
 			toastMessage: isAutoRecovering(code) ? t(`error.${code}.toast` as MessageKey) : undefined,
 			copyText: code === 'E02' ? t('error.E02.copy_text') : undefined,
 			technical: error.technical,

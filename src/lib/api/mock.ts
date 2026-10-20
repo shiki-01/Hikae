@@ -52,6 +52,7 @@ import type {
 	PushResult,
 	RemoteProject,
 	RemoteOutcome,
+	RepairOutcome,
 	RemoteProjectList,
 	IgnoreKind,
 	IgnoreRule,
@@ -1642,6 +1643,17 @@ export const mockApi: ProjectApi = {
 	async dismissInterrupted(projectId: string): Promise<void> {
 		await sleep(WAIT_LONG);
 		stateOf(projectId).project.interruptedOperation = null;
+	},
+
+	async repairBrokenProject(projectId: string): Promise<RepairOutcome> {
+		await sleep(WAIT_LONG);
+		stateOf(projectId).project.repoBroken = false;
+		return {
+			reason: null,
+			asidePath: `${stateOf(projectId).project.path}_退避_20261020-000000`,
+			copied: 0,
+			failed: []
+		};
 	},
 
 	async takeClosedInterruptedNotices(): Promise<string[]> {

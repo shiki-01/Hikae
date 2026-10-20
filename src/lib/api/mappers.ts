@@ -11,6 +11,7 @@ import type {
 	AppHealth as BackendAppHealth,
 	BroadFolderKind as BackendBroadFolderKind,
 	FolderCheck as BackendFolderCheck,
+	RepairResult as BackendRepairResult,
 	FolderWarning as BackendFolderWarning,
 	ChangeFile,
 	ChangeKind,
@@ -98,6 +99,7 @@ import type {
 	ProjectTree,
 	PushResult,
 	RemoteOutcome,
+	RepairOutcome,
 	RejectReason,
 	RemoteProjectList,
 	IgnoreKind,
@@ -623,6 +625,16 @@ export function mapFolderCheck(check: BackendFolderCheck): FolderCheck {
 	return {
 		broad: mapBroadFolder(check.broad),
 		warnings: check.warnings.map((warning) => FOLDER_WARNINGS[warning])
+	};
+}
+
+/** 破損リポジトリの「取得し直す」の結果 */
+export function mapRepairResult(result: BackendRepairResult): RepairOutcome {
+	return {
+		reason: result.reason,
+		asidePath: result.aside_path,
+		copied: result.copied,
+		failed: result.failed
 	};
 }
 

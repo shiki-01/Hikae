@@ -31,6 +31,7 @@ mod ops_runner;
 mod os_trash;
 mod preview;
 mod remote;
+mod repair;
 mod scheduler;
 mod skip_worktree;
 mod version;
@@ -3545,6 +3546,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             recover_interrupted,
             interrupted::dismiss_interrupted,
             interrupted::take_closed_interrupted_notices,
+            repair::repair_broken_project,
             github::get_session,
             github::start_login,
             github::wait_login,
