@@ -911,6 +911,11 @@ export const mockApi: ProjectApi = {
 		return 'C:\\Users\\student\\Models\\my-model.gguf';
 	},
 
+	async pickZipFile(): Promise<string | null> {
+		await sleep(150);
+		return 'C:\\Users\\student\\Downloads\\my-extension.zip';
+	},
+
 	async addProject(
 		input: AddProjectInput,
 		onProgress?: (phase: ClonePhase) => void
@@ -1197,6 +1202,21 @@ export const mockApi: ProjectApi = {
 		const info: ExtensionInfo = {
 			id: `mock.added-${mockExtensionSequence++}`,
 			name,
+			version: '0.1.0',
+			fileTypes: ['txt'],
+			builtin: false,
+			enabled: true
+		};
+		mockUserExtensions = [...mockUserExtensions, info];
+		return info;
+	},
+	async installExtensionFromZip(path: string): Promise<ExtensionInfo> {
+		await sleep(WAIT_SHORT);
+		// ブラウザ（モック）では zip を読まない。選んだ zip の名前（拡張子を除く）だけで一覧に加える
+		const file = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+		const info: ExtensionInfo = {
+			id: `mock.added-${mockExtensionSequence++}`,
+			name: file.replace(/\.zip$/i, ''),
 			version: '0.1.0',
 			fileTypes: ['txt'],
 			builtin: false,

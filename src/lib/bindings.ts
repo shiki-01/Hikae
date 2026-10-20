@@ -228,6 +228,11 @@ export const commands = {
 	 *  反映は次回の起動から。追加した拡張の概要を返す
 	 */
 	installExtensionFromFolder: (path: string) => typedError<ExtensionView, AppError>(__TAURI_INVOKE("install_extension_from_folder", { path })),
+	/**
+	 *  zip から拡張を追加する（開発者モードのときだけ）。zip は展開して検査してから取り込む（設計書 11.9）。
+	 *  元の zip は変更しない。反映は次回の起動から。追加した拡張の概要を返す
+	 */
+	installExtensionFromZip: (path: string) => typedError<ExtensionView, AppError>(__TAURI_INVOKE("install_extension_from_zip", { path })),
 	/**  利用者の拡張を一覧から外す。フォルダは削除せず `_removed` へ移し、記録を消す。反映は次回の起動から */
 	removeExtension: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_extension", { id })),
 	/**

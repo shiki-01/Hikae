@@ -276,6 +276,15 @@ export const tauriApi: ProjectApi = {
 		return typeof selected === 'string' ? selected : null;
 	},
 
+	async pickZipFile(): Promise<string | null> {
+		const selected = await open({
+			directory: false,
+			multiple: false,
+			filters: [{ name: 'zip', extensions: ['zip'] }]
+		});
+		return typeof selected === 'string' ? selected : null;
+	},
+
 	async addProject(
 		input: AddProjectInput,
 		onProgress?: (phase: ClonePhase) => void
@@ -382,6 +391,9 @@ export const tauriApi: ProjectApi = {
 	},
 	async installExtensionFromFolder(path: string): Promise<ExtensionInfo> {
 		return await unwrap(commands.installExtensionFromFolder(path));
+	},
+	async installExtensionFromZip(path: string): Promise<ExtensionInfo> {
+		return await unwrap(commands.installExtensionFromZip(path));
 	},
 	async removeExtension(id: string): Promise<void> {
 		await unwrap(commands.removeExtension(id));

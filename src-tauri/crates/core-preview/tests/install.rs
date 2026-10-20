@@ -3,11 +3,14 @@
 // （取り込みはコンパイルしない。登録は app の起動時に行う）。
 
 use core_preview::{
-    install_from_folder, move_to_removed, read_summary, InstallError, ManifestError,
-    INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
+    install_from_folder, install_from_zip, move_to_removed, read_summary, InstallError,
+    ManifestError, INSTALL_MAX_BYTES, INSTALL_MAX_FILES, ZIP_MAX_ENTRIES, ZIP_MAX_FILE_BYTES,
 };
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use zip::write::SimpleFileOptions;
+use zip::CompressionMethod;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -275,5 +278,372 @@ fn read_summary_reads_the_manifest_without_checking_entries() -> TestResult {
         summary.file_types,
         vec!["txt".to_string(), "dat".to_string()]
     );
+    Ok(())
+}
+
+// ---- zip からの取り込み（設計書 11.9）----
+
+/// zip のエントリ（名前と内容。名前の末尾が `/` のものはディレクトリ）
+type ZipEntries = Vec<(String, Vec<u8>)>;
+
+/// 圧縮方式を選んで、エントリから zip を作る（テストの入力として使う）
+fn write_zip(path: &Path, entries: &ZipEntries, method: CompressionMethod) -> TestResult {
+    let mut writer = zip::ZipWriter::new(fs::File::create(path)?);
+    let options = SimpleFileOptions::default().compression_method(method);
+    for (name, data) in entries {
+        if name.ends_with('/') {
+            writer.add_directory(name.as_str(), options)?;
+        } else {
+            writer.start_file(name.as_str(), options)?;
+            writer.write_all(data)?;
+        }
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+/// 正しい拡張の中身（`prefix` を先頭に付ける。空なら直下）
+fn extension_entries(prefix: &str, id: &str) -> ZipEntries {
+    vec![
+        (
+            format!("{prefix}extension.json"),
+            manifest(id, "テスト拡張").into_bytes(),
+        ),
+        (
+            format!("{prefix}ui/index.html"),
+            "<p>表示</p>".as_bytes().to_vec(),
+        ),
+        (format!("{prefix}extract.wasm"), b"\0asm dummy".to_vec()),
+    ]
+}
+
+/// 取り込み元の zip を `tmp` に作り、そのパスを返す
+fn zip_of(
+    tmp: &Path,
+    entries: &ZipEntries,
+    method: CompressionMethod,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = tmp.join("source.zip");
+    write_zip(&path, entries, method)?;
+    Ok(path)
+}
+
+#[test]
+fn zip_with_manifest_at_the_root_is_installed() -> TestResult {
+    let (tmp, user_dir, src) = setup()?;
+    // 元と同じ中身を zip にして、同じ中身が取り込まれることを確かめる
+    let before = snapshot(&src)?;
+    let zip_path = zip_of(
+        tmp.path(),
+        &extension_entries("", "example.tool"),
+        CompressionMethod::Deflated,
+    )?;
+
+    let installed =
+        install_from_zip(&zip_path, &user_dir, &[], NOW).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(installed.id, "example.tool");
+    assert_eq!(installed.name, "テスト拡張");
+    assert_eq!(installed.version, "1.2.3");
+    assert_eq!(snapshot(&user_dir.join("example.tool"))?, before);
+    // 展開先は残さない（_removed へ退けてある）。_staging は空
+    assert_eq!(fs::read_dir(user_dir.join("_staging"))?.count(), 0);
+    assert!(user_dir.join("_removed").is_dir());
+    Ok(())
+}
+
+#[test]
+fn zip_with_one_folder_at_the_top_uses_that_folder() -> TestResult {
+    let (tmp, user_dir, src) = setup()?;
+    let before = snapshot(&src)?;
+    let zip_path = zip_of(
+        tmp.path(),
+        &extension_entries("example-tool-src/", "example.tool"),
+        CompressionMethod::Deflated,
+    )?;
+
+    install_from_zip(&zip_path, &user_dir, &[], NOW).map_err(|e| format!("{e:?}"))?;
+    // フォルダの名前ではなく、中の extension.json のあるフォルダだけを取り込む
+    assert_eq!(snapshot(&user_dir.join("example.tool"))?, before);
+    assert!(!user_dir.join("example-tool-src").exists());
+    Ok(())
+}
+
+#[test]
+fn zip_with_manifest_in_a_folder_next_to_other_files_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    // 直下に別のファイルがあると、「唯一のフォルダ」ではないため取り込み元が決まらない
+    let mut entries = extension_entries("pkg/", "example.tool");
+    entries.push(("readme.txt".to_string(), b"x".to_vec()));
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    let result = install_from_zip(&zip_path, &user_dir, &[], NOW);
+    assert_eq!(
+        result.err(),
+        Some(InstallError::Manifest(ManifestError::Unreadable))
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn zip_without_extension_json_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let entries = vec![("ui/index.html".to_string(), b"<p>x</p>".to_vec())];
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    let result = install_from_zip(&zip_path, &user_dir, &[], NOW);
+    assert_eq!(
+        result.err(),
+        Some(InstallError::Manifest(ManifestError::Unreadable))
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn zip_with_an_invalid_manifest_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let mut entries = extension_entries("", "example.tool");
+    entries[0].1 = manifest("example.tool", "  ").into_bytes();
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    let result = install_from_zip(&zip_path, &user_dir, &[], NOW);
+    assert_eq!(
+        result.err(),
+        Some(InstallError::Manifest(ManifestError::InvalidName))
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn zip_with_a_standard_id_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let zip_path = zip_of(
+        tmp.path(),
+        &extension_entries("", "example.tool"),
+        CompressionMethod::Deflated,
+    )?;
+    let builtin = vec!["example.tool".to_string()];
+    let result = install_from_zip(&zip_path, &user_dir, &builtin, NOW);
+    assert_eq!(result.err(), Some(InstallError::BuiltinId));
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn zip_with_a_duplicate_id_is_rejected_and_keeps_the_first() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let zip_path = zip_of(
+        tmp.path(),
+        &extension_entries("", "example.tool"),
+        CompressionMethod::Deflated,
+    )?;
+    install_from_zip(&zip_path, &user_dir, &[], NOW).map_err(|e| format!("{e:?}"))?;
+    let first = snapshot(&user_dir.join("example.tool"))?;
+
+    // 2 つ目は別の内容でも、同じ ID なら拒否する（既存は変えない）
+    let mut other = extension_entries("", "example.tool");
+    other[1].1 = "<p>別の版</p>".as_bytes().to_vec();
+    let zip_path2 = tmp.path().join("second.zip");
+    write_zip(&zip_path2, &other, CompressionMethod::Deflated)?;
+    let result = install_from_zip(&zip_path2, &user_dir, &[], NOW);
+    assert_eq!(result.err(), Some(InstallError::DuplicateId));
+    assert_eq!(snapshot(&user_dir.join("example.tool"))?, first);
+    Ok(())
+}
+
+#[test]
+fn unsafe_entry_names_reject_the_whole_zip() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let bad_names = [
+        "../escape.txt",
+        "ui/../../escape.txt",
+        "/etc/passwd",
+        "\\\\server\\share\\x.txt",
+        "..\\escape.txt",
+        "C:/Windows/x.txt",
+        "ui/alt:stream.txt",
+        "ui/a\0b.txt",
+        "CON.txt",
+        "ui/LPT1/x.txt",
+        "ui/trailing.",
+        "ui//double.txt",
+    ];
+    for name in bad_names {
+        let mut entries = extension_entries("", "example.tool");
+        entries.push((name.to_string(), b"x".to_vec()));
+        let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+        let result = install_from_zip(&zip_path, &user_dir, &[], NOW);
+        assert_eq!(
+            result.err(),
+            Some(InstallError::ArchiveUnsafe),
+            "name: {name:?}"
+        );
+        // 1 つでも違反があれば、正しいエントリも展開しない
+        assert!(!user_dir.join("_staging").exists(), "name: {name:?}");
+        assert!(!user_dir.join("example.tool").exists(), "name: {name:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_absolute_path_is_rejected_as_unsafe() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let mut entries = extension_entries("", "example.tool");
+    entries.push(("/abs/outside.txt".to_string(), b"x".to_vec()));
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::ArchiveUnsafe)
+    );
+    Ok(())
+}
+
+#[test]
+fn names_that_differ_only_by_case_are_rejected_as_duplicates() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let mut entries = extension_entries("", "example.tool");
+    entries.push(("ui/Extra.txt".to_string(), b"a".to_vec()));
+    entries.push(("UI/extra.txt".to_string(), b"b".to_vec()));
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::ArchiveUnsafe)
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_entry_rejects_the_whole_zip() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    // 外部属性に S_IFLNK を付けたエントリ（add_symlink）は、リンクとして zip 全体を拒否する
+    let path = tmp.path().join("link.zip");
+    let mut writer = zip::ZipWriter::new(fs::File::create(&path)?);
+    for (name, data) in extension_entries("", "example.tool") {
+        writer.start_file(name.as_str(), SimpleFileOptions::default())?;
+        writer.write_all(&data)?;
+    }
+    writer.add_symlink("ui/link.html", "../../secret", SimpleFileOptions::default())?;
+    writer.finish()?;
+    assert_eq!(
+        install_from_zip(&path, &user_dir, &[], NOW).err(),
+        Some(InstallError::ArchiveUnsafe)
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn too_many_entries_are_rejected_before_extracting() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let mut entries = extension_entries("", "example.tool");
+    // 上限を 1 つ超えるまで、小さなファイルを足す
+    while entries.len() <= ZIP_MAX_ENTRIES {
+        let n = entries.len();
+        entries.push((format!("data/{n:05}.txt"), b"x".to_vec()));
+    }
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Stored)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::TooLarge)
+    );
+    assert!(!user_dir.join("_staging").exists());
+    Ok(())
+}
+
+#[test]
+fn a_file_over_the_per_file_limit_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let mut entries = extension_entries("", "example.tool");
+    // 圧縮しない（Stored）ので、圧縮率の検査より前に大きさで拒否される
+    entries.push((
+        "big.bin".to_string(),
+        vec![0u8; (ZIP_MAX_FILE_BYTES + 1) as usize],
+    ));
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Stored)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::TooLarge)
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn a_total_over_the_size_limit_is_rejected() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    // 1 ファイルは 32 MiB 以下だが、合計が 64 MiB を超える（圧縮しないため、中身は実際の大きさ）
+    let mut entries = extension_entries("", "example.tool");
+    let part = 22 * 1024 * 1024;
+    for i in 0..3 {
+        entries.push((format!("part-{i}.bin"), vec![1u8; part]));
+    }
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Stored)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::TooLarge)
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn a_high_compression_ratio_is_rejected_as_a_bomb() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    // 4 MiB の 0 は、deflate で数 KiB になる（圧縮率が上限を超える）
+    let mut entries = extension_entries("", "example.tool");
+    entries.push(("zeros.bin".to_string(), vec![0u8; 4 * 1024 * 1024]));
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    assert_eq!(
+        install_from_zip(&zip_path, &user_dir, &[], NOW).err(),
+        Some(InstallError::ArchiveUnsafe)
+    );
+    assert!(!user_dir.join("example.tool").exists());
+    Ok(())
+}
+
+#[test]
+fn a_file_that_is_not_a_zip_is_unreadable() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let path = tmp.path().join("not-a-zip.zip");
+    fs::write(&path, b"this is not a zip file")?;
+    assert_eq!(
+        install_from_zip(&path, &user_dir, &[], NOW).err(),
+        Some(InstallError::ArchiveUnreadable)
+    );
+    assert!(!user_dir.join("_staging").exists());
+    Ok(())
+}
+
+#[test]
+fn a_missing_zip_file_is_reported_as_unreadable_source() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    let path = tmp.path().join("missing.zip");
+    assert_eq!(
+        install_from_zip(&path, &user_dir, &[], NOW).err(),
+        Some(InstallError::SourceUnreadable)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_zip_missing_a_declared_entry_is_parked_in_failed_without_an_id_folder() -> TestResult {
+    let (tmp, user_dir, _src) = setup()?;
+    // マニフェストは ui/index.html を宣言するが、zip には入れない
+    let mut entries = extension_entries("", "example.tool");
+    entries.retain(|(name, _)| name != "ui/index.html");
+    let zip_path = zip_of(tmp.path(), &entries, CompressionMethod::Deflated)?;
+    let result = install_from_zip(&zip_path, &user_dir, &[], NOW);
+    assert_eq!(
+        result.err(),
+        Some(InstallError::Manifest(ManifestError::EntryMissing))
+    );
+    // 中途半端な <id> は作らない。展開先は削除せず _failed へ退けてある
+    assert!(!user_dir.join("example.tool").exists());
+    assert_eq!(fs::read_dir(user_dir.join("_staging"))?.count(), 0);
+    let failed: Vec<PathBuf> = fs::read_dir(user_dir.join("_failed"))?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<_, _>>()?;
+    assert_eq!(failed.len(), 1);
+    assert!(failed[0].join("extension.json").is_file());
     Ok(())
 }

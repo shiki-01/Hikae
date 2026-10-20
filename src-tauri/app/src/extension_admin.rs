@@ -3,7 +3,7 @@
 // - 登録は起動時だけ行う（`load_extensions`）。有効・無効、取り込み、一覧から外すは次回の起動から反映する
 // - 標準の拡張（resources/extensions）は無効にできず、一覧から外すこともできない
 // - 利用者の拡張（データフォルダの extensions）は、有効の記録（`extensions` テーブル）が無効のとき登録しない
-// - 取り込みは開発者モード（設定 `extension_dev_mode`）のときだけ行う
+// - 取り込みは開発者モード（設定 `extension_dev_mode`）のときだけ行う（フォルダと zip の両方）
 // - 状態を変える操作は、拡張専用の Mutex（`ExtensionLock`）で 1 件ずつ行う。プロジェクトの直列キューは通さない
 // - 拡張の ID・フォルダの名前は、パスの組み立てに使わない（利用者の拡張フォルダを読んで照合する）
 
@@ -11,8 +11,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use core_preview::{ExtensionHost, ExtensionSummary, InstallError};
-use core_store::ExtensionState;
+use core_preview::{ExtensionHost, ExtensionSummary, InstallError, InstalledExtension};
+use core_store::{ExtensionState, Store};
 use serde::{Deserialize, Serialize};
 
 use crate::{run_blocking, AppError, AppState};
@@ -44,8 +44,8 @@ pub struct ExtensionView {
     pub enabled: bool,
 }
 
-/// `_removed`・`_failed` は退避先のフォルダなので、拡張として数えない
-const RESERVED_FOLDERS: [&str; 2] = ["_removed", "_failed"];
+/// `_removed`・`_failed`・`_staging` は退避先と展開先のフォルダなので、拡張として数えない
+const RESERVED_FOLDERS: [&str; 3] = ["_removed", "_failed", "_staging"];
 
 /// 拡張のフォルダの直下にある、拡張の候補のフォルダ（名前の順。退避先は除く）
 fn extension_folders(root: &Path) -> Vec<PathBuf> {
@@ -280,6 +280,24 @@ fn install_error(e: InstallError) -> AppError {
             "拡張機能は変更されていません。",
             "拡張機能を選び直してください",
         ),
+        InstallError::ArchiveUnreadable => (
+            "extension_archive_unreadable",
+            "zip ファイルを開けませんでした（壊れているか、暗号化されているか、対応しない形式です）。",
+            "拡張機能は追加されていません。",
+            "zip ファイルを確かめてから、もう一度選んでください",
+        ),
+        InstallError::ArchiveUnsafe => (
+            "extension_archive_unsafe",
+            "zip の中に安全でない内容があったため、追加しませんでした（危険なファイル名、リンク、極端に圧縮されたファイルのどれかです）。",
+            "拡張機能は追加されていません。",
+            "拡張機能の作者に確認してください",
+        ),
+        InstallError::ExtractFailed => (
+            "extension_extract_failed",
+            "zip を展開できませんでした。",
+            "元の zip ファイルは変更されていません。",
+            "空き容量と権限を確かめて、もう一度試してください",
+        ),
     };
     AppError {
         code: code.to_string(),
@@ -289,6 +307,42 @@ fn install_error(e: InstallError) -> AppError {
         next_action: next_action.to_string(),
         technical_info: Some(format!("{e:?}")),
     }
+}
+
+/// 開発者モードがオフなら拒否する（取り込みの前提。`what` は「フォルダから」などの説明）
+fn ensure_dev_mode(store: &Mutex<Store>, what: &str) -> Result<(), AppError> {
+    let dev_mode = store
+        .lock()
+        .map_err(|_| lock_error())?
+        .get_settings()
+        .map_err(|e| db_error(&e))?
+        .extension_dev_mode;
+    if dev_mode {
+        return Ok(());
+    }
+    Err(AppError {
+        code: "extension_dev_mode_off".to_string(),
+        params: Vec::new(),
+        what_happened: format!("開発者モードがオフのため、{what}追加できません。"),
+        data_is_safe: "拡張機能は追加されていません。".to_string(),
+        next_action: "設定の「拡張機能」で開発者モードをオンにしてください".to_string(),
+        technical_info: None,
+    })
+}
+
+/// 取り込んだ拡張を有効として記録し、一覧の 1 件を返す（反映は次回の起動から）
+fn record_installed(
+    dirs: &ExtensionDirs,
+    store: &Mutex<Store>,
+    installed: InstalledExtension,
+) -> Result<ExtensionView, AppError> {
+    let guard = store.lock().map_err(|_| lock_error())?;
+    guard
+        .set_extension_enabled(&installed.id, &installed.version, true)
+        .map_err(|e| db_error(&e))?;
+    drop(guard);
+    let summary = find_user_extension(dirs, &installed.id)?;
+    Ok(view(summary, false, true))
 }
 
 /// 拡張の状態を変える操作の直列化（同時に 1 件）
@@ -351,34 +405,37 @@ pub async fn install_extension_from_folder(
     let lock = state.extension_lock.clone();
     run_blocking(move || {
         let _guard = lock_ops(&lock)?;
-        let dev_mode = store
-            .lock()
-            .map_err(|_| lock_error())?
-            .get_settings()
-            .map_err(|e| db_error(&e))?
-            .extension_dev_mode;
-        if !dev_mode {
-            return Err(AppError {
-                code: "extension_dev_mode_off".to_string(),
-                params: Vec::new(),
-                what_happened: "開発者モードがオフのため、フォルダから追加できません。".to_string(),
-                data_is_safe: "拡張機能は追加されていません。".to_string(),
-                next_action: "設定の「拡張機能」で開発者モードをオンにしてください".to_string(),
-                technical_info: None,
-            });
-        }
+        ensure_dev_mode(&store, "フォルダから")?;
         let builtin: Vec<String> = builtin_ids(&dirs).into_iter().collect();
         let now = core_store::now_rfc3339();
         let installed =
             core_preview::install_from_folder(Path::new(&path), &dirs.user, &builtin, &now)
                 .map_err(install_error)?;
-        let guard = store.lock().map_err(|_| lock_error())?;
-        guard
-            .set_extension_enabled(&installed.id, &installed.version, true)
-            .map_err(|e| db_error(&e))?;
-        drop(guard);
-        let summary = find_user_extension(&dirs, &installed.id)?;
-        Ok(view(summary, false, true))
+        record_installed(&dirs, &store, installed)
+    })
+    .await
+}
+
+/// zip から拡張を追加する（開発者モードのときだけ）。zip は展開して検査してから取り込む（設計書 11.9）。
+/// 元の zip は変更しない。反映は次回の起動から。追加した拡張の概要を返す
+#[tauri::command]
+#[specta::specta]
+pub async fn install_extension_from_zip(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<ExtensionView, AppError> {
+    let dirs = state.extension_dirs.clone();
+    let store = state.store_clone();
+    let lock = state.extension_lock.clone();
+    run_blocking(move || {
+        let _guard = lock_ops(&lock)?;
+        ensure_dev_mode(&store, "zip から")?;
+        let builtin: Vec<String> = builtin_ids(&dirs).into_iter().collect();
+        let now = core_store::now_rfc3339();
+        let installed =
+            core_preview::install_from_zip(Path::new(&path), &dirs.user, &builtin, &now)
+                .map_err(install_error)?;
+        record_installed(&dirs, &store, installed)
     })
     .await
 }

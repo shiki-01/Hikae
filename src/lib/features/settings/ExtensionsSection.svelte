@@ -11,7 +11,12 @@
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import Toggle from '#lib/components/Toggle.svelte';
 	import { formatFileTypes } from './extension-model';
-	import { useInstallExtension, useRemoveExtension, useSetExtensionEnabled } from './mutations';
+	import {
+		useInstallExtension,
+		useInstallExtensionFromZip,
+		useRemoveExtension,
+		useSetExtensionEnabled
+	} from './mutations';
 	import { useExtensions, useSettings, useUpdateSettings } from './queries';
 
 	// 拡張機能は全体の設定（プロジェクトごとの上書きは無い）
@@ -20,6 +25,7 @@
 	const update = useUpdateSettings(() => null);
 	const setEnabled = useSetExtensionEnabled();
 	const install = useInstallExtension();
+	const installZip = useInstallExtensionFromZip();
 	const remove = useRemoveExtension();
 
 	const devMode = $derived(settings.data?.settings.extensionDevMode ?? false);
@@ -29,6 +35,7 @@
 	let confirmDevOpen = $state(false);
 	let removeTarget = $state<ExtensionInfo | null>(null);
 	let picking = $state(false);
+	let pickingZip = $state(false);
 
 	function changeDevMode(checked: boolean) {
 		if (checked) {
@@ -58,6 +65,18 @@
 			reportError(error);
 		} finally {
 			picking = false;
+		}
+	}
+
+	async function addFromZip() {
+		pickingZip = true;
+		try {
+			const file = await api.pickZipFile();
+			if (file !== null) installZip.mutate(file);
+		} catch (error) {
+			reportError(error);
+		} finally {
+			pickingZip = false;
 		}
 	}
 
@@ -148,9 +167,12 @@
 			</div>
 		{/if}
 		{#if devMode}
-			<div class="flex justify-content:flex-end">
+			<div class="flex justify-content:flex-end gap:2 flex-wrap:wrap">
 				<Button size="sm" disabled={picking || install.isPending} onclick={addFromFolder}>
 					{t('extensions.add_folder')}
+				</Button>
+				<Button size="sm" disabled={pickingZip || installZip.isPending} onclick={addFromZip}>
+					{t('extensions.add_zip')}
 				</Button>
 			</div>
 		{/if}

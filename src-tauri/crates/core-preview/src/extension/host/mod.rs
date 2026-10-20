@@ -16,8 +16,9 @@ mod runtime;
 mod tests;
 
 pub use install::{
-    install_from_folder, move_to_removed, read_summary, ExtensionSummary, InstallError,
-    InstalledExtension, INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
+    install_from_folder, install_from_zip, move_to_removed, read_summary, ExtensionSummary,
+    InstallError, InstalledExtension, INSTALL_MAX_BYTES, INSTALL_MAX_FILES, ZIP_MAX_ENTRIES,
+    ZIP_MAX_FILE_BYTES,
 };
 pub use manifest::{ManifestError, RenderMode};
 

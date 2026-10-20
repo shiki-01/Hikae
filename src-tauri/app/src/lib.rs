@@ -3553,6 +3553,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             extension_admin::list_extensions,
             extension_admin::set_extension_enabled,
             extension_admin::install_extension_from_folder,
+            extension_admin::install_extension_from_zip,
             extension_admin::remove_extension,
             recover_interrupted,
             interrupted::dismiss_interrupted,

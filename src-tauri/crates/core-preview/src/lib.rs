@@ -27,9 +27,10 @@ pub use extension::asset::{
 };
 #[cfg(feature = "host")]
 pub use extension::host::{
-    install_from_folder, move_to_removed, read_summary, ExtensionHost, ExtensionId, ExtensionInfo,
-    ExtensionSummary, ExtractError, ExtractorRef, InstallError, InstalledExtension, ManifestError,
-    RenderMode, RendererInfo, RuntimeLimits, INSTALL_MAX_BYTES, INSTALL_MAX_FILES,
+    install_from_folder, install_from_zip, move_to_removed, read_summary, ExtensionHost,
+    ExtensionId, ExtensionInfo, ExtensionSummary, ExtractError, ExtractorRef, InstallError,
+    InstalledExtension, ManifestError, RenderMode, RendererInfo, RuntimeLimits, INSTALL_MAX_BYTES,
+    INSTALL_MAX_FILES, ZIP_MAX_ENTRIES, ZIP_MAX_FILE_BYTES,
 };
 pub use extension::index::{
     parse_index, verify_download, verify_index_signature, Download, ExtensionIndex, IndexEntry,

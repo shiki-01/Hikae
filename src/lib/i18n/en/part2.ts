@@ -349,13 +349,15 @@ export default {
 	'extensions.enable_label': 'Enable {name}',
 	'extensions.builtin_locked': 'Standard extensions cannot be disabled',
 	'extensions.dev_section_title': 'Developer mode',
-	'extensions.dev_description': 'Allows unsigned extensions to be added from a folder.',
+	'extensions.dev_description':
+		'Allows unsigned extensions to be added from a folder or a zip file.',
 	'extensions.dev_toggle': 'Use developer mode',
 	'extensions.dev_confirm_title': 'Turn on developer mode?',
 	'extensions.dev_confirm_text':
 		'Unsigned extensions can read the contents of the files you open. Add only extensions from authors you trust.',
 	'extensions.dev_confirm_apply': 'Turn on',
 	'extensions.add_folder': 'Add from folder',
+	'extensions.add_zip': 'Add from zip',
 	'extensions.remove_label': 'Remove {name} from the list',
 	'extensions.remove_title': 'Remove "{name}" from the list?',
 	'extensions.remove_text':

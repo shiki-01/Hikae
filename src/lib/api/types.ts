@@ -842,6 +842,8 @@ export interface ProjectApi {
 	pickFiles(): Promise<string[] | null>;
 	/** 自分で用意した GGUF ファイルを 1 つ選ぶ（キャンセルは null） */
 	pickGgufFile(): Promise<string | null>;
+	/** 拡張機能の zip を 1 つ選ぶ（開発者モードの追加に使う。キャンセルは null） */
+	pickZipFile(): Promise<string | null>;
 	/** GitHub から取得する場合、`onProgress` に取得の段階が通知される */
 	addProject(
 		input: AddProjectInput,
@@ -873,6 +875,8 @@ export interface ProjectApi {
 	setExtensionEnabled(id: string, enabled: boolean): Promise<void>;
 	/** フォルダから拡張を追加する（開発者モードのときだけ）。元のフォルダは変更しない */
 	installExtensionFromFolder(path: string): Promise<ExtensionInfo>;
+	/** zip から拡張を追加する（開発者モードのときだけ）。zip は検査してから取り込み、元の zip は変更しない（設計書 11.9） */
+	installExtensionFromZip(path: string): Promise<ExtensionInfo>;
 	/** 追加分を一覧から外す。フォルダは削除せず退避へ移す（開発者モードのときだけ） */
 	removeExtension(id: string): Promise<void>;
 	/** プロジェクトフォルダ全体のファイル一覧（保存対象のみ。上限を超えたら一部のみ） */

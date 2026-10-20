@@ -219,6 +219,22 @@ export function useInstallExtension() {
 	return mutation;
 }
 
+/** zip から拡張を追加する（開発者モードのときだけ。設計書 11.9）。元の zip は変更しない */
+export function useInstallExtensionFromZip() {
+	const client = useQueryClient();
+	const retry: { run?: (path: string) => void } = {};
+	const mutation = createMutation(() => ({
+		mutationFn: (path: string) => api.installExtensionFromZip(path),
+		onSuccess: async (installed) => {
+			await invalidateExtensions(client);
+			pushToast({ type: 'success', message: t('toast.extension_added', { name: installed.name }) });
+		},
+		onError: (error, path) => reportError(error, { retry: () => retry.run?.(path) })
+	}));
+	retry.run = (path) => mutation.mutate(path);
+	return mutation;
+}
+
 /** 追加分を一覧から外す（フォルダは削除せず退避へ移す。設計書 11.9） */
 export function useRemoveExtension() {
 	const client = useQueryClient();

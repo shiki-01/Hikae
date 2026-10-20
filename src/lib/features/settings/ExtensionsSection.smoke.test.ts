@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, screen } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setupSmoke, renderWithClient } from '../../../test/smoke';
+import { api } from '#lib/api/index.js';
 import { t } from '#lib/i18n/index.js';
 import ExtensionsSection from './ExtensionsSection.svelte';
 
@@ -50,5 +51,22 @@ describe('ExtensionsSection のスモークテスト', () => {
 			await screen.findByRole('button', { name: t('extensions.dev_confirm_apply') })
 		);
 		expect(await screen.findByRole('button', { name: t('extensions.add_folder') })).toBeTruthy();
+	});
+
+	it('開発者モードのとき、zip から追加を選ぶと、その zip の名前で一覧に加わる', async () => {
+		const pick = vi
+			.spyOn(api, 'pickZipFile')
+			.mockResolvedValue('C:\\Users\\taro\\Downloads\\tools.zip');
+		renderWithClient(ExtensionsSection);
+		await screen.findByText(t('mock.extension.office'));
+		await fireEvent.click(screen.getByRole('switch', { name: t('extensions.dev_toggle') }));
+		await fireEvent.click(
+			await screen.findByRole('button', { name: t('extensions.dev_confirm_apply') })
+		);
+		await fireEvent.click(await screen.findByRole('button', { name: t('extensions.add_zip') }));
+		expect(pick).toHaveBeenCalledTimes(1);
+		// 拡張子を除いた名前で一覧に出る（モックは zip を読まない）
+		expect(await screen.findByText('tools')).toBeTruthy();
+		pick.mockRestore();
 	});
 });

@@ -743,13 +743,14 @@ const messages = {
 	'extensions.enable_label': '{name} を有効にする',
 	'extensions.builtin_locked': '標準の拡張は無効にできません',
 	'extensions.dev_section_title': '開発者モード',
-	'extensions.dev_description': '署名のない拡張を、フォルダから追加できるようにします。',
+	'extensions.dev_description': '署名のない拡張を、フォルダや zip から追加できるようにします。',
 	'extensions.dev_toggle': '開発者モードを使う',
 	'extensions.dev_confirm_title': '開発者モードをオンにしますか',
 	'extensions.dev_confirm_text':
 		'署名のない拡張は、開いたファイルの内容を読めます。作者を信頼できるものだけ追加してください。',
 	'extensions.dev_confirm_apply': 'オンにする',
 	'extensions.add_folder': 'フォルダから追加',
+	'extensions.add_zip': 'zip から追加',
 	'extensions.remove_label': '{name} を一覧から外す',
 	'extensions.remove_title': '「{name}」を一覧から外しますか',
 	'extensions.remove_text':
