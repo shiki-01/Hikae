@@ -37,7 +37,8 @@ const current: AppSettings = {
 	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434',
 	extensionDevMode: false,
-	workCopyEnabled: false
+	workCopyEnabled: false,
+	language: 'ja'
 };
 
 describe('設定項目の定義', () => {
@@ -58,6 +59,7 @@ describe('設定項目の定義', () => {
 				'autoSaveAfterRestore',
 				'autoSnapshotDelaySecs',
 				'autoSnapshotEnabled',
+				'language',
 				'largeFileWarnMb',
 				'pullIntervalMinutes',
 				'pullOnStartup',

@@ -14,6 +14,7 @@
 	import { interruptedOperationName } from '#lib/features/projects/interrupted.js';
 	import { useBackendEvents } from '#lib/features/projects/live.svelte.js';
 	import RemoteFollowUpDialogs from '#lib/features/projects/RemoteFollowUpDialogs.svelte';
+	import LocaleSync from '#lib/features/settings/LocaleSync.svelte';
 
 	let { children } = $props();
 
@@ -55,6 +56,7 @@
 		<!-- モバイル版の画面は、デスクトップの起動時の確認（Git の部品）を通らない -->
 		{@render children()}
 	{:else if !mobileApp}
+		<LocaleSync />
 		<AppHealthGate>
 			{@render children()}
 		</AppHealthGate>

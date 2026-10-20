@@ -607,6 +607,8 @@ export type AppSettings = {
 	git_lfs: boolean,
 	/**  用語の表示 */
 	term_display: TermDisplay,
+	/**  画面の言語（`ja` / `en`）。全体の設定のみ（プロジェクト別の上書きは無い。設計書 2.3）。Phase 4 */
+	language: Language,
 };
 
 /**  ユーザーの対応が必要な理由 */
@@ -895,6 +897,13 @@ export type IgnoreRuleItem = {
 	/**  追跡中（保存対象になっている）該当ファイルの件数。この画面で解釈できない書き方の行は null */
 	tracked_count: number | null,
 };
+
+/**  画面の言語（設計書 2.3。全体の設定のみ） */
+export type Language = 
+/**  日本語（既定） */
+"ja" | 
+/**  English */
+"en";
 
 /**  大きいファイル */
 export type LargeFileItem = {
@@ -1468,6 +1477,8 @@ export type SettingsPatch_Deserialize = {
 	git_lfs?: boolean | null,
 	/**  用語の表示 */
 	term_display?: TermDisplay | null,
+	/**  画面の言語（`ja` / `en`）。全体の設定のみ（プロジェクト別の上書きは無い。設計書 2.3）。Phase 4 */
+	language?: Language | null,
 };
 
 /**  設定の更新内容。指定した項目だけを書き換える。 */
@@ -1534,6 +1545,8 @@ export type SettingsPatch_Serialize = {
 	git_lfs?: boolean | null,
 	/**  用語の表示 */
 	term_display?: TermDisplay | null,
+	/**  画面の言語（`ja` / `en`）。全体の設定のみ（プロジェクト別の上書きは無い。設計書 2.3）。Phase 4 */
+	language?: Language | null,
 };
 
 /**  画面に返す設定 */

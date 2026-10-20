@@ -265,7 +265,8 @@ describe('設定の変換', () => {
 		extension_dev_mode: false,
 		extension_index_urls: [],
 		git_lfs: false,
-		term_display: 'plain' as const
+		term_display: 'plain' as const,
+		language: 'ja' as const
 	};
 
 	it('画面で扱う項目だけを camelCase にする', () => {
@@ -292,8 +293,14 @@ describe('設定の変換', () => {
 			aiSuggestBody: true,
 			aiOllamaUrl: 'http://localhost:11434',
 			extensionDevMode: false,
-			workCopyEnabled: false
+			workCopyEnabled: false,
+			language: 'ja'
 		});
+	});
+
+	it('画面の言語を language のまま受け取る（ja / en）', () => {
+		expect(mapSettings({ ...backend, language: 'en' as const }).language).toBe('en');
+		expect(mapSettings(backend).language).toBe('ja');
 	});
 
 	it('入手元と GGUF のパスを、設定の名前で受け取る（バックエンドの名前との対応）', () => {

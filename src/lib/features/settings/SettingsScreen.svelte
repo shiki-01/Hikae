@@ -50,7 +50,7 @@
 	// 確認ダイアログで取りやめたとき、見た目だけ先に切り替わった部品を元の値で作り直す
 	let nonce = $state(0);
 	let pending = $state<{
-		key: SettingKey;
+		row: SettingRow;
 		value: SettingValue;
 		confirmation: SettingConfirmation;
 	} | null>(null);
@@ -70,21 +70,24 @@
 		ignore: 'settings.note_ignore'
 	};
 
-	function change(current: AppSettings, key: SettingKey, value: SettingValue) {
-		const confirmation = confirmationFor(key, current, value);
+	function change(current: AppSettings, row: SettingRow, value: SettingValue) {
+		const confirmation = confirmationFor(row.key, current, value);
 		if (confirmation) {
-			pending = { key, value, confirmation };
+			pending = { row, value, confirmation };
 			return;
 		}
-		apply(key, value);
+		apply(row, value);
 	}
 
-	function apply(key: SettingKey, value: SettingValue) {
-		update.mutate({ [key]: value } as Partial<AppSettings>);
+	function apply(row: SettingRow, value: SettingValue) {
+		const patch = { [row.key]: value } as Partial<AppSettings>;
+		// 全体の設定だけの項目（言語など）は、プロジェクトを開いていても全体へ書く
+		if (row.globalOnly) globalUpdate.mutate(patch);
+		else update.mutate(patch);
 	}
 
 	function confirmPending() {
-		if (pending) apply(pending.key, pending.value);
+		if (pending) apply(pending.row, pending.value);
 		pending = null;
 	}
 
@@ -212,13 +215,13 @@
 				<Toggle
 					label={t(row.label)}
 					checked={values[row.key] as boolean}
-					onchange={(checked) => change(values, row.key, checked)}
+					onchange={(checked) => change(values, row, checked)}
 				/>
 			{:else if row.type === 'number'}
 				<NumberSetting
 					{row}
 					value={values[row.key]}
-					onchange={(next) => change(values, row.key, next)}
+					onchange={(next) => change(values, row, next)}
 				/>
 			{:else}
 				<Select
@@ -231,7 +234,7 @@
 					}))}
 					onchange={(picked) => {
 						const value = optionValue(row, picked);
-						if (value !== undefined) change(values, row.key, value);
+						if (value !== undefined) change(values, row, value);
 					}}
 				/>
 			{/if}

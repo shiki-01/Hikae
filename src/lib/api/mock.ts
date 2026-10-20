@@ -572,7 +572,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 	aiSuggestBody: true,
 	aiOllamaUrl: 'http://localhost:11434',
 	extensionDevMode: false,
-	workCopyEnabled: false
+	workCopyEnabled: false,
+	language: 'ja'
 };
 
 // 画面確認用: localStorage の 'hikae.mock.login' に denied / expired / setup を入れると、ログインの結末を再現できる

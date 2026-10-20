@@ -741,7 +741,8 @@ export const SETTING_BACKEND_KEYS = {
 	aiSuggestBody: 'ai_suggest_body',
 	aiOllamaUrl: 'ai_ollama_url',
 	extensionDevMode: 'extension_dev_mode',
-	workCopyEnabled: 'work_copy_enabled'
+	workCopyEnabled: 'work_copy_enabled',
+	language: 'language'
 } as const satisfies Record<SettingKey, keyof BackendSettings>;
 
 export function mapSettings(settings: BackendSettings): AppSettings {
@@ -768,7 +769,8 @@ export function mapSettings(settings: BackendSettings): AppSettings {
 		aiSuggestBody: settings.ai_suggest_body,
 		aiOllamaUrl: settings.ai_ollama_url,
 		extensionDevMode: settings.extension_dev_mode,
-		workCopyEnabled: settings.work_copy_enabled
+		workCopyEnabled: settings.work_copy_enabled,
+		language: settings.language
 	};
 }
 

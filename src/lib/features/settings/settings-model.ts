@@ -49,6 +49,18 @@ export type SettingRow = ToggleRow | SelectRow | NumberRow;
 export const SETTING_ROWS: Record<SettingsTab, SettingRow[]> = {
 	general: [
 		{
+			type: 'select',
+			key: 'language',
+			label: 'settings.language',
+			text: 'settings.language_text',
+			options: [
+				{ value: 'ja', label: 'settings.language_ja' },
+				{ value: 'en', label: 'settings.language_en' }
+			],
+			// 言語は全体の設定だけ（プロジェクト別の上書きは無い。設計書 2.3）
+			globalOnly: true
+		},
+		{
 			type: 'toggle',
 			key: 'autoSaveAfterRestore',
 			label: 'settings.auto_save_after_restore',

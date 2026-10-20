@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { t } from './index';
+import { describe, it, expect, afterEach } from 'vitest';
+import { t, setLocale, type MessageKey } from './index';
 import ja from './ja';
-import { formatBytes, formatRelative } from './format';
+import en from './en';
+import { formatBytes, formatDateTime, formatRelative } from './format';
 
 describe('i18n', () => {
 	it('定義済みキーの日本語文言を返す', () => {
@@ -101,5 +102,45 @@ describe('日時と大きさの表示', () => {
 		expect(formatBytes(512)).toBe('512 B');
 		expect(formatBytes(2048)).toBe('2.0 KB');
 		expect(formatBytes(72 * 1024 * 1024)).toBe('72.0 MB');
+	});
+});
+
+describe('英語の辞書（en.ts）', () => {
+	afterEach(() => setLocale('ja'));
+
+	it('ja.ts と同じキー集合を持つ', () => {
+		expect(Object.keys(en).sort()).toEqual(Object.keys(ja).sort());
+	});
+
+	it('置き換え名が、同じキーで ja と en のあいだで一致する', () => {
+		const names = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+		for (const key of Object.keys(ja) as MessageKey[]) {
+			expect(names(en[key]), key).toEqual(names(ja[key]));
+		}
+	});
+
+	it('英語の文言に Git 用語を含めない（mock. を除く）', () => {
+		const banned = /\b(branch|commit|merge|checkout|push|pull|rebase|staging|repository)\b/i;
+		const offenders = Object.entries(en)
+			.filter(([key, value]) => !key.startsWith('mock.') && banned.test(value))
+			.map(([key]) => key);
+		expect(offenders).toEqual([]);
+	});
+
+	it('言語を切り替えると、t() は選んだ言語の辞書を引く', () => {
+		for (const key of Object.keys(ja) as MessageKey[]) {
+			setLocale('en');
+			expect(t(key), key).toBe(en[key]);
+			setLocale('ja');
+			expect(t(key), key).toBe(ja[key]);
+		}
+	});
+
+	it('言語を切り替えると、日時の表示も言語に合わせて変わる', () => {
+		const date = new Date(2026, 9, 4, 18, 2);
+		setLocale('ja');
+		expect(formatDateTime(date)).toContain('18:02');
+		setLocale('en');
+		expect(formatDateTime(date)).toContain('PM');
 	});
 });

@@ -28,7 +28,7 @@ pub use migrations::run_migrations;
 pub use models::{Project, ProjectConfig};
 pub use settings::{
     AiModelSource, AiRunner, AiScope, AppSettings, ConflictMode, DefaultVisibility, GitExecutable,
-    MemoSuggestion, OpenAction, SettingsPatch, TermDisplay, TimelineSnapshots,
+    Language, MemoSuggestion, OpenAction, SettingsPatch, TermDisplay, TimelineSnapshots,
     PROJECT_OVERRIDABLE_KEYS,
 };
 pub use skip_worktree::SkipWorktreeRecord;

@@ -143,6 +143,8 @@ Oct 7, 2026 · @shiki
 
 - **範囲**: 画面（フロントの辞書）だけを対象とする。バックエンド（Rust）が組み立てるエラー文言は `errcode.*` などのキーを経由する分は英語になるが、Rust が直接持つ日本語の文言は日本語のまま残る（既知の制限。順次キー化する）。日時・大きさの表示は言語に合わせて整える
 - 設定画面などの文言は変えず、モック（`mock.*`）は日本語のままでよい
+- **実装状況**（2026-10-20）: 英語 UI の基盤を実装した。設定 `language`（全体のみ。既定 `ja`）、言語の状態（`src/lib/i18n/locale.svelte.ts`。Svelte 5 の `$state` で持ち、テンプレート内の `t()` と日時の表示は言語の切り替えに追随する）、英語の辞書（`src/lib/i18n/en.ts` が `en/part1.ts`〜`part4.ts` を合成する。キー集合は `ja.ts` と型で一致させる）、設定の「一般」の「言語」（変更はその場で反映し、`<html lang>` も合わせる）。日時の表示は、英語では 12 時間表記（AM / PM）にする。
+- **英訳は未完**: 辞書の値は、いまは日本語のままコピーしてある。英語の値への置き換えは別の作業で行う。英語の文言に Git 用語が無いことは、禁止語のテストで確かめる（翻訳の後に改めて確認する）
 
 ### 2.2 概念の見せ方の方針
 
@@ -842,6 +844,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | 用語の表示 | 平易な表現のみ / Git 用語を併記 | 平易な表現のみ | Phase 1 |
 
 - 「用語の表示」は2章の用語決定に対する逃げ道として追加した項目で、併記時は「保存（commit）」のように括弧で示す
+- 「言語」（2.3）は詳細設定ではなく、設定の「一般」に置く（全体の設定のみ。プロジェクト別には上書きしない）
 - Git LFS を有効にした場合、既存の履歴にある大きいファイルは移行しない（移行は履歴の書き換えになるため）
 
 ### 7.2 設定の保存と反映状況（実装）
@@ -853,7 +856,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 - 実際に使う設定は、全体の設定にプロジェクト別の上書きを重ねたもの。プロジェクト別に上書きできるのは次の 14 項目だけで、それ以外を上書きしようとすると拒否する: `pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`conflict_mode`、`auto_push_after_save`、`push_reminder_hours`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`memo_suggestion`、`auto_save_after_restore`、`large_file_warn_mb`、`show_snapshots_in_timeline`、`open_action`。AI、git 実行ファイル、詳細設定（7.1）の項目は、アプリ全体でのみ設定する
 - 設計書の項目に加えて、初回設定（ログインと最初のプロジェクトの案内）を完了したかを `onboarded` として保存する
 - 旧形式（`projects.config` の JSON）の上書きは、マイグレーション v4 で有効な値だけを `project_settings` へ移した。列自体は残るが、設定の読み書きには使わない
-- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブに項目があり（「保存しないファイル」はプロジェクトの画面から開いたときだけ項目を出す（S6。4.8）。「AI」は S7。内容は 10.5）、「拡張機能」は案内だけを出し、「詳細設定」は空（案内のみ）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_model_source`、`ai_custom_gguf_path`、`ai_scope`、`ai_ollama_url`、`ai_suggest_body`（AI タブ））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
+- 設定画面（S5）は、いまは「一般」「取り込み」「アップロード」「自動保存」「保存しないファイル」「AI」の 6 タブに項目があり（「保存しないファイル」はプロジェクトの画面から開いたときだけ項目を出す（S6。4.8）。「AI」は S7。内容は 10.5）、「拡張機能」は案内だけを出し、「詳細設定」は空（案内のみ）、各タブの項目は即時保存（保存ボタンは無い。選択肢は選んだとき、カスタムの数値は入力欄から外れたとき・Enter を押したときに保存する）。他の画面から `?tab=auto_save` のように開くタブを指定できる。プロジェクトの画面から開いたときは、プロジェクト別の上書きにも切り替えられる。詳細設定（7.1）の折りたたみは空で、項目の画面は未実装。**画面に出すのは、バックエンドが実際に読んでいる設定だけ**（下の反映状況で「反映済み」のもの。`pull_on_startup`、`pull_interval_minutes`、`save_before_pull`、`auto_push_after_save`、`auto_snapshot_enabled`、`auto_snapshot_delay_secs`、`snapshot_retention_days`、`large_file_warn_mb`、`auto_save_after_restore`、`show_snapshots_in_timeline`、`snapshot_size_cap_x`、`memo_suggestion`、`ai_runner`、`ai_model`、`ai_model_source`、`ai_custom_gguf_path`、`ai_scope`、`ai_ollama_url`、`ai_suggest_body`（AI タブ）、`language`（一般タブ。2.3））。保存のみの設定は、保存スキーマ・DB・検証には残したまま画面から外している。対応する機能を実装した時点で、画面に戻す
 
 **反映状況**（2026-10-08）:
 
@@ -876,6 +879,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 | `git_executable` | 保存のみ。git の探索は設定ではなく `GitRunner::bundled` が行う（`HIKAE_GIT_PATH` → 同梱 → PATH。8.2） |
 | `extension_dev_mode` | 反映済み（2026-10-20。S8 の開発者モード。11.9） |
 | `work_copy_enabled` | 反映済み（2026-10-20）。オフのとき、作業コピーの作成・切り替え・採用をアプリ側で拒否する（`work_copy_disabled`）。プロジェクト画面の「作業コピー」の表示も同じ設定に従う。アプリ全体の設定のみ（詳細設定。4.9） |
+| `language` | 反映済み（Phase 4。2026-10-20）。画面の言語（2.3）。全体の設定のみで、プロジェクト別には上書きできない。「一般」の「言語」で変え、変更はその場で反映する（設定の読み込みと変更に合わせて `LocaleSync` が言語を決める）。保存時に `ja` / `en` 以外は拒否し、保存値が壊れていれば `ja` に戻す |
 | `extension_index_urls`、`git_lfs` | 保存のみ（Phase 4） |
 
 「拡張機能の有効化」（個別のオン・オフ）は、設定としては保存しません（拡張機能の管理は `extensions` テーブルを想定していますが、未使用です。9.1）。
@@ -1413,6 +1417,8 @@ Phase 1 の範囲の外または終了条件に関わる、**未実装・未確�
 - macOS の確認・ビルド（llama-server の macOS 版の同梱を含む）は、利用者の決定（2026-10-11）により、残りを最後にまとめて行う
 
 **Phase 3 の実装状況（拡張機能の部分。2026-10-20）**: 拡張機能の管理（S8）と開発者モード（11.9）を実装した。Phase 3 のほかの項目（作業コピー、LLM 段階3、自動保存のクラウド控え、gix による読み取りの高速化）は、この作業の対象外で、状況は確認していない。
+
+**Phase 4 の実装状況（英語 UI の基盤。2026-10-20）**: 英語 UI の基盤（2.3）を実装した。設定 `language`、言語の状態（Svelte 5 の `$state`）、英語の辞書の構造（4 分割と型によるキーの過不足の検出）、設定の「一般」の言語、テスト（キー集合・置き換え名・英語の禁止語・切り替え・ブラウザ単体での反映）。**英訳は未着手**（辞書の値は日本語のまま）。拡張機能の一覧・署名検証と Git LFS の要否判断は未着手。
 
 ## 13. リスクと判断が必要な論点
 

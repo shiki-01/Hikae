@@ -559,6 +559,8 @@ export type OpenAction = Exclude<OpenTarget, 'copy_path'>;
 
 export type ConflictMode = 'show-dialog' | 'notify-only';
 export type TimelineSnapshots = 'collapsed' | 'shown' | 'hidden';
+/** 画面の言語（設計書 2.3。全体の設定のみ） */
+export type Language = 'ja' | 'en';
 
 /** メモの提案の方式 */
 export type MemoSuggestionMode = 'rules' | 'ai';
@@ -748,6 +750,8 @@ export interface AppSettings {
 	extensionDevMode: boolean;
 	/** 作業コピー（別の案を試す場所）を使う。オフのときはプロジェクト画面に出さず、作成・切り替え・採用も拒否する（設計書 4.9） */
 	workCopyEnabled: boolean;
+	/** 画面の言語（設計書 2.3）。全体の設定のみで、プロジェクト別には上書きできない */
+	language: Language;
 }
 
 export type SettingKey = keyof AppSettings;

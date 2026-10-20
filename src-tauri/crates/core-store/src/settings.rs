@@ -107,6 +107,17 @@ pub enum TermDisplay {
     WithGit,
 }
 
+/// 画面の言語（設計書 2.3。全体の設定のみ）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "kebab-case")]
+pub enum Language {
+    /// 日本語（既定）
+    Ja,
+    /// English
+    En,
+}
+
 /// 設定項目と既定値から、全体設定の構造体（`AppSettings`）と更新用の部分指定（`SettingsPatch`）を作る。
 macro_rules! define_settings {
     ($( $(#[$meta:meta])* $name:ident : $ty:ty = $default:expr ),* $(,)?) => {
@@ -213,6 +224,8 @@ define_settings! {
     git_lfs: bool = false,
     /// 用語の表示
     term_display: TermDisplay = TermDisplay::Plain,
+    /// 画面の言語（`ja` / `en`）。全体の設定のみ（プロジェクト別の上書きは無い。設計書 2.3）。Phase 4
+    language: Language = Language::Ja,
 }
 
 /// プロジェクト別に上書きできる項目のキー名（それ以外はアプリ全体でのみ設定する）
@@ -455,6 +468,8 @@ mod tests {
         assert!(d.extension_index_urls.is_empty());
         assert!(!d.git_lfs);
         assert_eq!(d.term_display, TermDisplay::Plain);
+        // 2.3: 画面の言語の既定は日本語
+        assert_eq!(d.language, Language::Ja);
         assert!(!d.onboarded);
         assert!(d.validate().is_ok());
     }
@@ -484,6 +499,38 @@ mod tests {
         assert_eq!(json["conflict_mode"], "notify-only");
         assert_eq!(json["show_snapshots_in_timeline"], "collapsed");
         assert_eq!(json["open_action"], "default-app");
+        assert_eq!(json["language"], "ja");
+    }
+
+    #[test]
+    fn language_accepts_only_ja_and_en() {
+        // 保存値: 正しい値だけ採り、それ以外は既定（日本語）に戻す
+        let entries = valid_stored_entries(
+            [("language", "\"en\"")].map(|(k, v)| (k.to_string(), v.to_string())),
+            None,
+        );
+        assert_eq!(settings_from_entries(entries).language, Language::En);
+        for raw in ["\"fr\"", "\"EN\"", "\"\"", "1", "null"] {
+            let entries = valid_stored_entries(
+                [("language", raw)].map(|(k, v)| (k.to_string(), v.to_string())),
+                None,
+            );
+            assert_eq!(
+                settings_from_entries(entries).language,
+                Language::Ja,
+                "{raw}"
+            );
+        }
+        // 更新の指定（部分指定）でも、ja / en 以外は型の段階で拒否する
+        assert!(serde_json::from_str::<SettingsPatch>("{\"language\":\"en\"}").is_ok());
+        assert!(serde_json::from_str::<SettingsPatch>("{\"language\":\"fr\"}").is_err());
+        // 言語はプロジェクト別に上書きできない
+        assert!(!PROJECT_OVERRIDABLE_KEYS.contains(&"language"));
+        let entries = valid_stored_entries(
+            [("language", "\"en\"")].map(|(k, v)| (k.to_string(), v.to_string())),
+            Some(PROJECT_OVERRIDABLE_KEYS),
+        );
+        assert_eq!(patch_from_entries(entries).language, None);
     }
 
     #[test]

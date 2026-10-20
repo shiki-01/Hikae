@@ -1,33 +1,48 @@
-import { t } from './index';
+import { currentLocale, t, type Locale } from './index';
 
-const LOCALE = 'ja-JP';
+// 言語ごとの Intl のフォーマッタ（言語が変わると、対応する方を使う）
+const LOCALE_TAGS: Record<Locale, string> = { ja: 'ja-JP', en: 'en-US' };
 
-const dateTimeFormat = new Intl.DateTimeFormat(LOCALE, {
-	month: 'numeric',
-	day: 'numeric',
-	hour: '2-digit',
-	minute: '2-digit',
-	hour12: false
-});
+function createFormatters(locale: Locale) {
+	const tag = LOCALE_TAGS[locale];
+	// 日本語は 24 時間表記、英語は 12 時間表記（AM / PM）
+	const hour12 = locale === 'en';
+	return {
+		dateTime: new Intl.DateTimeFormat(tag, {
+			month: 'numeric',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			hour12
+		}),
+		time: new Intl.DateTimeFormat(tag, {
+			hour: '2-digit',
+			minute: '2-digit',
+			hour12
+		}),
+		date: new Intl.DateTimeFormat(tag, { month: 'numeric', day: 'numeric' })
+	};
+}
 
-const timeFormat = new Intl.DateTimeFormat(LOCALE, {
-	hour: '2-digit',
-	minute: '2-digit',
-	hour12: false
-});
+const FORMATTERS: Record<Locale, ReturnType<typeof createFormatters>> = {
+	ja: createFormatters('ja'),
+	en: createFormatters('en')
+};
 
-const dateFormat = new Intl.DateTimeFormat(LOCALE, { month: 'numeric', day: 'numeric' });
+function formatters() {
+	return FORMATTERS[currentLocale()];
+}
 
 export function formatDateTime(date: Date): string {
-	return dateTimeFormat.format(date);
+	return formatters().dateTime.format(date);
 }
 
 export function formatTime(date: Date): string {
-	return timeFormat.format(date);
+	return formatters().time.format(date);
 }
 
 export function formatDate(date: Date): string {
-	return dateFormat.format(date);
+	return formatters().date.format(date);
 }
 
 export function formatRelative(date: Date, now: Date = new Date()): string {
