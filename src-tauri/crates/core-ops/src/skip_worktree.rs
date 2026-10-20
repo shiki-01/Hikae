@@ -400,11 +400,16 @@ fn write_back_verified(repo: &Path, path: &str, content: &Path) -> Result<(), Op
     result
 }
 
-/// `HEAD..@{u}` で相手が変更・削除するパス（読み取りのみ）
-fn incoming_paths(runner: &GitRunner, repo: &Path) -> Result<BTreeSet<String>, OpsError> {
+/// `HEAD..<target>` で、取り込む側（`target`）が変更・削除するパス（読み取りのみ）。
+/// 取り込みが pull なら `target` は `@{u}`、作業コピーの採用なら採用するブランチ
+fn incoming_paths(
+    runner: &GitRunner,
+    repo: &Path,
+    target: &str,
+) -> Result<BTreeSet<String>, OpsError> {
     let out = runner.run_ok(
         repo,
-        &["diff", "--name-only", "-z", "--no-renames", "HEAD", "@{u}"],
+        &["diff", "--name-only", "-z", "--no-renames", "HEAD", target],
     )?;
     Ok(out
         .stdout
@@ -470,14 +475,18 @@ fn detach_one(runner: &GitRunner, repo: &Path, path: &str) -> Result<(), OpsErro
     Ok(())
 }
 
-/// 取り込みの準備（設計書 4.8、4.3 手順 8）。相手が変更・削除する無視中のパスについて、
-/// 手元の内容を退避し、印を外して HEAD の版へ戻す。対象が無ければ何もしない。
+/// 取り込みの準備（設計書 4.8、4.3 手順 8）。`target`（取り込む側。pull は `@{u}`）が変更・削除する
+/// 無視中のパスについて、手元の内容を退避し、印を外して HEAD の版へ戻す。対象が無ければ何もしない。
 ///
 /// 順序: 退避をすべて作って検証する（ここまでは作業フォルダに触らない）→ 1 件ずつ印を外して HEAD の版へ戻す。
 /// 途中で失敗したら、それまでに変えたパスを元の印と内容へ戻し（退避の内容を書き戻す）、Err を返す。
 /// 手元で削除したまま無視しているパスは対象外（取り込みで相手の版が作業フォルダに現れる）。
 /// 同じパスの退避が残っていれば、何も変えずに Err を返す。
-pub(crate) fn prepare_incoming(runner: &GitRunner, repo: &Path) -> Result<(), OpsError> {
+pub(crate) fn prepare_incoming(
+    runner: &GitRunner,
+    repo: &Path,
+    target: &str,
+) -> Result<(), OpsError> {
     let skipped: BTreeSet<String> = index_tags(runner, repo)?
         .into_iter()
         .filter(|(_, skipped)| *skipped)
@@ -486,7 +495,7 @@ pub(crate) fn prepare_incoming(runner: &GitRunner, repo: &Path) -> Result<(), Op
     if skipped.is_empty() {
         return Ok(());
     }
-    let incoming = incoming_paths(runner, repo)?;
+    let incoming = incoming_paths(runner, repo, target)?;
     let mut targets = Vec::new();
     for path in skipped.iter().filter(|p| incoming.contains(*p)) {
         if worktree_file(repo, path)?.is_some() {

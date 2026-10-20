@@ -1260,6 +1260,47 @@ fn validate_count_objects_args(args: &[&str]) -> Result<(), Rejection> {
     Ok(())
 }
 
+/// 作業コピーの内部名の形（設計書 4.9）。`wc-YYYYMMDD-HHMMSS` に、衝突時の `-1`、`-2` … が付くことがある。
+/// 正規表現 `^wc-[0-9]{8}-[0-9]{6}(-[0-9]+)?$` と同じ（regex を使わず手書きする）。
+pub fn is_work_copy_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("wc-") else {
+        return false;
+    };
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    // 日時の部分は 15 文字（8 桁・ハイフン・6 桁）。その後ろに任意の `-<連番>`
+    let (stamp, suffix) = match rest.get(..15) {
+        Some(stamp) => (stamp, &rest[15..]),
+        None => return false,
+    };
+    let (date, time) = match (stamp.get(..8), stamp.get(8..9), stamp.get(9..15)) {
+        (Some(date), Some("-"), Some(time)) => (date, time),
+        _ => return false,
+    };
+    if !digits(date, 8) || !digits(time, 6) {
+        return false;
+    }
+    match suffix {
+        "" => true,
+        _ => match suffix.strip_prefix('-') {
+            Some(n) => !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()),
+            None => false,
+        },
+    }
+}
+
+/// 完全なオブジェクト ID の形（40 桁、または SHA-256 の 64 桁）の小文字 16 進。
+fn is_full_lower_oid(s: &str) -> bool {
+    (s.len() == 40 || s.len() == 64)
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// `branch <内部名> <完全な OID>` の固定の形か（設計書 4.9。作業コピーの作成だけに使う）。
+/// フラグは付けず、位置引数はちょうど 2 個。内部名は `is_work_copy_name`、OID は `is_full_lower_oid`。
+pub fn is_work_copy_create_form(args: &[&str]) -> bool {
+    matches!(args, [name, oid] if is_work_copy_name(name) && is_full_lower_oid(oid))
+}
+
 fn validate_branch_args(args: &[&str]) -> Result<(), Rejection> {
     // Only read-only operations allowed
     let not_allowed = ["-d", "-D", "--delete", "-m", "-M", "-c", "-f", "--force"];
@@ -1270,6 +1311,12 @@ fn validate_branch_args(args: &[&str]) -> Result<(), Rejection> {
                 reason: format!("'{}' not allowed", arg),
             });
         }
+    }
+
+    // 作業コピーの作成（設計書 4.9）。固定の形に一致するものだけ通す。
+    // 形が合わなければ下の従来の判定へ進み、作成の形は拒否される
+    if is_work_copy_create_form(args) {
+        return Ok(());
     }
 
     let allowed = [
@@ -1290,8 +1337,11 @@ fn validate_branch_args(args: &[&str]) -> Result<(), Rejection> {
     while i < args.len() {
         let arg = args[i];
 
+        // `--` の後ろは位置引数として扱われ、作成になりうる。作成の形は上で通したもの以外は拒否する
         if arg == "--" {
-            break;
+            return Err(Rejection {
+                reason: "'--' not allowed for branch".to_string(),
+            });
         }
 
         if arg.starts_with("--format=") {
@@ -1844,6 +1894,102 @@ mod tests {
             "refs/hikae/snapshots/main/20260101T000000Z"
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn test_allow_branch_create_work_copy_in_fixed_form() {
+        let oid40 = "0123456789abcdef0123456789abcdef01234567";
+        let oid64 = "0123456789abcdef".repeat(4);
+        assert!(validate(&["branch", "wc-20261020-120000", oid40]).is_ok());
+        assert!(validate(&["branch", "wc-20261020-120000-1", oid40]).is_ok());
+        assert!(validate(&["branch", "wc-20261020-120000-12", oid64.as_str()]).is_ok());
+    }
+
+    #[test]
+    fn test_reject_branch_create_outside_the_fixed_form() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let rejected: &[&[&str]] = &[
+            // 元のブランチ名への作成（内部名の形でない）
+            &["branch", "main", oid],
+            &["branch", "feature", oid],
+            // OID の代わりに ref 名
+            &["branch", "wc-20261020-120000", "HEAD"],
+            &["branch", "wc-20261020-120000", "main"],
+            // OID が 40 / 64 桁の小文字 16 進でない
+            &[
+                "branch",
+                "wc-20261020-120000",
+                "0123456789ABCDEF0123456789abcdef01234567",
+            ],
+            &["branch", "wc-20261020-120000", "0123456789abcdef"],
+            &[
+                "branch",
+                "wc-20261020-120000",
+                "0123456789abcdef0123456789abcdef0123456g",
+            ],
+            &[
+                "branch",
+                "wc-20261020-120000",
+                "0123456789abcdef0123456789abcdef012345678",
+            ],
+            // 位置引数が 2 個以外
+            &["branch", "wc-20261020-120000"],
+            &["branch", "wc-20261020-120000", oid, oid],
+            &["branch", oid],
+            // フラグ付き
+            &["branch", "-f", "wc-20261020-120000", oid],
+            &["branch", "--track", "wc-20261020-120000", oid],
+            &["branch", "--no-track", "wc-20261020-120000", oid],
+            &["branch", "wc-20261020-120000", oid, "--force"],
+            &["branch", "--", "wc-20261020-120000", oid],
+            // 削除・改名・上書き
+            &["branch", "-D", "wc-20261020-120000", oid],
+            &["branch", "-d", "wc-20261020-120000"],
+            &["branch", "-m", "wc-20261020-120000", "wc-20261020-120001"],
+            &["branch", "-M", "wc-20261020-120000", "wc-20261020-120001"],
+            &[
+                "branch",
+                "--set-upstream-to=origin/main",
+                "wc-20261020-120000",
+            ],
+            &[
+                "branch",
+                "--set-upstream-to",
+                "origin/main",
+                "wc-20261020-120000",
+            ],
+            &["branch", "-c", "wc-20261020-120000", oid],
+            &["branch", "-f", "wc-20261020-120000", oid],
+            &["branch", "--force", "wc-20261020-120000", oid],
+            // 内部名の形が不正（パス・区切り・余分な文字）
+            &["branch", "wc-../x", oid],
+            &["branch", "wc-20261020-12000", oid],
+            &["branch", "wc-20261020-120000-", oid],
+            &["branch", "wc-20261020-120000-a", oid],
+            &["branch", "wc-20261020-120000/x", oid],
+            &["branch", "wc-20261020-120000 ", oid],
+            &["branch", "xwc-20261020-120000", oid],
+            &["branch", "wc-2026102a-120000", oid],
+            // 先頭が - の名前（オプションとして解釈される）
+            &["branch", "-wc-20261020-120000", oid],
+        ];
+        for args in rejected {
+            assert!(validate(args).is_err(), "通ってはいけない: {args:?}");
+        }
+    }
+
+    #[test]
+    fn test_work_copy_name_shape() {
+        assert!(is_work_copy_name("wc-20261020-120000"));
+        assert!(is_work_copy_name("wc-20261020-120000-1"));
+        assert!(is_work_copy_name("wc-20261020-120000-100"));
+        assert!(!is_work_copy_name("main"));
+        assert!(!is_work_copy_name("wc-"));
+        assert!(!is_work_copy_name("wc-20261020-120000-"));
+        assert!(!is_work_copy_name("wc-20261020-120000--1"));
+        assert!(!is_work_copy_name("wc-20261020T120000Z"));
+        assert!(!is_work_copy_name("wc-20261020-120000x"));
+        assert!(!is_work_copy_name("wc-２０２６１０２０-120000"));
     }
 
     #[test]

@@ -203,10 +203,17 @@ pub(crate) fn stage_and_commit(
 
 /// HEAD と upstream の (アップロード待ち, 取り込み待ち) の件数を返す。
 fn ahead_behind(runner: &GitRunner, repo: &Path) -> Result<(i32, i32), OpsError> {
-    let count_output = runner.run_ok(
-        repo,
-        &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
-    )?;
+    ahead_behind_range(runner, repo, "HEAD...@{u}")
+}
+
+/// `range`（`HEAD...<ref>` の形）の (左だけ, 右だけ) の件数を返す（読み取りのみ）。
+/// 左が HEAD 側（アップロード待ち）、右が相手側（取り込み待ち）。
+pub(crate) fn ahead_behind_range(
+    runner: &GitRunner,
+    repo: &Path,
+    range: &str,
+) -> Result<(i32, i32), OpsError> {
+    let count_output = runner.run_ok(repo, &["rev-list", "--left-right", "--count", range])?;
     let count_str = String::from_utf8_lossy(&count_output.stdout)
         .trim()
         .to_string();
@@ -315,44 +322,15 @@ pub(crate) fn pull(
         return Ok(PullOutcome::UpToDate);
     }
 
-    // 取り込み前の HEAD（手順 8 で、取り込みで消えるファイルの内容を取り出す元）
-    let pre_merge_head =
-        String::from_utf8_lossy(&runner.run_ok(repo, &["rev-parse", "HEAD"])?.stdout)
-            .trim()
-            .to_string();
-
     // 双方に差がある場合は backup ref を作成する（復元点は退避より前）
     if ahead > 0 {
         let _ = create_backup_ref(runner, repo, "pre-merge", now)?;
     }
 
-    // 無視中のファイルで相手が変更・削除するものは、手元の内容を退避してから印を外し、
-    // 作業フォルダを HEAD の版へ戻す（設計書 4.8）。途中で失敗したときは中で元に戻している
-    skip_worktree::prepare_incoming(runner, repo)?;
-
-    // fast-forward のみ（ahead == 0）、または merge --no-edit @{u}（終了コード 0 と 1 を許容。1 は競合）
-    let merged = if ahead == 0 {
-        runner
-            .run_ok(repo, &["merge", "--ff-only", "@{u}"])
-            .map(|_| true)
-    } else {
-        runner
-            .run_allow_codes(repo, &["merge", "--no-edit", "@{u}"], &[0, 1])
-            .map(|out| out.code == 0)
-    };
-    let clean = match merged {
-        Ok(clean) => clean,
-        Err(e) => {
-            // 取り込みが git の判断で止まった。退避が残っていれば作業フォルダへ書き戻す
-            skip_worktree::recover_after_failed_incoming(runner, repo);
-            return Err(e.into());
-        }
-    };
+    // 取り込み本体（fast-forward のみ、または merge。無視中のファイル・相手が外したファイルの扱いを含む）
+    let clean = merge_incoming(runner, repo, "@{u}", ahead == 0, skip)?;
 
     if clean {
-        restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
-        // 退避の書き戻しと印の付け直し（設計書 4.8 の再適用）
-        skip.absorb(skip_worktree::reapply_skip_worktree(runner, repo)?);
         if ahead == 0 {
             return Ok(PullOutcome::FastForwarded);
         }
@@ -368,6 +346,60 @@ pub(crate) fn pull(
     Ok(PullOutcome::Conflicted {
         files: conflict_files,
     })
+}
+
+/// 取り込み（merge）の本体（設計書 4.3 手順 5〜8、4.8）。`target` を HEAD に取り込む。
+///
+/// - `fast_forward_only` が真なら `merge --ff-only`（取り込み待ちだけのとき）、偽なら `merge --no-edit`
+/// - 無視中のファイルで相手が変更・削除するものは、取り込みの前に手元の内容を退避して印を外し、
+///   取り込みが git の判断で止まったら作業フォルダへ書き戻す（4.8）
+/// - 競合なしで完了したら、相手側が外したファイルの書き戻し（4.3 手順 8）と、退避の書き戻しと印の付け直し（4.8）を行い、
+///   `skip` に結果を溜める。ぶつかりが出たときは退避を残したままにし、解消か中止の後に書き戻す
+///
+/// 戻り値は、競合なしなら `true`、ぶつかりが出たら `false`。`target` は呼び出し側が検証する
+/// （`@{u}` か、検証済みのブランチ名）。
+pub(crate) fn merge_incoming(
+    runner: &GitRunner,
+    repo: &Path,
+    target: &str,
+    fast_forward_only: bool,
+    skip: &mut SkipWorktreeReport,
+) -> Result<bool, OpsError> {
+    // 取り込み前の HEAD（手順 8 で、取り込みで消えるファイルの内容を取り出す元）
+    let pre_merge_head =
+        String::from_utf8_lossy(&runner.run_ok(repo, &["rev-parse", "HEAD"])?.stdout)
+            .trim()
+            .to_string();
+
+    // 無視中のファイルで相手が変更・削除するものは、手元の内容を退避してから印を外し、
+    // 作業フォルダを HEAD の版へ戻す（設計書 4.8）。途中で失敗したときは中で元に戻している
+    skip_worktree::prepare_incoming(runner, repo, target)?;
+
+    // fast-forward のみ、または merge --no-edit（終了コード 0 と 1 を許容。1 は競合）
+    let merged = if fast_forward_only {
+        runner
+            .run_ok(repo, &["merge", "--ff-only", target])
+            .map(|_| true)
+    } else {
+        runner
+            .run_allow_codes(repo, &["merge", "--no-edit", target], &[0, 1])
+            .map(|out| out.code == 0)
+    };
+    let clean = match merged {
+        Ok(clean) => clean,
+        Err(e) => {
+            // 取り込みが git の判断で止まった。退避が残っていれば作業フォルダへ書き戻す
+            skip_worktree::recover_after_failed_incoming(runner, repo);
+            return Err(e.into());
+        }
+    };
+
+    if clean {
+        restore_files_untracked_by_remote(runner, repo, &pre_merge_head);
+        // 退避の書き戻しと印の付け直し（設計書 4.8 の再適用）
+        skip.absorb(skip_worktree::reapply_skip_worktree(runner, repo)?);
+    }
+    Ok(clean)
 }
 
 /// 取り込みで「相手側が保存対象から外した」ファイルが削除された場合に、取り込み前の内容を

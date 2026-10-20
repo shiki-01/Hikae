@@ -16,6 +16,7 @@ pub mod migrations;
 pub mod models;
 pub mod settings;
 pub mod skip_worktree;
+pub mod work_copies;
 
 pub use extensions::ExtensionState;
 pub use journal::{
@@ -31,6 +32,7 @@ pub use settings::{
     PROJECT_OVERRIDABLE_KEYS,
 };
 pub use skip_worktree::SkipWorktreeRecord;
+pub use work_copies::WorkCopyRecord;
 
 /// Store のエラー型
 #[derive(Error, Debug)]
@@ -198,6 +200,9 @@ impl Store {
             "DELETE FROM project_settings WHERE project_id = ?",
             params![id],
         )?;
+        // 作業コピーの表示名の記録も消す（ブランチ自体は Git の側に残る）
+        self.conn
+            .execute("DELETE FROM work_copies WHERE project_id = ?", params![id])?;
         self.conn
             .execute("DELETE FROM projects WHERE id = ?", params![id])?;
         Ok(())

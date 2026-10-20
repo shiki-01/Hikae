@@ -37,6 +37,7 @@ mod restore_save;
 mod size_check;
 mod skip_worktree;
 mod windows_names;
+mod work_copy;
 
 pub use add_files::{
     AddFilesRequest, FOLDER_MAX_DEPTH, FOLDER_MAX_FILES, LARGE_FILE_LIMIT_BYTES,
@@ -76,6 +77,7 @@ pub use models::{
     ResolveOutcome, RestoreAndSave, RestoreFileAndSave, RestoreFileChange, RestoreFileKind,
     RestoreFileOutcome, RestoreFilePreview, RestorePointInfo, RestorePreview, SaveOutcome,
     SkipReason, SkipWorktreeReport, SkippedItem, SyncState, UnsavedPolicy, UploadOutcome,
+    WorkCopyInfo,
 };
 pub use new_file_diff::{FileDiffOutcome, NEW_FILE_DIFF_MAX_BYTES};
 pub use open_path::{resolve_in_project, OpenPathError};
@@ -384,6 +386,47 @@ impl Ops {
             &self.labels,
             limits,
             self.check_windows_names,
+            self.meta(),
+            &mut skip,
+        );
+        self.record_skip(skip);
+        outcome
+    }
+
+    /// 作業コピーの一覧（設計書 4.9。読み取りのみ）。`wc-` で始まるものが作業コピー、それ以外が元のもの。
+    pub fn list_work_copies(&self, repo: &Path) -> Result<Vec<WorkCopyInfo>, OpsError> {
+        work_copy::list(self.runner(), repo)
+    }
+
+    /// 作業コピーを作る（設計書 4.9「作る」）。未保存の変更があれば何も変えず `UnsavedChanges`。
+    /// 復元点を作ってから、いまの版から内部名（`wc-YYYYMMDD-HHMMSS`）のブランチを作り、切り替える。
+    /// 作った内部名を返す。
+    pub fn create_work_copy(&self, repo: &Path) -> Result<String, OpsError> {
+        work_copy::create(self.runner(), repo, self.now(), self.meta())
+    }
+
+    /// 作業コピーへ切り替える（設計書 4.9「切り替える」）。未保存の変更があれば何も変えず `UnsavedChanges`。
+    /// `checkout` が拒否したとき（未追跡ファイルの上書きなど）は、ファイルを変えずにエラーを返す。
+    pub fn switch_work_copy(&self, repo: &Path, branch: &str) -> Result<(), OpsError> {
+        work_copy::switch(self.runner(), repo, branch, self.now(), self.meta())
+    }
+
+    /// 作業コピーを元の作業コピーに取り込む（設計書 4.9「採用する」）。
+    /// 元へ切り替えてから（復元点）、復元点を作って merge する。ぶつかりは `Conflicted`（4.4 の解消へ）。
+    /// 無視中のファイルの結果は `take_skip_report` で取り出す。
+    pub fn adopt_work_copy(
+        &self,
+        repo: &Path,
+        branch: &str,
+        original: &str,
+    ) -> Result<PullOutcome, OpsError> {
+        let mut skip = SkipWorktreeReport::default();
+        let outcome = work_copy::adopt(
+            self.runner(),
+            repo,
+            branch,
+            original,
+            self.now(),
             self.meta(),
             &mut skip,
         );

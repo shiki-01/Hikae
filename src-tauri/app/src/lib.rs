@@ -259,6 +259,14 @@ impl AppError {
                 "そのファイルの内容を確認してから、もう一度お試しください".to_string(),
                 None,
             ),
+            // 作業コピーの作成・切り替え・採用を、未保存の変更があるため断った（設計書 4.9）。何も変えていない
+            OpsError::UnsavedChanges => (
+                "unsaved_changes",
+                "未保存の変更があるため、作業コピーを切り替えられませんでした".to_string(),
+                "ファイルは変更されていません。".to_string(),
+                "保存してから、もう一度お試しください".to_string(),
+                None,
+            ),
             OpsError::InvalidInput(msg) => (
                 "invalid_input",
                 "指定された場所またはファイルを扱えませんでした".to_string(),

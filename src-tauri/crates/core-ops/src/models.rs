@@ -299,9 +299,25 @@ pub enum OpsError {
     #[error("adding files was refused: {0:?}")]
     AddRefused(AddRefusal),
 
+    /// 未保存の変更があるため、作業コピーを作る・切り替える・採用するのを断った（設計書 4.9）。
+    /// 何も変更していない。画面は「保存してから切り替える」を案内する
+    #[error("there are unsaved changes")]
+    UnsavedChanges,
+
     /// 予期しないエラー
     #[error("unexpected error: {0}")]
     Unexpected(String),
+}
+
+/// 作業コピーの一覧の 1 件（設計書 4.9）。`wc-` で始まるものが作業コピー、それ以外が元のもの
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkCopyInfo {
+    /// ブランチ名（内部名。作業コピーは `wc-YYYYMMDD-HHMMSS`、元のものは通常 `main`）
+    pub branch: String,
+    /// いまの作業コピーか（作業フォルダがこのブランチを指している）
+    pub is_current: bool,
+    /// 元の作業コピーか（`wc-` で始まらないもの）
+    pub is_original: bool,
 }
 
 /// ファイルの追加を、何もコピーせずに断る理由（設計書 4.7、5.1）
@@ -703,6 +719,7 @@ impl OpsError {
             OpsError::RestorePointNotFound(_) => "restore-point-not-found",
             OpsError::DiscardRefused { .. } => "discard-refused",
             OpsError::AddRefused(_) => "add-refused",
+            OpsError::UnsavedChanges => "unsaved-changes",
             OpsError::SkipStashPending => "skip-stash-pending",
             OpsError::Unexpected(_) => "unexpected",
         }

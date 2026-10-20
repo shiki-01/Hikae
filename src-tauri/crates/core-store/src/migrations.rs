@@ -31,6 +31,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), StoreError> {
     if current_version < 8 {
         migrate_to_v8(conn)?;
     }
+    if current_version < 9 {
+        migrate_to_v9(conn)?;
+    }
 
     // 将来のバージョンはここに追加
 
@@ -315,6 +318,32 @@ fn migrate_to_v8(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// v9: 作業コピー（別の案を試す場所。設計書 4.9）の表示名と一覧の状態を持つ `work_copies` を足す。
+/// 内部名（Git のブランチ名）は `branch` 列に入る。表示名は利用者が付けた語で、内部名とは別に持つ。
+/// 「しまう」は削除ではなく `archived` の印（既定の一覧から隠す）。
+/// プロジェクトの登録を外したときは `remove_project` が行を消す。
+fn migrate_to_v9(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        r#"
+        BEGIN;
+
+        CREATE TABLE IF NOT EXISTS work_copies (
+            project_id TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            archived INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (project_id, branch)
+        );
+
+        PRAGMA user_version = 9;
+        COMMIT;
+        "#,
+    )?;
+
+    Ok(())
+}
+
 /// 旧 `ProjectConfig` の JSON から、新しい設定キーと JSON 値の組を取り出す。
 /// 壊れた JSON、null、選択肢にない値は取り込まない。
 fn legacy_overrides(config: &str) -> Vec<(String, String)> {
@@ -368,7 +397,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         let (outcome, finished, backup): (String, Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT outcome, finished_at, backup_ref FROM journal WHERE id = 1",
@@ -422,7 +451,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         let initial: Option<String> = conn
             .query_row(
                 "SELECT initial_commit FROM projects WHERE id = 'p1'",
@@ -461,7 +490,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         let (path, dismissed): (String, i64) = conn
             .query_row(
                 "SELECT path, dismissed FROM skip_worktree WHERE project_id = 'p1'",
@@ -474,6 +503,52 @@ mod tests {
 
         // 2 回目の実行は何も変えない
         run_migrations(&conn).expect("rerun");
+    }
+
+    #[test]
+    fn v9_adds_work_copies_table_and_keeps_existing_rows() {
+        let conn = Connection::open_in_memory().expect("open");
+        migrate_to_v1(&conn).expect("v1");
+        migrate_to_v2(&conn).expect("v2");
+        migrate_to_v3(&conn).expect("v3");
+        migrate_to_v4(&conn).expect("v4");
+        migrate_to_v5(&conn).expect("v5");
+        migrate_to_v6(&conn).expect("v6");
+        migrate_to_v7(&conn).expect("v7");
+        migrate_to_v8(&conn).expect("v8");
+        conn.execute(
+            "INSERT INTO projects (id, display_name, path, remote_url, owner, default_branch, last_viewed_at, config)
+             VALUES ('p1', 'name', '/p', NULL, 'o', 'main', '2026-01-01T00:00:00Z', '{}')",
+            [],
+        )
+        .expect("insert project");
+
+        run_migrations(&conn).expect("migrate");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(version, 9);
+        // 作業コピーの表は空で作られ、既存のプロジェクトの行は残る
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM work_copies", [], |r| r.get(0))
+            .expect("work_copies table");
+        assert_eq!(count, 0);
+        let projects: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+            .expect("projects");
+        assert_eq!(projects, 1);
+        // 2 回目の実行は何も変えない（表を作り直さない）
+        conn.execute(
+            "INSERT INTO work_copies (project_id, branch, display_name, created_at) VALUES ('p1', 'wc-20260101-000000', 'A', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert");
+        run_migrations(&conn).expect("rerun");
+        let kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM work_copies", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(kept, 1);
     }
 
     #[test]
@@ -499,7 +574,7 @@ mod tests {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         let (outcome, head, code): (String, Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT outcome, head_before, error_code FROM journal WHERE id = 1",

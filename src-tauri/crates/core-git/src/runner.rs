@@ -1,5 +1,5 @@
 use crate::bundled::{self, BundledEnv, GitSource, Layout, Resolved, GIT_PATH_ENV};
-use crate::validation::validate;
+use crate::validation::{is_work_copy_create_form, validate};
 use crate::GitError;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -212,8 +212,13 @@ impl GitRunner {
         cmd.env("LC_ALL", "C");
 
         // 読み取り系のコマンドの場合は GIT_OPTIONAL_LOCKS を設定
+        // `branch` は一覧だけが読み取り。作業コピーの作成（設計書 4.9）は書き込みなので対象外
         if let Some(subcmd) = subcommand_of(args) {
-            if is_read_only_command(subcmd) {
+            // 検証を通った `branch` で末尾が固定の形なら作成（書き込み）とみなす（保守的な判定）
+            let creates_branch = subcmd == "branch"
+                && args.len() >= 2
+                && is_work_copy_create_form(&args[args.len() - 2..]);
+            if is_read_only_command(subcmd) && !creates_branch {
                 cmd.env("GIT_OPTIONAL_LOCKS", "0");
             }
         }
