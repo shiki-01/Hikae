@@ -18,9 +18,12 @@ use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 pub const SCHEME: &str = "ext";
 
 /// すべての応答に付ける CSP（設計書 11.1）。拡張の画面はネットワークに出られず、フレームも作れない
-const CSP: &str = "default-src 'none'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; \
-img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; frame-src 'none'; \
-worker-src blob:; base-uri 'none'; form-action 'none'";
+///
+/// macOS の WebKit は、sandbox の iframe（opaque origin）では `'self'` を `ext://localhost` に一致させない。
+/// このため `ext:` のスキームを明示する（Windows は `http://ext.localhost` で `'self'` が一致する）
+const CSP: &str = "default-src 'none'; script-src 'self' ext: blob:; \
+style-src 'self' ext: 'unsafe-inline'; img-src 'self' ext: data: blob:; font-src 'self' ext:; \
+connect-src 'none'; frame-src 'none'; worker-src blob:; base-uri 'none'; form-action 'none'";
 
 /// プロトコルの要求を処理する。読み込みは別スレッドで行い、UI スレッドを塞がない
 pub fn handle<R: Runtime>(

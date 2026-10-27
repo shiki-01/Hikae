@@ -1210,7 +1210,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
 - 配信するのは、登録済みの拡張のフォルダの中の、許可リストの拡張子の通常のファイルだけ。読み取りのみで、作業フォルダ・リポジトリ・設定には触れない
 - パスの解決は `core-preview` の純関数で行う。(1) パーセントデコード（`%` の後ろが 16 進 2 桁でないもの、デコード後が UTF-8 でないものは拒否）、(2) 字句の検査（`..`・`.`・空の要素・先頭の `/`・`\`・`:`・NUL・1,024 バイト超を拒否。デコード後の `%2e%2e` や `%2f` も同じ扱い）、(3) 実体（シンボリックリンクを含む）が拡張フォルダの中にあることを要素単位で確かめる（外へ出るものは拒否）。無い・通常のファイルでないものは 404
 - 許可リスト（拡張子 → Content-Type）: `html`、`js`、`mjs`、`css`、`json`、`woff2`、`png`、`svg`、`txt`。それ以外（`wasm` を含む）は 403。大きさの上限は 16 MiB（超えると 413）。登録されていない拡張は 404。GET 以外は 405。形式が無い要求は 400
-- 応答ヘッダ（すべての応答に付ける）: `Content-Type`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-cache`、`Access-Control-Allow-Origin: *`（opaque origin の iframe から module script を読むため）、`Content-Security-Policy: default-src 'none'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; frame-src 'none'; worker-src blob:; base-uri 'none'; form-action 'none'`
+- 応答ヘッダ（すべての応答に付ける）: `Content-Type`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-cache`、`Access-Control-Allow-Origin: *`（opaque origin の iframe から module script を読むため）、`Content-Security-Policy: default-src 'none'; script-src 'self' ext: blob:; style-src 'self' ext: 'unsafe-inline'; img-src 'self' ext: data: blob:; font-src 'self' ext:; connect-src 'none'; frame-src 'none'; worker-src blob:; base-uri 'none'; form-action 'none'`（macOS の WebKit は opaque origin の iframe で `'self'` を `ext://localhost` に一致させないため、`ext:` を明示する。2026-10-27）
 - アプリ側の CSP（`tauri.conf.json`）: `img-src 'self' app-blob: http://app-blob.localhost https://avatars.githubusercontent.com; frame-src ext: http://ext.localhost`
 - エラーは本文の無い応答だけ。パス・内容をログにも応答にも出さない
 
