@@ -114,6 +114,33 @@ fn global_option_variants_are_rejected() {
         &["-c", "core.hooksPath", "status"],
         &["-ccore.sshCommand=evil", "status"],
         &["--config-env=core.sshCommand=X", "status"],
+        // URL の読み替えは GitHub の SSH 形式から HTTPS 形式への固定の形だけ
+        &[
+            "-c",
+            "url.https://github.com/.insteadOf=https://github.com/",
+            "fetch",
+        ],
+        &["-c", "url.https://github.com/.insteadOf=", "fetch"],
+        &[
+            "-c",
+            "url.https://evil.example/.insteadOf=git@github.com:",
+            "fetch",
+        ],
+        &[
+            "-c",
+            "url.https://evil.example/.insteadOf=https://github.com/",
+            "fetch",
+        ],
+        &[
+            "-c",
+            "url.https://github.com/.pushInsteadOf=git@github.com:",
+            "push",
+        ],
+        &[
+            "-c",
+            "url.https://github.com/.insteadof=git@evil.example:",
+            "fetch",
+        ],
         &["--version", "status"],
     ] {
         assert_rejected(args);

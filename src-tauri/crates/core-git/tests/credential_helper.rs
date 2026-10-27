@@ -86,3 +86,53 @@ fn credential_helper_is_not_added_to_local_commands() -> Result<(), Box<dyn std:
     assert!(out.stdout.is_empty());
     Ok(())
 }
+
+#[test]
+fn github_ssh_urls_are_read_as_https() -> Result<(), Box<dyn std::error::Error>> {
+    // 通信に付ける URL の読み替え（設計書 6.1）が git に効くことを、通信せずに確かめる。
+    // `remote get-url` は insteadOf を適用した URL を返す。リポジトリの設定は SSH 形式のまま
+    let tmp = tempfile::tempdir()?;
+    let runner = GitRunner::from_path_env();
+    runner.run_ok(tmp.path(), &["init", "-b", "main"])?;
+    runner.run_ok(
+        tmp.path(),
+        &["remote", "add", "scp", "git@github.com:owner/repo.git"],
+    )?;
+    runner.run_ok(
+        tmp.path(),
+        &[
+            "remote",
+            "add",
+            "ssh",
+            "ssh://git@github.com/owner/repo.git",
+        ],
+    )?;
+    runner.run_ok(
+        tmp.path(),
+        &["remote", "add", "other", "git@example.com:owner/repo.git"],
+    )?;
+    let rewrite = [
+        "-c",
+        "url.https://github.com/.insteadOf=git@github.com:",
+        "-c",
+        "url.https://github.com/.insteadOf=ssh://git@github.com/",
+    ];
+    let get_url = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
+        let mut args: Vec<&str> = rewrite.to_vec();
+        args.extend(["remote", "get-url", name]);
+        Ok(String::from_utf8(runner.run_ok(tmp.path(), &args)?.stdout)?
+            .trim()
+            .to_string())
+    };
+    assert_eq!(get_url("scp")?, "https://github.com/owner/repo.git");
+    assert_eq!(get_url("ssh")?, "https://github.com/owner/repo.git");
+    // GitHub 以外はそのまま
+    assert_eq!(get_url("other")?, "git@example.com:owner/repo.git");
+    // 読み替えなしでは、設定どおりの SSH 形式
+    let out = runner.run_ok(tmp.path(), &["remote", "get-url", "scp"])?;
+    assert_eq!(
+        String::from_utf8(out.stdout)?.trim(),
+        "git@github.com:owner/repo.git"
+    );
+    Ok(())
+}

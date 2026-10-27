@@ -87,7 +87,7 @@ fn check_global_options(args: &[&str]) -> Result<(usize, bool), Rejection> {
             }
 
             let key = parts[0];
-            validate_config_key(key)?;
+            validate_config_key(key, parts[1])?;
             has_c_args = true;
             idx += 1;
             continue;
@@ -107,7 +107,21 @@ fn check_global_options(args: &[&str]) -> Result<(usize, bool), Rejection> {
     Ok((idx, has_c_args))
 }
 
-fn validate_config_key(key: &str) -> Result<(), Rejection> {
+/// GitHub の SSH 形式の URL を HTTPS 形式に読み替える設定キー（設計書 6.1）。値は下の固定の形だけを許す
+pub(crate) const GITHUB_INSTEAD_OF_KEY: &str = "url.https://github.com/.insteadOf";
+pub(crate) const GITHUB_INSTEAD_OF_VALUES: [&str; 2] = ["git@github.com:", "ssh://git@github.com/"];
+
+fn validate_config_key(key: &str, value: &str) -> Result<(), Rejection> {
+    if key == GITHUB_INSTEAD_OF_KEY {
+        return if GITHUB_INSTEAD_OF_VALUES.contains(&value) {
+            Ok(())
+        } else {
+            Err(Rejection {
+                reason: format!("value for config key '{}' not allowed", key),
+            })
+        };
+    }
+
     let allowed = [
         "core.hooksPath",
         "core.autocrlf",

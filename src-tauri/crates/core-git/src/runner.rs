@@ -1,5 +1,5 @@
 use crate::bundled::{self, BundledEnv, GitSource, Layout, Resolved, GIT_PATH_ENV};
-use crate::validation::validate;
+use crate::validation::{validate, GITHUB_INSTEAD_OF_KEY, GITHUB_INSTEAD_OF_VALUES};
 use crate::GitError;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -331,14 +331,23 @@ fn needs_credentials(subcmd: &str) -> bool {
 
 /// credential helper を有効にする `-c` 引数列を作る。対象外のサブコマンドや helper 未設定なら空。
 /// 先に空値で既存の helper を無効化し、そのあとアプリの helper だけを指定する。
+/// あわせて GitHub の SSH 形式の URL を HTTPS 形式に読み替え、アプリのログインで通信できるようにする
+/// （リポジトリの設定は変えない。設計書 6.1）。
 fn credential_config_args(helper: Option<&str>, subcmd: &str) -> Vec<String> {
     match helper {
-        Some(h) if needs_credentials(subcmd) => vec![
-            "-c".to_string(),
-            "credential.helper=".to_string(),
-            "-c".to_string(),
-            format!("credential.helper={h}"),
-        ],
+        Some(h) if needs_credentials(subcmd) => {
+            let mut args = vec![
+                "-c".to_string(),
+                "credential.helper=".to_string(),
+                "-c".to_string(),
+                format!("credential.helper={h}"),
+            ];
+            for value in GITHUB_INSTEAD_OF_VALUES {
+                args.push("-c".to_string());
+                args.push(format!("{GITHUB_INSTEAD_OF_KEY}={value}"));
+            }
+            args
+        }
         _ => Vec::new(),
     }
 }
@@ -412,6 +421,10 @@ mod tests {
                     "credential.helper=".to_string(),
                     "-c".to_string(),
                     format!("credential.helper={helper}"),
+                    "-c".to_string(),
+                    "url.https://github.com/.insteadOf=git@github.com:".to_string(),
+                    "-c".to_string(),
+                    "url.https://github.com/.insteadOf=ssh://git@github.com/".to_string(),
                 ]
             );
             // 付与後の引数列も許可リストを通ること

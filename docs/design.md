@@ -615,7 +615,7 @@ Rust 側の `GitRunner` は、引数を含めて許可リストに一致する�
 
 - 実装では `<app>` は `hikae`（`refs/hikae/`）。名前空間の定数は `refs/hikae/snapshots/` と `refs/hikae/backup/`
 - 許可リストに無いサブコマンドは「unknown subcommand」として実行前に拒否する。`reset`、`clean`、`rebase`、`filter-branch`、`gc`、`reflog`、`stash`、`tag`、`pull`、`cherry-pick`、`revert`、`worktree`、`submodule` は明示的に拒否する。`diff-tree` のように git の標準のコマンドでも、許可リストに無ければ実行時に失敗する（13.3）
-- `-c` で渡せる設定キーは、`core.hooksPath`、`core.autocrlf`、`core.precomposeUnicode`、`core.quotepath`、`core.longpaths`、`credential.helper`、`user.name`、`user.email`、`commit.gpgsign`、`init.defaultBranch`、`protocol.version` のみ。子プロセスの環境変数は引き継がず（`PATH`、`SystemRoot`、`SYSTEMDRIVE`、`TEMP`、`TMP`、`TMPDIR` だけを渡す）、`GIT_CONFIG_GLOBAL` を null デバイス、`GIT_CONFIG_NOSYSTEM=1`、`GIT_TERMINAL_PROMPT=0`、`LC_ALL=C` に固定する。読み取り専用のコマンドには `GIT_OPTIONAL_LOCKS=0` を付ける。追加で渡せる環境変数は `GIT_INDEX_FILE` と作者・コミッターの 6 個だけ
+- `-c` で渡せる設定キーは、`core.hooksPath`、`core.autocrlf`、`core.precomposeUnicode`、`core.quotepath`、`core.longpaths`、`credential.helper`、`user.name`、`user.email`、`commit.gpgsign`、`init.defaultBranch`、`protocol.version` のみ。例外として `url.https://github.com/.insteadOf` を、値が `git@github.com:` か `ssh://git@github.com/` のときだけ許す。`GitRunner` は通信するコマンド（clone / fetch / push / ls-remote）に credential helper と一緒にこの 2 つを付け、GitHub の SSH 形式の保存先も HTTPS 形式としてアプリのログインで通信する（リポジトリの設定は書き換えない。ターミナルなどで SSH 形式の保存先を作ったフォルダを登録した場合に、認証に失敗して「再ログインが必要」と出続けるのを防ぐ。2026-10-27）。子プロセスの環境変数は引き継がず（`PATH`、`SystemRoot`、`SYSTEMDRIVE`、`TEMP`、`TMP`、`TMPDIR` だけを渡す）、`GIT_CONFIG_GLOBAL` を null デバイス、`GIT_CONFIG_NOSYSTEM=1`、`GIT_TERMINAL_PROMPT=0`、`LC_ALL=C` に固定する。読み取り専用のコマンドには `GIT_OPTIONAL_LOCKS=0` を付ける。追加で渡せる環境変数は `GIT_INDEX_FILE` と作者・コミッターの 6 個だけ
 - 待ち時間の上限は 60 秒（取得は 30 分）。超えるとプロセスを止めて `git_timeout` にする
 
 ### 6.2 第2層: 復元点（隠し ref）
