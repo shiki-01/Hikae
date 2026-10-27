@@ -64,6 +64,7 @@ const messages = {
 	'header.status_syncing_other': '処理しています…',
 	'header.relogin': 'ログインし直す',
 	'header.status_attention_auth': '再ログインが必要です。変更はこの PC に残っています',
+	'header.status_attention_remote': 'この保存先には接続できません。変更はこの PC に残っています',
 	'header.status_attention_unsaved': '未保存の変更があるため、取り込みを見送りました',
 	'header.status_offline': 'オフラインです。保存はこの PC で続けられます',
 	'header.status_offline_retry': '再試行',
@@ -910,6 +911,9 @@ const messages = {
 	'errcode.not_logged_in.what': 'GitHub との接続が切れました',
 	'errcode.not_logged_in.safe': 'ファイルはこの PC に安全に残っています。',
 	'errcode.not_logged_in.next': 'もう一度ログインしてください。',
+	'errcode.remote_unsupported.what': 'この保存先には Hikae から接続できません',
+	'errcode.remote_unsupported.safe': 'ファイルはこの PC に安全に残っています。',
+	'errcode.remote_unsupported.next': '保存先の設定を確認してください。',
 	'errcode.github_forbidden.what': 'このクラウドの保管場所には書き込めません',
 	'errcode.github_forbidden.safe': 'ファイルはこの PC に安全に残っています。',
 	'errcode.github_forbidden.next':

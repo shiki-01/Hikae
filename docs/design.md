@@ -523,7 +523,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - 新規ファイルの「元に戻す（作成しない）」（4.2）: `discard_not_untracked`（すでに保存の対象になっている、または保存対象外）、`discard_not_a_file`（フォルダ・リンク・見つからない）、`discard_file_too_large`（復元点に入らない大きさ）、`discard_not_backed_up`（復元点にファイルの内容を確認できない）、`trash_failed`（ごみ箱へ移せない）。どれも `params` は `file`（ファイル名だけ。パスは含めない）で、**ファイルは削除していない**（データの安否の文は「ファイルは削除されていません。」）。他のアプリが開いているときは `file_in_use`、プロジェクト外は `invalid_input`、ぶつかりが残っているときは `conflict`
 - ファイル・フォルダの追加（4.7）: `add_too_many_files`（フォルダの中が 1,000 件を超える）、`add_folder_too_deep`（階層が 20 を超える）。どちらも params は `limit` で、**何もコピーしていない**（データの安否の文は「何もコピーしていません。元のファイルも変更されていません。」）
 - ファイルを開く: `file_not_found`、`file_unreadable`、`outside_project`
-- 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、`network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、`keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、`github_error`
+- 認証・GitHub: `not_logged_in`（E01）、`github_forbidden`（E02）、`github_rate_limited`、`network_unavailable`（E03）、`github_unavailable`（E04）、`login_not_configured`、`keychain_error`、`login_not_in_progress`、`login_page_unexpected`、`browser_open_failed`、`github_error`、`remote_unsupported`（保存先の接続方式に対応していない。SSH の鍵の認証など、アプリのログインでは通信できない保存先。2026-10-27）
 - 取得（clone）: `clone_invalid_repo`、`clone_invalid_destination`、`destination_not_empty`、`destination_not_a_folder`、`destination_unreadable`、`remote_not_found`（E16）、`clone_failed`、`clone_timeout`、`clone_register_failed`
 - 保存先の作成・接続: `remote_name_taken`（同名のリポジトリがすでにある。空で書き込めるものは、エラーではなく接続の提案になる）、`remote_name_invalid`、`remote_owner_invalid`、`remote_public_not_confirmed`、`remote_already_connected`、`project_folder_missing`、`remote_conflict`（`origin` がすでに別の場所を指している）、`remote_not_writable`（`.git/config` に書き込めない）、`remote_orphaned`（GitHub 上に空の保存先ができたが、プロジェクトに接続できなかった。params: `name`）。権限不足は `github_forbidden`（E02）、通信できないは `network_unavailable`（E03）
 - プロジェクト: `project_not_found`、`project_already_registered`、`folder_already_registered`、`project_folder_too_broad`（登録・取得するフォルダが広すぎる。13.1）、`project_list_failed`、`project_register_failed`、`project_remove_failed`、`relocate_not_a_project`、`relocate_different_project`、`relocate_cannot_verify`、`relocate_failed`
@@ -536,7 +536,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 
 | 設計の ID | 実装での検出 |
 | --- | --- |
-| E01 | `not_logged_in`。GitHub API の 401 と、取得（clone）の認証失敗（git の標準エラー出力の文言で判定）。自動の取り込み・アップロードの認証失敗は、同期状態「再認証が必要」と `NeedsAttention`（理由 `auth`）で知らせる。手動の取り込み・アップロードの認証失敗は `git_failed` のまま返る |
+| E01 | `not_logged_in`。GitHub API の 401 と、取得（clone）の認証失敗（git の標準エラー出力の文言で判定）。自動の取り込み・アップロードの認証失敗は、同期状態「再認証が必要」と `NeedsAttention`（理由 `auth`）で知らせる。手動の取り込み・アップロードの認証失敗は `git_failed` のまま返る。SSH の鍵の認証の失敗（`Permission denied (publickey)`、`Host key verification failed` など）は E01 にせず、同期状態「保存先に接続できない」（`unsupported-remote`。ログインし直すボタンは出さない）と `remote_unsupported` にする。GitHub の SSH 形式の保存先は HTTPS 形式に読み替えて通信するため（6.1）、これに当たるのは GitHub 以外の SSH 形式の保存先（2026-10-27） |
 | E02 | `github_forbidden`（API の 403）。ダイアログの主ボタンは「管理者向けの説明をコピー」（文言は `error.E02.copy_text`。コピーしてもダイアログは開いたまま） |
 | E03 | `network_unavailable`（API・取得）。自動の取り込み・アップロードの失敗は標準エラー出力の文言かタイムアウトで「オフライン」に分類し、例外ではなく同期状態として扱う。手動の取り込み・アップロードの通信失敗は `git_failed` / `git_timeout` で返る |
 | E04 | `github_unavailable`（API の 5xx）。git の失敗では 5xx を見分けず「その他」に分類する |
@@ -574,7 +574,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - アプリ自身のファイル操作の `std::io::Error` が、Windows の OS エラー 32（共有違反）または 33（ロック違反）
 - 判定は英語の文言に依存する。`GitRunner` は git の実行時に環境変数を引き継がず、`LC_ALL=C` を設定して出力を英語に固定する。特定できたファイルの名前は `params.file` に入れる（パスは含めない）
 
-**自動再試行の間隔**（`core-watch` の `retry_delay_secs`。失敗が続くごとに倍にし、上限で止める）: オフライン（E03）は 30 秒から上限 10 分（30 秒、1 分、2 分、4 分、8 分、10 分）。認証失敗（E01）は 5 分から上限 60 分。それ以外（GitHub 側の障害を含む）は 60 秒から上限 30 分。変更のぶつかりが残っている間は 15 分ごとに状態を確かめる。
+**自動再試行の間隔**（`core-watch` の `retry_delay_secs`。失敗が続くごとに倍にし、上限で止める）: オフライン（E03）は 30 秒から上限 10 分（30 秒、1 分、2 分、4 分、8 分、10 分）。認証失敗（E01）と保存先に接続できない（`unsupported-remote`）は 5 分から上限 60 分。それ以外（GitHub 側の障害を含む）は 60 秒から上限 30 分。変更のぶつかりが残っている間は 15 分ごとに状態を確かめる。
 
 ### 5.2 容量・破損・同時実行・部品・ファイル名の検出（E09・E10・E13・E14・E17・E18）
 

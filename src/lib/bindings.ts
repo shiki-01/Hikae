@@ -1624,6 +1624,8 @@ export type SyncStateKind = "idle" |
 "offline" | 
 /**  再認証が必要 */
 "auth-required" | 
+/**  保存先の接続方式に対応していない。ログインし直しても直らない */
+"unsupported-remote" | 
 /**  変更のぶつかりの解消待ち */
 "conflicted" | 
 /**  そのほかの失敗。自動で再試行する */

@@ -20,6 +20,15 @@ describe('StatusHeader のスモークテスト（再ログイン）', () => {
 		expect(onrelogin).toHaveBeenCalledTimes(1);
 	});
 
+	it('接続方式が非対応のときは、接続できない旨を出し、ログインし直すボタンは出さない', () => {
+		renderWithClient(StatusHeader, {
+			projectName: 'sample',
+			attention: 'remote' as const
+		});
+		expect(screen.getByText(t('header.status_attention_remote'))).toBeTruthy();
+		expect(screen.queryByRole('button', { name: t('header.relogin') })).toBeNull();
+	});
+
 	it('未保存の変更を理由に見送ったときは、ログインし直すボタンを出さない', () => {
 		renderWithClient(StatusHeader, {
 			projectName: 'sample',

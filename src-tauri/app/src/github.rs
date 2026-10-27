@@ -606,6 +606,11 @@ fn clone_failure(e: OpsError) -> AppError {
                 "GitHub との接続が切れました。",
                 "もう一度ログインしてください",
             ),
+            FailureKind::UnsupportedRemote => (
+                "remote_unsupported",
+                "この保存先には Hikae から接続できません。",
+                "保存先の設定を確認してください",
+            ),
             FailureKind::Offline => (
                 "network_unavailable",
                 "インターネットに接続できません。",

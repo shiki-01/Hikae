@@ -217,6 +217,13 @@ fn upload_error(failure: OpFailure) -> AppError {
             "もう一度ログインしてください",
             technical,
         ),
+        FailureKind::UnsupportedRemote => error(
+            "remote_unsupported",
+            "この保存先には Hikae から接続できません。",
+            safe,
+            "保存先の設定を確認してください",
+            technical,
+        ),
         _ => AppError::from_ops_error(e),
     }
 }

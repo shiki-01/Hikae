@@ -322,9 +322,11 @@
 	const attention = $derived(
 		live.attention === 'auth' || live.sync === 'auth-required'
 			? 'auth'
-			: live.attention === 'unsaved-changes'
-				? 'unsaved-changes'
-				: null
+			: live.sync === 'unsupported-remote'
+				? 'remote'
+				: live.attention === 'unsaved-changes'
+					? 'unsaved-changes'
+					: null
 	);
 
 	$effect(() => {

@@ -25,6 +25,9 @@ pub enum SyncStateKind {
     /// 再認証が必要
     #[serde(rename = "auth-required")]
     AuthRequired,
+    /// 保存先の接続方式に対応していない。ログインし直しても直らない
+    #[serde(rename = "unsupported-remote")]
+    UnsupportedRemote,
     /// 変更のぶつかりの解消待ち
     #[serde(rename = "conflicted")]
     Conflicted,

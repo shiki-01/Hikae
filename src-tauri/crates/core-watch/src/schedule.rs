@@ -11,6 +11,8 @@ pub enum FailureKind {
     Offline,
     /// 認証に失敗した（トークンの失効・権限不足）
     AuthFailed,
+    /// 保存先の接続方式に対応していない。SSH の鍵の認証など、アプリのログインでは通信できない保存先
+    UnsupportedRemote,
     /// 変更のぶつかりが未解消
     Conflict,
     /// それ以外
@@ -27,10 +29,18 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
         "could not read password",
         "invalid username or password",
         "terminal prompts disabled",
-        "permission denied (publickey)",
         "returned error: 401",
         "returned error: 403",
     ];
+    // 接続方式が非対応の失敗は、認証の判定より先に見る（ログインし直しても直らないため）
+    const UNSUPPORTED: &[&str] = &[
+        "permission denied (publickey",
+        "host key verification failed",
+        "no supported authentication methods available",
+    ];
+    if UNSUPPORTED.iter().any(|p| s.contains(p)) {
+        return FailureKind::UnsupportedRemote;
+    }
     if AUTH.iter().any(|p| s.contains(p)) {
         return FailureKind::AuthFailed;
     }
@@ -81,6 +91,8 @@ pub enum SyncHealth {
     Offline,
     /// 再認証が必要
     AuthRequired,
+    /// 保存先に接続できない（接続方式が非対応）
+    UnsupportedRemote,
     /// 変更のぶつかりの解消待ち
     Conflicted,
     /// そのほかの失敗（自動で再試行する）
@@ -137,6 +149,8 @@ pub fn retry_delay_secs(kind: FailureKind, consecutive_failures: u32) -> u64 {
         FailureKind::Offline => (30, 10 * 60),
         // 再認証されるまで成功しないため、間隔を長めにする
         FailureKind::AuthFailed => (5 * 60, 60 * 60),
+        // 設定を変えるまで成功しないため、間隔を長めにする
+        FailureKind::UnsupportedRemote => (5 * 60, 60 * 60),
         FailureKind::Conflict => return CONFLICT_RECHECK_SECS,
         FailureKind::Other => (60, 30 * 60),
     };
@@ -291,6 +305,8 @@ impl SyncPlanner {
         let has = |k: FailureKind| kinds.contains(&Some(k));
         if has(FailureKind::AuthFailed) {
             SyncHealth::AuthRequired
+        } else if has(FailureKind::UnsupportedRemote) {
+            SyncHealth::UnsupportedRemote
         } else if has(FailureKind::Conflict) {
             SyncHealth::Conflicted
         } else if has(FailureKind::Offline) {
@@ -448,6 +464,33 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_remote_is_its_own_health_and_takes_priority_over_conflict() {
+        let mut p = SyncPlanner::new(SyncPolicy::default(), 0);
+        p.report(SyncTask::Pull, failed(FailureKind::Conflict), 0);
+        p.report(SyncTask::Push, failed(FailureKind::UnsupportedRemote), 0);
+        assert_eq!(p.health(), SyncHealth::UnsupportedRemote);
+        assert_eq!(retry_delay_secs(FailureKind::UnsupportedRemote, 1), 5 * MIN);
+        assert_eq!(
+            retry_delay_secs(FailureKind::UnsupportedRemote, 30),
+            60 * MIN
+        );
+        // 接続方式を直したあとは直ちに再試行できる
+        p.retry_now(500);
+        assert_eq!(p.health(), SyncHealth::Idle);
+    }
+
+    #[test]
+    fn unsupported_remote_is_not_auth_required() {
+        let mut p = SyncPlanner::new(SyncPolicy::default(), 0);
+        p.report(
+            SyncTask::Pull,
+            failed(classify_failure("Permission denied (publickey).")),
+            0,
+        );
+        assert_eq!(p.health(), SyncHealth::UnsupportedRemote);
+    }
+
+    #[test]
     fn conflict_is_rechecked_at_fixed_interval_and_pull_request_overrides() {
         let mut p = SyncPlanner::new(SyncPolicy::default(), 0);
         p.report(SyncTask::Pull, failed(FailureKind::Conflict), 0);
@@ -510,6 +553,19 @@ mod tests {
         assert_eq!(
             c("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),
             AuthFailed
+        );
+        // SSH の鍵の認証は、アプリのログインでは直らないため非対応の保存先として扱う
+        assert_eq!(
+            c("git@ssh.github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."),
+            UnsupportedRemote
+        );
+        assert_eq!(
+            c("Host key verification failed.\nfatal: Could not read from remote repository."),
+            UnsupportedRemote
+        );
+        assert_eq!(
+            c("git@example.com: No supported authentication methods available (server sent: publickey)"),
+            UnsupportedRemote
         );
         assert_eq!(c("error: some other failure"), Other);
         assert_eq!(c(""), Other);

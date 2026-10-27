@@ -22,7 +22,7 @@
 		hasConflict?: boolean;
 		syncing?: 'fetch' | 'push' | 'other' | null;
 		/** ユーザーの対応が必要な理由（ぶつかり以外） */
-		attention?: 'auth' | 'unsaved-changes' | null;
+		attention?: 'auth' | 'remote' | 'unsaved-changes' | null;
 		/** 前回のアプリ終了で途中で止まった操作が残っている */
 		interrupted?: boolean;
 		/** 大きいファイルがあるため、自動の取り込みを見送った */
@@ -139,7 +139,9 @@
 			text:
 				attention === 'auth'
 					? t('header.status_attention_auth')
-					: t('header.status_attention_unsaved'),
+					: attention === 'remote'
+						? t('header.status_attention_remote')
+						: t('header.status_attention_unsaved'),
 			// 再ログインが必要なときだけ、ログインし直すボタンを出す
 			action:
 				attention === 'auth'
