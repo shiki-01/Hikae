@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { AiModel } from '#lib/api/types.js';
 import {
+	downloadProgress,
 	formatBytes,
 	modelButtons,
 	progressPercent,
@@ -123,5 +124,23 @@ describe('推奨のバッジ（この PC のおすすめ を優先する）', ()
 			'ai.recommended'
 		);
 		expect(recommendationKey({ recommended: false, recommendedForThisPc: false })).toBeNull();
+	});
+});
+
+describe('downloadProgress', () => {
+	it('通知の値を優先する', () => {
+		const m = model({ downloading: true, partialBytes: 10, sizeBytes: 100 });
+		expect(downloadProgress(m, { received: 50, total: 100 })).toEqual({ received: 50, total: 100 });
+	});
+
+	it('通知が無ければ、ダウンロード中の途中のバイト数から出す（再読み込みの直後）', () => {
+		const m = model({ downloading: true, partialBytes: 10, sizeBytes: 100 });
+		expect(downloadProgress(m, null)).toEqual({ received: 10, total: 100 });
+	});
+
+	it('ダウンロード中でなければ、通知が残っていても出さない', () => {
+		const m = model({ downloading: false, status: 'partial', partialBytes: 10, sizeBytes: 100 });
+		expect(downloadProgress(m, { received: 50, total: 100 })).toBeNull();
+		expect(downloadProgress(m, null)).toBeNull();
 	});
 });

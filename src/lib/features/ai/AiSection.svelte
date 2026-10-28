@@ -22,7 +22,13 @@
 	import Toggle from '#lib/components/Toggle.svelte';
 	import { useSettings, useUpdateSettings } from '#lib/features/settings/queries.js';
 	import { reportError } from '#lib/features/notifications/store.svelte.js';
-	import { customGgufMessageKey, formatBytes, scopeHintKey, type ModelAction } from './model-view';
+	import {
+		customGgufMessageKey,
+		downloadProgress,
+		formatBytes,
+		scopeHintKey,
+		type ModelAction
+	} from './model-view';
 	import { useAiCatalog } from './queries';
 
 	const catalog = useAiCatalog();
@@ -101,8 +107,11 @@
 			if (action === 'download') {
 				failed = { ...failed, [id]: false };
 				await api.aiDownloadModel(id);
+				// ダウンロード中の状態を一覧に反映する（進捗の表示と、定期的な取り直しが始まる）
+				void client.invalidateQueries({ queryKey: keys.aiCatalog });
 			} else if (action === 'cancel') {
 				await api.aiCancelDownload(id);
+				void client.invalidateQueries({ queryKey: keys.aiCatalog });
 			} else if (action === 'remove') {
 				await api.aiRemoveModel(id);
 				void client.invalidateQueries({ queryKey: keys.aiCatalog });
@@ -300,7 +309,7 @@
 				<ModelCard
 					{model}
 					selected={!usingCustom && current?.aiModel === model.id}
-					progress={progress[model.id] ?? null}
+					progress={downloadProgress(model, progress[model.id] ?? null)}
 					failed={failed[model.id] ?? false}
 					onaction={(action) => void act(model.id, action)}
 				/>

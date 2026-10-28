@@ -98,6 +98,19 @@ export function modelButtons(model: AiModel, selected: boolean): ModelButtons {
 }
 
 /**
+ * 行に出す進捗。一覧がダウンロード中と示すときだけ出す（終了の通知を受け損ねても、進捗が残らないように）。
+ * 通知（イベント）の値を優先し、無ければ一覧の取得時点の途中のバイト数から出す
+ * （画面を再読み込みした直後など、通知をまだ受けていないとき）。
+ */
+export function downloadProgress(
+	model: Pick<AiModel, 'downloading' | 'partialBytes' | 'sizeBytes'>,
+	notified: { received: number; total: number } | null
+): { received: number; total: number } | null {
+	if (!model.downloading) return null;
+	return notified ?? { received: model.partialBytes, total: model.sizeBytes };
+}
+
+/**
  * モデルの行に出す推奨のバッジの文言キー（`null` は出さない）。
  * この PC のおすすめ（総メモリと導入の可否で選ぶ）を優先し、無ければ段階の推奨（カタログの既定）を出す。
  */
