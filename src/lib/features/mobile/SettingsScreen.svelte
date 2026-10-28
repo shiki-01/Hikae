@@ -34,7 +34,7 @@
 		{#if account.data}
 			<div class="flex align-items:center gap:3">
 				{#if account.data.avatarUrl}
-					<img src={account.data.avatarUrl} alt="" class="size:40px r:full" />
+					<img src={account.data.avatarUrl} alt="" class="size:40px r:99px" />
 				{/if}
 				<span class="type-body">
 					{t('mobile.settings.logged_in_as', { name: account.data.login })}

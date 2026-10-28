@@ -40,11 +40,11 @@
 						src={session.data.avatarUrl}
 						alt=""
 						referrerpolicy="no-referrer"
-						class="size:40px r:full object-fit:cover flex-shrink:0"
+						class="size:40px r:99px object-fit:cover flex-shrink:0"
 					/>
 				{:else}
 					<span
-						class="size:40px r:full flex align-items:center justify-content:center flex-shrink:0 bg:accent-subtle fg:accent type-body font-weight:700"
+						class="size:40px r:99px flex align-items:center justify-content:center flex-shrink:0 bg:accent-subtle fg:accent type-body font-weight:700"
 						aria-hidden="true"
 					>
 						{initial}
