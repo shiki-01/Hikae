@@ -1081,7 +1081,7 @@ VS Code（GitHub Copilot）のメッセージ生成が自然なのは、クラ�
   - ダウンロードと削除は、モデル ID ごとに同時に 1 つだけ（`app` の `ModelSlots`）。ダウンロードは受け付けたらすぐ戻り、進捗は `llm-download-progress`、終了（導入・失敗・中止）は `llm-download-finished` で知らせる
   - 生成: 内蔵は `llama-server`（`-m` で GGUF を指定し、127.0.0.1 の空きポートで起動）。起動は生成が必要になったときだけ行い、5 分使われなければ停止する。アプリ終了時にも停止する。Ollama は同じ OpenAI 互換 API（`/v1/chat/completions`）を使う
   - 同梱: Windows は llama.cpp の公式リリース **b11540**（CPU 版、`llama-b11540-bin-win-cpu-x64.zip`、SHA-256 はスクリプトに固定）を `scripts/fetch-llama-windows.mjs` が `src-tauri/app/resources/llama/` へ展開する（コミットしない）。展開先には `llama-server.exe` と、そのフォルダの DLL だけを置き、展開後に `--version` で版を確かめる。`tauri.conf.json` の `bundle.resources` に `resources/llama` を加え、`beforeDevCommand` / `beforeBuildCommand` と CI から呼ぶ。出典表記は `NOTICE.txt`（MIT）
-  - macOS: 同梱の取得スクリプトは作っていない（**未確認**）。`HIKAE_LLAMA_SERVER_PATH` の環境変数と PATH の `llama-server` を探す。Windows の同梱分は `resources/llama/` を見る
+  - macOS: 同梱の取得スクリプトは作っていない。`HIKAE_LLAMA_SERVER_PATH` の環境変数と PATH の `llama-server` を探す。Windows の同梱分は `resources/llama/` を見る。利用者が Homebrew の `llama.cpp` を入れ、`HIKAE_LLAMA_SERVER_PATH` を指定して `tauri dev` を起動し、Gemma 4 E4B のモデル導入と保存メモの提案が動くことを確認した（2026-10-28。`llama-server` の版は記録していない。同梱版 b11540 での確認と同梱の取得は未対応）
   - 提案の操作: 「提案を作る」を出す条件は、「AI を使う」（`memo_suggestion`）、モデルが選ばれている、内蔵は導入済み、変更がある。押すまで生成しない。変更一覧・プロジェクト・設定（モデル・範囲・実行方式）が変わったら、進行中の生成を取り消し、結果・失敗は破棄して待機に戻す（自動で再生成しない）。生成の上限は 90 秒（10.4 の 6）。提案の実行枠は 1 件（`core-llm` の `SuggestSlot`。app が保持する）で、新しい要求は進行中の要求を取り消す。取り消しは `ai_cancel_suggest`（中止・時間切れのときは llama-server を止める。10.4 の 6）
   - 設定の「試す」は固定の入力で生成を試し、失敗の理由（未導入・起動失敗・タイムアウト・接続・応答の形式・検証で不採用）を返す。これだけがエラーの理由を画面に出す（E19）
   - 読み取り専用: 提案の入力は `list_changes` と差分の読み取りだけで作る。作業フォルダ・インデックス・refs には書かない
