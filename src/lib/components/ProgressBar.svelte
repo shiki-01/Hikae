@@ -27,13 +27,13 @@
 	aria-valuemin={0}
 	aria-valuemax={100}
 	aria-valuenow={indeterminate ? undefined : percent}
-	class={`w:100% h:4px bg:border r:full overflow:hidden position:relative ${className}`}
+	class={`w:100% h:4px bg:border r:99px overflow:hidden position:relative ${className}`}
 >
 	{#if indeterminate}
-		<div class={`h:100% w:40% r:full motion-slide ${fill}`}></div>
+		<div class={`h:100% w:40% r:99px motion-slide ${fill}`}></div>
 	{:else}
 		<div
-			class={`h:100% r:full transition:width|var(--duration-base) ${fill}`}
+			class={`h:100% r:99px transition:width|var(--duration-base) ${fill}`}
 			style:width={`${percent}%`}
 		></div>
 	{/if}

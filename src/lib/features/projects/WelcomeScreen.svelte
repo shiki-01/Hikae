@@ -181,7 +181,7 @@
 						class="flex align-items:center gap:2 type-body"
 					>
 						<span
-							class={`size:28px r:full flex align-items:center justify-content:center type-small font-weight:700 ${
+							class={`size:28px r:99px flex align-items:center justify-content:center type-small font-weight:700 ${
 								done
 									? 'bg:accent-subtle fg:fg b:1px|solid|state-saved'
 									: number === step

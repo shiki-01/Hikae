@@ -44,15 +44,15 @@
 		<div class="w:24px flex flex-direction:column align-items:center flex-shrink:0">
 			{#if entry.kind === 'now'}
 				<span
-					class="mt:3 size:14px r:full b:2px|solid|accent flex align-items:center justify-content:center"
+					class="mt:3 size:14px r:99px b:2px|solid|accent flex align-items:center justify-content:center"
 					aria-hidden="true"
 				>
-					<span class="size:6px r:full bg:accent"></span>
+					<span class="size:6px r:99px bg:accent"></span>
 				</span>
 			{:else if entry.kind === 'save'}
-				<span class="mt:3 size:12px r:full bg:accent" aria-hidden="true"></span>
+				<span class="mt:3 size:12px r:99px bg:accent" aria-hidden="true"></span>
 			{:else}
-				<span class="mt:3 size:8px r:full bg:snapshot" aria-hidden="true"></span>
+				<span class="mt:3 size:8px r:99px bg:snapshot" aria-hidden="true"></span>
 			{/if}
 			<span class={`flex:1 w:2px min-h:8px ${rail}`}></span>
 		</div>

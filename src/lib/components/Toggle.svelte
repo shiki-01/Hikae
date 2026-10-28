@@ -30,10 +30,10 @@
 	aria-label={label}
 	{disabled}
 	onclick={toggle}
-	class={`position:relative inline-flex flex-shrink:0 w:44px h:24px r:full b:0 p:0 cursor:pointer transition:background-color|var(--duration-fast) opacity:.5:disabled cursor:not-allowed:disabled ${checked ? 'bg:accent' : 'bg:border-strong'} ${className}`}
+	class={`position:relative inline-flex flex-shrink:0 w:44px h:24px r:99px b:0 p:0 cursor:pointer transition:background-color|var(--duration-fast) opacity:.5:disabled cursor:not-allowed:disabled ${checked ? 'bg:accent' : 'bg:border-strong'} ${className}`}
 >
 	<span
-		class={`position:absolute top:2px size:20px r:full bg:bg-raised flex align-items:center justify-content:center transition:left|var(--duration-fast) ${checked ? 'left:22px' : 'left:2px'}`}
+		class={`position:absolute top:2px size:20px r:99px bg:bg-raised flex align-items:center justify-content:center transition:left|var(--duration-fast) ${checked ? 'left:22px' : 'left:2px'}`}
 	>
 		{#if checked}
 			<Check size={12} class="fg:accent" aria-hidden="true" />

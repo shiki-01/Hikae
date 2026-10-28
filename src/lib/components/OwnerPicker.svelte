@@ -60,7 +60,7 @@
 			} fg:fg`}
 		>
 			<span
-				class="size:32px r:full bg:bg-subtle flex align-items:center justify-content:center flex-shrink:0"
+				class="size:32px r:99px bg:bg-subtle flex align-items:center justify-content:center flex-shrink:0"
 				aria-hidden="true"
 			>
 				{#if owner.kind === 'org'}
