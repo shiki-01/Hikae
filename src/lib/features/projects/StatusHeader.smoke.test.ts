@@ -29,6 +29,15 @@ describe('StatusHeader のスモークテスト（再ログイン）', () => {
 		expect(screen.queryByRole('button', { name: t('header.relogin') })).toBeNull();
 	});
 
+	it('権限が足りないときは、アクセスできない旨を出し、ログインし直すボタンは出さない', () => {
+		renderWithClient(StatusHeader, {
+			projectName: 'sample',
+			attention: 'forbidden' as const
+		});
+		expect(screen.getByText(t('header.status_attention_forbidden'))).toBeTruthy();
+		expect(screen.queryByRole('button', { name: t('header.relogin') })).toBeNull();
+	});
+
 	it('未保存の変更を理由に見送ったときは、ログインし直すボタンを出さない', () => {
 		renderWithClient(StatusHeader, {
 			projectName: 'sample',

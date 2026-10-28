@@ -50,7 +50,7 @@ export function resolveStatus(
 export function showsSecondaryFetch(
 	status: StatusState,
 	fetchPendingCount: number,
-	attention: 'auth' | 'remote' | 'unsaved-changes' | null = null
+	attention: 'auth' | 'remote' | 'forbidden' | 'unsaved-changes' | null = null
 ): boolean {
 	if (fetchPendingCount <= 0) return false;
 	if (status === 'unsaved') return true;

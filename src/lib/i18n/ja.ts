@@ -65,6 +65,8 @@ const messages = {
 	'header.relogin': 'ログインし直す',
 	'header.status_attention_auth': '再ログインが必要です。変更はこの PC に残っています',
 	'header.status_attention_remote': 'この保存先には接続できません。変更はこの PC に残っています',
+	'header.status_attention_forbidden':
+		'この保存先にアクセスできません。変更はこの PC に残っています',
 	'header.status_attention_unsaved': '未保存の変更があるため、取り込みを見送りました',
 	'header.status_offline': 'オフラインです。保存はこの PC で続けられます',
 	'header.status_offline_retry': '再試行',
@@ -965,7 +967,7 @@ const messages = {
 	'errcode.remote_not_found.what': 'クラウドの保管場所が見つかりません',
 	'errcode.remote_not_found.safe': 'ファイルはこの PC に安全に残っています。',
 	'errcode.remote_not_found.next':
-		'GitHub 上で削除または名前変更された可能性があります。保管場所を選び直してください。',
+		'GitHub 上で削除または名前変更された可能性があります。Organization の保管場所では、管理者がこのアプリを許可していないと、同じ表示になります。保管場所を選び直すか、許可を確認してください。',
 	'errcode.clone_failed.what': 'クラウドからの取得に失敗しました',
 	'errcode.clone_failed.safe': 'ファイルは変更されていません。',
 	'errcode.clone_failed.next': 'もう一度お試しください。',

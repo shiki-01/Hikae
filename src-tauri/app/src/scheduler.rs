@@ -341,6 +341,7 @@ fn state_kind(h: SyncHealth) -> SyncStateKind {
         SyncHealth::Offline => SyncStateKind::Offline,
         SyncHealth::AuthRequired => SyncStateKind::AuthRequired,
         SyncHealth::UnsupportedRemote => SyncStateKind::UnsupportedRemote,
+        SyncHealth::Forbidden => SyncStateKind::Forbidden,
         SyncHealth::Conflicted => SyncStateKind::Conflicted,
         SyncHealth::Error => SyncStateKind::Error,
     }

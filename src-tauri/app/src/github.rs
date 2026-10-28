@@ -611,6 +611,18 @@ fn clone_failure(e: OpsError) -> AppError {
                 "この保存先には Hikae から接続できません。",
                 "保存先の設定を確認してください",
             ),
+            // GitHub は「削除された」と「権限がない」を同じ文言（Repository not found）で返すため、
+            // 取得では見つからない（E16）として扱い、案内に両方の可能性を書く
+            FailureKind::Forbidden if lower.contains("repository not found") => (
+                "remote_not_found",
+                "クラウドの保管場所が見つかりません。削除・名前変更されたか、アクセスする権限がない可能性があります。",
+                "保管場所を選び直すか、Organization の管理者に許可を確認してください",
+            ),
+            FailureKind::Forbidden => (
+                "github_forbidden",
+                "このクラウドの保管場所にアクセスできません。",
+                "Organization の管理者による許可が必要な場合があります",
+            ),
             FailureKind::Offline => (
                 "network_unavailable",
                 "インターネットに接続できません。",

@@ -28,6 +28,9 @@ pub enum SyncStateKind {
     /// 保存先の接続方式に対応していない。ログインし直しても直らない
     #[serde(rename = "unsupported-remote")]
     UnsupportedRemote,
+    /// 保存先に書き込めない・アクセスできない。ログインし直しても直らない
+    #[serde(rename = "forbidden")]
+    Forbidden,
     /// 変更のぶつかりの解消待ち
     #[serde(rename = "conflicted")]
     Conflicted,

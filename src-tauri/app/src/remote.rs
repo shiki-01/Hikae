@@ -224,6 +224,13 @@ fn upload_error(failure: OpFailure) -> AppError {
             "保存先の設定を確認してください",
             technical,
         ),
+        FailureKind::Forbidden => error(
+            "github_forbidden",
+            "このクラウドの保管場所にアクセスできません。",
+            safe,
+            "Organization の管理者による許可が必要な場合があります",
+            technical,
+        ),
         _ => AppError::from_ops_error(e),
     }
 }

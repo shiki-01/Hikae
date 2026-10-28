@@ -13,6 +13,8 @@ pub enum FailureKind {
     AuthFailed,
     /// 保存先の接続方式に対応していない。SSH の鍵の認証など、アプリのログインでは通信できない保存先
     UnsupportedRemote,
+    /// 保存先への権限が足りない。Organization の外部アプリの制限や、読み取り専用など。ログインし直しても直らない
+    Forbidden,
     /// 変更のぶつかりが未解消
     Conflict,
     /// それ以外
@@ -30,8 +32,10 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
         "invalid username or password",
         "terminal prompts disabled",
         "returned error: 401",
-        "returned error: 403",
     ];
+    // 権限不足は、ログインし直しても直らないため認証の判定より先に見る。
+    // 非公開リポジトリへの権限が無いと GitHub は「存在しない」と返すため、その文言も含める
+    const FORBIDDEN: &[&str] = &["repository not found", "returned error: 403"];
     // 接続方式が非対応の失敗は、認証の判定より先に見る（ログインし直しても直らないため）
     const UNSUPPORTED: &[&str] = &[
         "permission denied (publickey",
@@ -40,6 +44,11 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
     ];
     if UNSUPPORTED.iter().any(|p| s.contains(p)) {
         return FailureKind::UnsupportedRemote;
+    }
+    if FORBIDDEN.iter().any(|p| s.contains(p))
+        || (s.contains("permission to ") && s.contains("denied to"))
+    {
+        return FailureKind::Forbidden;
     }
     if AUTH.iter().any(|p| s.contains(p)) {
         return FailureKind::AuthFailed;
@@ -93,6 +102,8 @@ pub enum SyncHealth {
     AuthRequired,
     /// 保存先に接続できない（接続方式が非対応）
     UnsupportedRemote,
+    /// 保存先に書き込めない・アクセスできない（権限不足）
+    Forbidden,
     /// 変更のぶつかりの解消待ち
     Conflicted,
     /// そのほかの失敗（自動で再試行する）
@@ -151,6 +162,8 @@ pub fn retry_delay_secs(kind: FailureKind, consecutive_failures: u32) -> u64 {
         FailureKind::AuthFailed => (5 * 60, 60 * 60),
         // 設定を変えるまで成功しないため、間隔を長めにする
         FailureKind::UnsupportedRemote => (5 * 60, 60 * 60),
+        // 権限を変えるまで成功しないため、間隔を長めにする
+        FailureKind::Forbidden => (5 * 60, 60 * 60),
         FailureKind::Conflict => return CONFLICT_RECHECK_SECS,
         FailureKind::Other => (60, 30 * 60),
     };
@@ -307,6 +320,8 @@ impl SyncPlanner {
             SyncHealth::AuthRequired
         } else if has(FailureKind::UnsupportedRemote) {
             SyncHealth::UnsupportedRemote
+        } else if has(FailureKind::Forbidden) {
+            SyncHealth::Forbidden
         } else if has(FailureKind::Conflict) {
             SyncHealth::Conflicted
         } else if has(FailureKind::Offline) {
@@ -480,6 +495,19 @@ mod tests {
     }
 
     #[test]
+    fn forbidden_is_its_own_health_and_not_auth_required() {
+        let mut p = SyncPlanner::new(SyncPolicy::default(), 0);
+        p.report(SyncTask::Pull, failed(FailureKind::Conflict), 0);
+        p.report(SyncTask::Push, failed(FailureKind::Forbidden), 0);
+        assert_eq!(p.health(), SyncHealth::Forbidden);
+        assert_eq!(retry_delay_secs(FailureKind::Forbidden, 1), 5 * MIN);
+        assert_eq!(retry_delay_secs(FailureKind::Forbidden, 30), 60 * MIN);
+        // 権限を直したあとは直ちに再試行できる
+        p.retry_now(500);
+        assert_eq!(p.health(), SyncHealth::Idle);
+    }
+
+    #[test]
     fn unsupported_remote_is_not_auth_required() {
         let mut p = SyncPlanner::new(SyncPolicy::default(), 0);
         p.report(
@@ -545,10 +573,19 @@ mod tests {
             c("remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/o/r.git/'"),
             AuthFailed
         );
-        // 403 は「unable to access」を含んでも認証失敗を優先する
+        // 403 は権限不足（ログインし直しても直らない）。「unable to access」を含んでも権限不足を優先する
         assert_eq!(
             c("fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403"),
-            AuthFailed
+            Forbidden
+        );
+        // 非公開リポジトリへの権限が無いと、GitHub は存在しないものとして返す
+        assert_eq!(
+            c("remote: Repository not found.\nfatal: repository 'https://github.com/Pluslab/cyphonic.git/' not found"),
+            Forbidden
+        );
+        assert_eq!(
+            c("remote: Permission to a/b.git denied to user.\nfatal: unable to access 'https://github.com/a/b.git/': The requested URL returned error: 403"),
+            Forbidden
         );
         assert_eq!(
             c("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),

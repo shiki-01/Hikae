@@ -324,9 +324,11 @@
 			? 'auth'
 			: live.sync === 'unsupported-remote'
 				? 'remote'
-				: live.attention === 'unsaved-changes'
-					? 'unsaved-changes'
-					: null
+				: live.sync === 'forbidden'
+					? 'forbidden'
+					: live.attention === 'unsaved-changes'
+						? 'unsaved-changes'
+						: null
 	);
 
 	$effect(() => {

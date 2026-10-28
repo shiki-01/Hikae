@@ -537,7 +537,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 | 設計の ID | 実装での検出 |
 | --- | --- |
 | E01 | `not_logged_in`。GitHub API の 401 と、取得（clone）の認証失敗（git の標準エラー出力の文言で判定）。自動の取り込み・アップロードの認証失敗は、同期状態「再認証が必要」と `NeedsAttention`（理由 `auth`）で知らせる。手動の取り込み・アップロードの認証失敗は `git_failed` のまま返る。SSH の鍵の認証の失敗（`Permission denied (publickey)`、`Host key verification failed` など）は E01 にせず、同期状態「保存先に接続できない」（`unsupported-remote`。ログインし直すボタンは出さない）と `remote_unsupported` にする。GitHub の SSH 形式の保存先は HTTPS 形式に読み替えて通信するため（6.1）、これに当たるのは GitHub 以外の SSH 形式の保存先（2026-10-27） |
-| E02 | `github_forbidden`（API の 403）。ダイアログの主ボタンは「管理者向けの説明をコピー」（文言は `error.E02.copy_text`。コピーしてもダイアログは開いたまま） |
+| E02 | `github_forbidden`（API の 403）。git の通信の 403（`returned error: 403`）、`Permission to ... denied to ...`、`Repository not found`（Organization が外部アプリを許可していないとき、GitHub は非公開リポジトリを「存在しない」と返す）も、自動の取り込み・アップロードでは同期状態「保存先にアクセスできない」（`forbidden`。ログインし直すボタンは出さない）と `github_forbidden` で知らせる。取得（clone）の `Repository not found` は、削除・名前変更と区別できないため E16（`remote_not_found`）のままで、案内に権限の可能性も書く（2026-10-28）。ダイアログの主ボタンは「管理者向けの説明をコピー」（文言は `error.E02.copy_text`。コピーしてもダイアログは開いたまま） |
 | E03 | `network_unavailable`（API・取得）。自動の取り込み・アップロードの失敗は標準エラー出力の文言かタイムアウトで「オフライン」に分類し、例外ではなく同期状態として扱う。手動の取り込み・アップロードの通信失敗は `git_failed` / `git_timeout` で返る |
 | E04 | `github_unavailable`（API の 5xx）。git の失敗では 5xx を見分けず「その他」に分類する |
 | E05 | `conflict`（params: `count`）。解消は D3 |
@@ -574,7 +574,7 @@ Org に作成権限がない場合は API が 403 を返すため、作成ダイ
 - アプリ自身のファイル操作の `std::io::Error` が、Windows の OS エラー 32（共有違反）または 33（ロック違反）
 - 判定は英語の文言に依存する。`GitRunner` は git の実行時に環境変数を引き継がず、`LC_ALL=C` を設定して出力を英語に固定する。特定できたファイルの名前は `params.file` に入れる（パスは含めない）
 
-**自動再試行の間隔**（`core-watch` の `retry_delay_secs`。失敗が続くごとに倍にし、上限で止める）: オフライン（E03）は 30 秒から上限 10 分（30 秒、1 分、2 分、4 分、8 分、10 分）。認証失敗（E01）と保存先に接続できない（`unsupported-remote`）は 5 分から上限 60 分。それ以外（GitHub 側の障害を含む）は 60 秒から上限 30 分。変更のぶつかりが残っている間は 15 分ごとに状態を確かめる。
+**自動再試行の間隔**（`core-watch` の `retry_delay_secs`。失敗が続くごとに倍にし、上限で止める）: オフライン（E03）は 30 秒から上限 10 分（30 秒、1 分、2 分、4 分、8 分、10 分）。認証失敗（E01）、保存先に接続できない（`unsupported-remote`）、保存先にアクセスできない（`forbidden`）は 5 分から上限 60 分。それ以外（GitHub 側の障害を含む）は 60 秒から上限 30 分。変更のぶつかりが残っている間は 15 分ごとに状態を確かめる。
 
 ### 5.2 容量・破損・同時実行・部品・ファイル名の検出（E09・E10・E13・E14・E17・E18）
 
