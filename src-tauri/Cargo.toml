@@ -68,6 +68,16 @@ opt-level = 2
 [profile.dev.package.wasmtime-internal-cranelift]
 opt-level = 2
 
+# モデルの検証（数 GB の SHA-256）が debug ビルドで極端に遅いため、ハッシュ計算の crate だけ最適化する
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.cpufeatures]
+opt-level = 3
+
 # 開発時の再ビルドを軽くする。行番号だけの debug 情報にして、変数の詳細は持たない（スタックトレースの行は残る）。
 # 依存の crate は debug 情報を作らない（依存の再コンパイルと pdb の書き出しを減らす）
 [profile.dev]
